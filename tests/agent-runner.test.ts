@@ -39,6 +39,20 @@ describe("agent runner", () => {
     expect(result.artifact.nextStage).toBe("PROPOSAL");
   });
 
+  it("keeps proposal artifacts behind the acceptance gate before build", async () => {
+    const result = await runRoleAgent(getAgentDefinition("rnd-architecture-innovation"), {
+      workItem: { ...workItem, state: "PROPOSAL" },
+      stage: "PROPOSAL",
+      proposalStage: true,
+      previousArtifacts: []
+    });
+
+    expect(result.artifact.stage).toBe("PROPOSAL");
+    expect(result.artifact.status).toBe("passed");
+    expect(result.artifact.nextStage).toBe("AWAITING_ACCEPTANCE");
+    expect(result.artifact.filesChanged).toEqual([]);
+  });
+
   it("interpolates MCP environment placeholders from process env", () => {
     process.env.TEST_GITHUB_TOKEN = "token-value";
     expect(resolveMcpEnv({

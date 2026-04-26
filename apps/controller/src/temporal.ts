@@ -43,3 +43,28 @@ export async function startAutonomousWorkflow(workItem: WorkItem): Promise<strin
     await connection?.close().catch(() => undefined);
   }
 }
+
+export async function signalProposalDecision(
+  workItem: WorkItem,
+  decision: { decision: "accept" | "revise" | "reject"; feedback?: string; decidedBy?: string; decidedAt?: string }
+): Promise<boolean> {
+  const address = process.env.TEMPORAL_ADDRESS;
+  if (!address) return false;
+
+  let connection: Connection | null = null;
+  try {
+    connection = await Connection.connect({ address });
+    const client = new Client({
+      connection,
+      namespace: process.env.TEMPORAL_NAMESPACE || "default"
+    });
+    const handle = client.workflow.getHandle(workflowIdForWorkItem(workItem));
+    await handle.signal("proposalDecision", decision);
+    return true;
+  } catch (error) {
+    console.warn("Temporal proposal decision signal skipped:", error instanceof Error ? error.message : error);
+    return false;
+  } finally {
+    await connection?.close().catch(() => undefined);
+  }
+}

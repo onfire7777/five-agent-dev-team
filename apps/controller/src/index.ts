@@ -18,7 +18,7 @@ import {
   type StrictProjectScope,
   type TeamBusMessage as StoreTeamBusMessage
 } from "./store";
-import { checkTemporalConnection, startAutonomousWorkflow } from "./temporal";
+import { checkTemporalConnection, signalProposalDecision, startAutonomousWorkflow } from "./temporal";
 import { startSmartScheduler } from "./scheduler";
 import {
   canTransition,
@@ -76,7 +76,7 @@ const LoopRunRequest = ProjectScopeRequest.extend({
   directionId: z.string().min(1).optional(),
   opportunityId: z.string().min(1).optional(),
   proposalId: z.string().min(1).optional(),
-  status: z.enum(["planned", "running", "awaiting_acceptance", "accepted", "revising", "rejected", "implementing", "completed", "blocked"]).optional(),
+  status: z.enum(["running", "awaiting_acceptance", "blocked", "closed", "failed"]).optional(),
   summary: z.string().optional(),
   closedAt: z.string().datetime().optional()
 });
@@ -357,8 +357,7 @@ app.post("/api/proposals", async (req, res, next) => {
 app.post("/api/proposals/:id/decision", async (req, res, next) => {
   try {
     const input = ProposalDecisionRequest.parse(req.body);
-    const scope = await requireStrictProjectScope(input);
-    res.json(await store.decideProposal(scope, req.params.id, input));
+    res.json(await decideProposalById(req.params.id, input));
   } catch (error) {
     next(error);
   }
@@ -367,8 +366,7 @@ app.post("/api/proposals/:id/decision", async (req, res, next) => {
 app.post("/api/proposals/:id/accept", async (req, res, next) => {
   try {
     const input = ProposalDecisionRequest.parse({ ...req.body, decision: "accept" });
-    const scope = await requireStrictProjectScope(input);
-    res.json(await store.decideProposal(scope, req.params.id, input));
+    res.json(await decideProposalById(req.params.id, input));
   } catch (error) {
     next(error);
   }
@@ -377,8 +375,7 @@ app.post("/api/proposals/:id/accept", async (req, res, next) => {
 app.post("/api/proposals/:id/revise", async (req, res, next) => {
   try {
     const input = ProposalDecisionRequest.parse({ ...req.body, decision: "revise" });
-    const scope = await requireStrictProjectScope(input);
-    res.json(await store.decideProposal(scope, req.params.id, input));
+    res.json(await decideProposalById(req.params.id, input));
   } catch (error) {
     next(error);
   }
@@ -387,8 +384,7 @@ app.post("/api/proposals/:id/revise", async (req, res, next) => {
 app.post("/api/proposals/:id/reject", async (req, res, next) => {
   try {
     const input = ProposalDecisionRequest.parse({ ...req.body, decision: "reject" });
-    const scope = await requireStrictProjectScope(input);
-    res.json(await store.decideProposal(scope, req.params.id, input));
+    res.json(await decideProposalById(req.params.id, input));
   } catch (error) {
     next(error);
   }
@@ -1311,6 +1307,40 @@ async function findLatestProposalForWorkItem(scope: StrictProjectScope, workItem
   return proposals.find((proposal) => proposal.workItemId === workItemId) || null;
 }
 
+async function decideProposalById(proposalId: string, input: z.infer<typeof ProposalDecisionRequest>) {
+  const scope = await requireStrictProjectScope(input);
+  const proposal = (await store.listProposals(scope)).find((item) => item.id === proposalId);
+  if (!proposal) throw new HttpError(`Proposal ${proposalId} was not found for ${scope.projectId}.`, 404);
+  const updated = await store.decideProposal(scope, proposalId, input);
+  let nextState: WorkItem["state"] | undefined;
+  let signaled = false;
+  if (proposal.workItemId) {
+    const workItem = (await store.listWorkItems()).find((item) => item.id === proposal.workItemId);
+    if (workItem) {
+      nextState = input.decision === "accept" ? "CONTRACT" : input.decision === "revise" ? "RND" : "CLOSED";
+      if (workItem.state !== nextState && canTransition(workItem.state, nextState)) {
+        await store.updateWorkItemState(workItem.id, nextState);
+      }
+      signaled = await signalProposalDecision(workItem, {
+        decision: input.decision === "accept" ? "accept" : input.decision === "revise" ? "revise" : "reject",
+        feedback: input.reason,
+        decidedBy: input.decidedBy,
+        decidedAt: new Date().toISOString()
+      });
+      await store.addTeamBusMessage(scope, {
+        workItemId: workItem.id,
+        loopRunId: proposal.loopRunId,
+        from: "product-delivery-orchestrator",
+        kind: input.decision === "accept" ? "decision" : input.decision === "revise" ? "handoff" : "blocker",
+        topic: `Proposal ${input.decision}`,
+        body: input.reason,
+        payload: { proposalId, nextState, temporalSignaled: signaled }
+      });
+    }
+  }
+  return { proposal: mapProposalForUi(updated), workItemId: proposal.workItemId, nextState, signaled };
+}
+
 async function scanLeanOpportunity(scope: StrictProjectScope): Promise<Opportunity> {
   const existing = (await store.listOpportunities(scope)).find((item) =>
     item.status !== "accepted" &&
@@ -1359,7 +1389,13 @@ async function decideWorkItemProposal(workItemId: string, decision: "accept" | "
     body: input.feedback || defaultProposalDecisionReason(decision),
     payload: { proposalId: proposal.id, nextState }
   });
-  return { proposal: mapProposalForUi(updated), workItemId: workItem.id, nextState };
+  const signaled = await signalProposalDecision(workItem, {
+    decision,
+    feedback: input.feedback,
+    decidedBy: "human",
+    decidedAt: new Date().toISOString()
+  });
+  return { proposal: mapProposalForUi(updated), workItemId: workItem.id, nextState, signaled };
 }
 
 async function startWorkflowIfSafe(workItem: WorkItem): Promise<{ workflowId: string | null; queued: boolean; reason?: string }> {
@@ -1456,10 +1492,10 @@ function mapLoopRunForUi(run: LoopRun) {
     ...run,
     currentStage: run.status,
     startedAt: run.createdAt,
-    closureSummary: run.status === "completed" ? run.summary : undefined,
+    closureSummary: run.status === "closed" ? run.summary : undefined,
     blockingReason: run.status === "blocked" ? run.summary : undefined,
-    nextRecommendedLoop: run.status === "completed" ? "Scan for the next highest-value queued work or opportunity." : undefined,
-    releaseState: run.status === "completed" ? "closed" : run.status
+    nextRecommendedLoop: run.status === "closed" ? "Scan for the next highest-value queued work or opportunity." : undefined,
+    releaseState: run.status
   };
 }
 

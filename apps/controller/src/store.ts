@@ -56,7 +56,7 @@ export type LoopRun = StrictProjectScope & {
   directionId?: string;
   opportunityId?: string;
   proposalId?: string;
-  status: "planned" | "running" | "awaiting_acceptance" | "accepted" | "revising" | "rejected" | "implementing" | "completed" | "blocked";
+  status: "running" | "awaiting_acceptance" | "blocked" | "closed" | "failed";
   summary: string;
   createdAt: string;
   updatedAt: string;
@@ -382,7 +382,7 @@ export class MemoryStore implements ControllerStore {
       directionId: input.directionId ?? existing?.directionId,
       opportunityId: input.opportunityId ?? existing?.opportunityId,
       proposalId: input.proposalId ?? existing?.proposalId,
-      status: input.status || existing?.status || "planned",
+      status: input.status || existing?.status || "running",
       summary: input.summary || existing?.summary || "",
       createdAt: existing?.createdAt || now,
       updatedAt: now,
@@ -751,7 +751,7 @@ export class PostgresStore extends MemoryStore {
       alter table stage_artifacts add column if not exists artifact_key text;
       create unique index if not exists stage_artifacts_artifact_key_idx on stage_artifacts (artifact_key) where artifact_key is not null;
     `);
-    const artifactKey = `${artifact.workItemId}:${artifact.stage}:${artifact.ownerAgent}`;
+    const artifactKey = `${artifact.workItemId}:${artifact.stage}:${artifact.ownerAgent}:${slugId(artifact.title)}`;
     await this.pool.query(
       `insert into stage_artifacts (work_item_id, payload, artifact_key, created_at)
        values ($1, $2, $3, $4)
@@ -886,8 +886,8 @@ export class PostgresStore extends MemoryStore {
     await this.pool.query(
       `insert into team_bus_messages (id, project_id, repo, payload, created_at)
        values ($1, $2, $3, $4, $5)
-       on conflict (id) do update set payload = excluded.payload`,
-      [message.id, message.projectId, message.repo, message, message.createdAt]
+       on conflict (id) do update set payload = excluded.payload, project_id = excluded.project_id, repo = excluded.repo, created_at = excluded.created_at`,
+      [scopedDbId(scope, message.id), message.projectId, message.repo, message, message.createdAt]
     );
     return message;
   }
@@ -914,7 +914,7 @@ export class PostgresStore extends MemoryStore {
       directionId: input.directionId ?? existing?.directionId,
       opportunityId: input.opportunityId ?? existing?.opportunityId,
       proposalId: input.proposalId ?? existing?.proposalId,
-      status: input.status || existing?.status || "planned",
+      status: input.status || existing?.status || "running",
       summary: input.summary ?? existing?.summary ?? "",
       createdAt: existing?.createdAt || now,
       updatedAt: now,
@@ -923,8 +923,8 @@ export class PostgresStore extends MemoryStore {
     await this.pool.query(
       `insert into loop_runs (id, project_id, repo, payload, updated_at)
        values ($1, $2, $3, $4, $5)
-       on conflict (id) do update set payload = excluded.payload, updated_at = excluded.updated_at`,
-      [run.id, run.projectId, run.repo, run, run.updatedAt]
+       on conflict (id) do update set payload = excluded.payload, project_id = excluded.project_id, repo = excluded.repo, updated_at = excluded.updated_at`,
+      [scopedDbId(scope, run.id), run.projectId, run.repo, run, run.updatedAt]
     );
     return run;
   }
@@ -963,8 +963,8 @@ export class PostgresStore extends MemoryStore {
     await this.pool.query(
       `insert into opportunities (id, project_id, repo, payload, updated_at)
        values ($1, $2, $3, $4, $5)
-       on conflict (id) do update set payload = excluded.payload, updated_at = excluded.updated_at`,
-      [opportunity.id, opportunity.projectId, opportunity.repo, opportunity, opportunity.updatedAt]
+       on conflict (id) do update set payload = excluded.payload, project_id = excluded.project_id, repo = excluded.repo, updated_at = excluded.updated_at`,
+      [scopedDbId(scope, opportunity.id), opportunity.projectId, opportunity.repo, opportunity, opportunity.updatedAt]
     );
     return opportunity;
   }
@@ -983,8 +983,8 @@ export class PostgresStore extends MemoryStore {
     await this.pool.query(
       `insert into proposals (id, project_id, repo, payload, updated_at)
        values ($1, $2, $3, $4, $5)
-       on conflict (id) do update set payload = excluded.payload, updated_at = excluded.updated_at`,
-      [proposal.id, proposal.projectId, proposal.repo, proposal, proposal.updatedAt]
+       on conflict (id) do update set payload = excluded.payload, project_id = excluded.project_id, repo = excluded.repo, updated_at = excluded.updated_at`,
+      [scopedDbId(scope, proposal.id), proposal.projectId, proposal.repo, proposal, proposal.updatedAt]
     );
     return proposal;
   }
@@ -1011,7 +1011,7 @@ export class PostgresStore extends MemoryStore {
     };
     await this.pool.query(
       "update proposals set payload = $2, updated_at = $3 where id = $1 and project_id = $4 and repo = $5",
-      [updated.id, updated, updated.updatedAt, updated.projectId, updated.repo]
+      [scopedDbId(scope, updated.id), updated, updated.updatedAt, updated.projectId, updated.repo]
     );
     if (updated.loopRunId) {
       await this.upsertLoopRun(scope, {
@@ -1304,9 +1304,12 @@ function upsertByScopedId<T extends StrictProjectScope & { id: string }>(items: 
 }
 
 function loopStatusForProposalDecision(decision: ProposalDecision["decision"]): LoopRun["status"] {
-  if (decision === "accept") return "accepted";
-  if (decision === "revise") return "revising";
-  return "rejected";
+  if (decision === "reject") return "closed";
+  return "running";
+}
+
+function scopedDbId(scope: StrictProjectScope, id: string): string {
+  return `${scope.projectId}:${scope.repo}:${id}`;
 }
 
 function sortProjectConnections(connections: ProjectConnection[]): ProjectConnection[] {

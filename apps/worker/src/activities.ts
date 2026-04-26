@@ -34,6 +34,21 @@ export interface StageInput {
   loopContext?: string[];
 }
 
+export interface ProposalGateInput {
+  workItem: WorkItem;
+  proposal: StageArtifact;
+  previousArtifacts: StageArtifact[];
+}
+
+export interface WorkflowProposalDecisionInput {
+  workItem: WorkItem;
+  decision: "accept" | "revise" | "reject";
+  feedback?: string;
+  decidedBy?: string;
+  decidedAt?: string;
+  previousArtifacts: StageArtifact[];
+}
+
 type EvidenceItem = {
   name: string;
   ok: boolean;
@@ -137,7 +152,15 @@ export async function recordLoopStart(workItem: WorkItem): Promise<StageArtifact
 
 export async function runAgentStage(input: StageInput): Promise<StageArtifact> {
   const result = await runAgentWithTeamContext(input);
-  await persistArtifact(result.artifact);
+  if (result.artifact.stage === "PROPOSAL") {
+    await persistArtifact(result.artifact, { updateWorkItemState: false });
+    await result.store.updateWorkItemState(result.artifact.workItemId, "PROPOSAL");
+  } else {
+    await persistArtifact(result.artifact);
+  }
+  if (result.artifact.stage === "PROPOSAL") {
+    await persistProposal(result.store, result.workItem, result.artifact, "proposed");
+  }
   await writeTeamBusMessage(result.store, {
     workItemId: result.workItem.id,
     projectId: result.workItem.projectId,
@@ -159,8 +182,125 @@ export async function runAgentProposal(input: StageInput): Promise<StageArtifact
     ownerAgent: result.definition.role,
     message: `${result.definition.displayName} proposed ${input.stage}: ${result.artifact.summary}`
   });
-  await persistProposal(result.store, result.workItem, result.artifact);
+  await persistProposal(result.store, result.workItem, result.artifact, "proposed");
   return result.artifact;
+}
+
+export async function evaluateProposalGate(input: ProposalGateInput): Promise<StageArtifact> {
+  const config = await loadReleaseConfig(input.workItem);
+  const scopedWorkItem = scopeWorkItemToProject(input.workItem, config);
+  await ensureNotStopped(scopedWorkItem.id, config);
+  const store = await getActivityStore();
+  const githubMcpWriteEnabled = config.integrations.mcpServers.some((server) =>
+    server.name === "github-mcp" && server.transport === "stdio" && !server.args.includes("--read-only")
+  );
+  const autoAccept =
+    scopedWorkItem.riskLevel === "low" &&
+    input.proposal.status === "passed" &&
+    input.proposal.risks.length === 0 &&
+    !githubMcpWriteEnabled;
+  const artifact = StageArtifactSchema.parse({
+    workItemId: scopedWorkItem.id,
+    projectId: scopedWorkItem.projectId,
+    repo: scopedWorkItem.repo,
+    stage: autoAccept ? "PROPOSAL" : "AWAITING_ACCEPTANCE",
+    ownerAgent: "product-delivery-orchestrator",
+    status: autoAccept ? "passed" : "pending",
+    title: autoAccept ? "Proposal auto-accepted by policy" : "Proposal awaiting acceptance",
+    summary: autoAccept
+      ? "Low-risk proposal passed the policy gate and may continue into contract without human blocking."
+      : "Proposal gate is active. Build stages are blocked until the proposal is accepted, revised, or rejected.",
+    decisions: autoAccept
+      ? [
+        "Auto-accept low-risk, high-confidence proposal.",
+        "Continue to contract before any frontend/backend build starts."
+      ]
+      : [
+        "Pause the loop at AWAITING_ACCEPTANCE.",
+        "Do not start frontend/backend build until a proposal decision signal is received."
+      ],
+    risks: autoAccept ? [] : input.proposal.risks,
+    filesChanged: [],
+    testsRun: [],
+    releaseReadiness: "unknown",
+    nextStage: autoAccept ? "CONTRACT" : "AWAITING_ACCEPTANCE",
+    createdAt: new Date().toISOString()
+  });
+  await persistArtifact(artifact);
+  await persistProposal(store, scopedWorkItem, input.proposal, autoAccept ? "accepted" : "proposed");
+  await updateLoopRun(store, scopedWorkItem, {
+    status: autoAccept ? "running" : "awaiting_acceptance",
+    summary: artifact.summary
+  });
+  await writeTeamBusMessage(store, {
+    workItemId: scopedWorkItem.id,
+    projectId: scopedWorkItem.projectId,
+    repo: scopedWorkItem.repo,
+    stage: artifact.stage,
+    ownerAgent: artifact.ownerAgent,
+    message: artifact.summary
+  });
+  return artifact;
+}
+
+export async function recordProposalDecision(input: WorkflowProposalDecisionInput): Promise<StageArtifact> {
+  const config = await loadReleaseConfig(input.workItem);
+  const scopedWorkItem = scopeWorkItemToProject(input.workItem, config);
+  await ensureNotStopped(scopedWorkItem.id, config);
+  const store = await getActivityStore();
+  const accepted = input.decision === "accept";
+  const revising = input.decision === "revise";
+  const artifact = StageArtifactSchema.parse({
+    workItemId: scopedWorkItem.id,
+    projectId: scopedWorkItem.projectId,
+    repo: scopedWorkItem.repo,
+    stage: "AWAITING_ACCEPTANCE",
+    ownerAgent: "product-delivery-orchestrator",
+    status: accepted || revising ? "passed" : "blocked",
+    title: accepted ? "Proposal accepted" : input.decision === "revise" ? "Proposal revision requested" : "Proposal rejected",
+    summary: accepted
+      ? "Proposal accepted. The loop may continue into contract and build planning."
+      : input.decision === "revise"
+        ? "Proposal changes were requested. The loop returns to R&D before any build starts so the team can produce a revised proposal."
+        : "Proposal was rejected. Implementation remains blocked before build.",
+    decisions: [
+      `${input.decidedBy || "human"} decided: ${input.decision}.`,
+      input.feedback || "No additional feedback provided."
+    ],
+    risks: accepted
+      ? input.previousArtifacts.flatMap((artifact) => artifact.risks)
+      : revising
+        ? [input.feedback || "Proposal revision requested before build."]
+        : [input.feedback || "Proposal decision blocked implementation."],
+    filesChanged: [],
+    testsRun: [],
+    releaseReadiness: accepted || revising ? "unknown" : "not_ready",
+    nextStage: accepted ? "CONTRACT" : revising ? "RND" : "BLOCKED",
+    createdAt: input.decidedAt || new Date().toISOString()
+  });
+  const scope = strictScopeForWorkItem(scopedWorkItem);
+  if (scope) {
+    await store.decideProposal(scope, `proposal-${scopedWorkItem.id}-proposal`, {
+      decision: accepted ? "accept" : input.decision === "revise" ? "revise" : "reject",
+      decidedBy: input.decidedBy || "human",
+      reason: input.feedback || artifact.summary,
+      requestedChanges: input.feedback ? [input.feedback] : []
+    }).catch(() => undefined);
+  }
+  await persistArtifact(artifact);
+  await updateLoopRun(store, scopedWorkItem, {
+    status: accepted || revising ? "running" : "blocked",
+    summary: artifact.summary
+  });
+  await writeTeamBusMessage(store, {
+    workItemId: scopedWorkItem.id,
+    projectId: scopedWorkItem.projectId,
+    repo: scopedWorkItem.repo,
+    stage: artifact.stage,
+    ownerAgent: artifact.ownerAgent,
+    message: artifact.summary
+  });
+  return artifact;
 }
 
 async function runAgentWithTeamContext(input: StageInput, proposalStage = false): Promise<{
@@ -279,7 +419,7 @@ export async function closeWorkLoop(workItem: WorkItem, previousArtifacts: Stage
   });
   await persistArtifact(artifact);
   await updateLoopRun(await getActivityStore(), scopedWorkItem, {
-    status: passed ? "completed" : "blocked",
+    status: passed ? "closed" : "blocked",
     summary: artifact.summary,
     closedAt: new Date().toISOString()
   });
@@ -375,7 +515,7 @@ export async function planVerification(workItem: WorkItem, previousArtifacts: St
   const config = await loadReleaseConfig(workItem);
   const scopedWorkItem = scopeWorkItemToProject(workItem, config);
   await ensureNotStopped(scopedWorkItem.id, config);
-  return StageArtifactSchema.parse({
+  const artifact = StageArtifactSchema.parse({
     workItemId: scopedWorkItem.id,
     projectId: scopedWorkItem.projectId,
     repo: scopedWorkItem.repo,
@@ -392,6 +532,16 @@ export async function planVerification(workItem: WorkItem, previousArtifacts: St
     nextStage: "VERIFY",
     createdAt: new Date().toISOString()
   });
+  await persistArtifact(artifact, { updateWorkItemState: false });
+  await writeTeamBusMessage(await getActivityStore(), {
+    workItemId: scopedWorkItem.id,
+    projectId: scopedWorkItem.projectId,
+    repo: scopedWorkItem.repo,
+    stage: "VERIFY",
+    ownerAgent: "quality-security-privacy-release",
+    message: artifact.summary
+  });
+  return artifact;
 }
 
 export async function performAutonomousRelease(workItem: WorkItem, previousArtifacts: StageArtifact[]): Promise<StageArtifact> {
@@ -399,8 +549,19 @@ export async function performAutonomousRelease(workItem: WorkItem, previousArtif
   const scopedWorkItem = scopeWorkItemToProject(workItem, config);
   await ensureNotStopped(scopedWorkItem.id, config);
   const { signal, syncReasons } = await collectReleaseSignal(scopedWorkItem, config, previousArtifacts);
-  const decision = evaluateReleasePolicy(config, signal);
-  const releaseCommand = decision.allowed ? await runReleaseCommand(config) : null;
+  const preReleaseDecision = evaluateReleasePolicy(config, {
+    ...signal,
+    releaseProofPresent: signal.releaseProofPresent || Boolean(config.commands.release.trim())
+  });
+  const releaseCommand = preReleaseDecision.allowed ? await runReleaseCommand(config, scopedWorkItem) : null;
+  if (releaseCommand?.ok) {
+    await writeReleaseProof(scopedWorkItem, config, releaseCommand);
+  }
+  const releaseProofPresent = signal.releaseProofPresent || Boolean(releaseCommand?.ok) || await hasReleaseProof(scopedWorkItem, config);
+  const decision = evaluateReleasePolicy(config, {
+    ...signal,
+    releaseProofPresent
+  });
   const releaseAllowed = decision.allowed && (!releaseCommand || releaseCommand.ok);
 
   const artifact = StageArtifactSchema.parse({
@@ -415,15 +576,15 @@ export async function performAutonomousRelease(workItem: WorkItem, previousArtif
       ? "Autonomous release gates passed. Merge, tag, release verification, local pull, cleanup, and sync confirmation may proceed."
       : `Release blocked: ${[...decision.requiredFixes, releaseCommand && !releaseCommand.ok ? releaseCommand.summary : ""].filter(Boolean).join("; ")}`,
     decisions: releaseAllowed
-      ? [...decision.reasons, releaseCommand?.summary || "Configured release command completed."]
-      : [...decision.requiredFixes, releaseCommand && !releaseCommand.ok ? releaseCommand.summary : ""].filter(Boolean),
+      ? [...decision.reasons, releaseCommand?.summary || "Configured release command completed.", "Release proof recorded after the release command completed."]
+      : [...preReleaseDecision.requiredFixes, ...decision.requiredFixes, releaseCommand && !releaseCommand.ok ? releaseCommand.summary : ""].filter(Boolean),
     risks: [
       ...previousArtifacts.flatMap((artifact) => artifact.risks),
       ...syncReasons,
       ...(releaseCommand && !releaseCommand.ok ? [releaseCommand.summary] : [])
     ],
     filesChanged: previousArtifacts.flatMap((artifact) => artifact.filesChanged),
-    testsRun: ["local checks", "GitHub Actions", "secret scan", "release verification", ...(releaseCommand ? [`release:${releaseCommand.ok ? "passed" : "failed"}`] : [])],
+    testsRun: ["local checks", "GitHub Actions", "secret scan", `release-proof:${releaseProofPresent ? "present" : "missing"}`, "release verification", ...(releaseCommand ? [`release:${releaseCommand.ok ? "passed" : "failed"}`] : [])],
     releaseReadiness: releaseAllowed ? "ready" : "not_ready",
     nextStage: releaseAllowed ? "CLOSED" : "BLOCKED",
     createdAt: new Date().toISOString()
@@ -573,7 +734,10 @@ async function readGitHubActionsEvidence(config: TargetRepoConfig): Promise<Evid
 }
 
 async function collectReleaseSignal(workItem: WorkItem, config: TargetRepoConfig, previousArtifacts: StageArtifact[]): Promise<{ signal: VerificationSignal; syncReasons: string[] }> {
-  const gitSyncInput = await readGitSyncInput(workItem, config);
+  const [gitSyncInput, githubActions] = await Promise.all([
+    readGitSyncInput(workItem, config),
+    readGitHubActionsEvidence(config)
+  ]);
   const sync = evaluateGitSync(gitSyncInput);
   const status = await (await getActivityStore()).getStatus();
   const verificationPassed = previousArtifacts.some((artifact) =>
@@ -588,7 +752,7 @@ async function collectReleaseSignal(workItem: WorkItem, config: TargetRepoConfig
   return {
     signal: {
       localChecksPassed: envFlag("AGENT_LOCAL_CHECKS_PASSED") || verificationPassed,
-      githubActionsPassed: envFlag("AGENT_GITHUB_ACTIONS_PASSED"),
+      githubActionsPassed: envFlag("AGENT_GITHUB_ACTIONS_PASSED") || githubActions.ok,
       cleanWorktree: gitSyncInput.cleanWorktree,
       localRemoteSynced: sync.synced,
       secretScanPassed: envFlag("AGENT_SECRET_SCAN_PASSED") || securityPassed,
@@ -597,7 +761,10 @@ async function collectReleaseSignal(workItem: WorkItem, config: TargetRepoConfig
       emergencyStopActive: status.system.emergencyStop,
       riskLevel: workItem.riskLevel
     },
-    syncReasons: sync.reasons
+    syncReasons: uniqueStrings([
+      ...sync.reasons,
+      ...(githubActions.required && !githubActions.ok ? githubActions.risks : [])
+    ])
   };
 }
 
@@ -646,15 +813,23 @@ async function runConfiguredChecks(config: TargetRepoConfig, names: CommandName[
   return results;
 }
 
-async function runReleaseCommand(config: TargetRepoConfig): Promise<CommandResult> {
-  return runConfiguredCommand(config, "release", config.commands.release);
+async function runReleaseCommand(config: TargetRepoConfig, workItem: WorkItem): Promise<CommandResult> {
+  return runConfiguredCommand(config, "release", config.commands.release, workItem);
 }
 
-async function runConfiguredCommand(config: TargetRepoConfig, name: string, command: string): Promise<CommandResult> {
+async function runConfiguredCommand(config: TargetRepoConfig, name: string, command: string, workItem?: WorkItem): Promise<CommandResult> {
   try {
     await exec(command, {
       cwd: config.repo.localPath || process.cwd(),
-      env: githubAuthEnv(),
+      env: {
+        ...githubAuthEnv(),
+        ...(workItem ? {
+          AGENT_WORK_ITEM_ID: workItem.id,
+          AGENT_PROJECT_ID: workItem.projectId || "",
+          AGENT_REPO: workItem.repo || `${config.repo.owner}/${config.repo.name}`,
+          AGENT_DEFAULT_BRANCH: config.repo.defaultBranch
+        } : {})
+      },
       timeout: Number(process.env.AGENT_COMMAND_TIMEOUT_MS || 300_000),
       maxBuffer: 1024 * 1024 * 8
     });
@@ -666,16 +841,37 @@ async function runConfiguredCommand(config: TargetRepoConfig, name: string, comm
 }
 
 async function hasReleaseProof(workItem: WorkItem, config: TargetRepoConfig): Promise<boolean> {
-  const configuredProof = process.env.RELEASE_PROOF_FILE || `.agent-team/release-proof-${workItem.id}.json`;
-  const proofFile = path.isAbsolute(configuredProof)
-    ? configuredProof
-    : path.join(config.repo.localPath || process.cwd(), configuredProof);
+  const proofFile = resolveReleaseProofFile(workItem, config);
   try {
     await fs.access(proofFile);
     return true;
   } catch {
     return false;
   }
+}
+
+async function writeReleaseProof(workItem: WorkItem, config: TargetRepoConfig, releaseCommand: CommandResult): Promise<void> {
+  const proofFile = resolveReleaseProofFile(workItem, config);
+  const proof = {
+    workItemId: workItem.id,
+    projectId: workItem.projectId,
+    repo: workItem.repo || `${config.repo.owner}/${config.repo.name}`,
+    command: "release",
+    summary: releaseCommand.summary,
+    createdAt: new Date().toISOString()
+  };
+  await fs.mkdir(path.dirname(proofFile), { recursive: true });
+  await fs.writeFile(proofFile, JSON.stringify(proof, null, 2), "utf8");
+}
+
+function resolveReleaseProofFile(workItem: WorkItem, config: TargetRepoConfig): string {
+  const configuredProof = process.env.RELEASE_PROOF_FILE;
+  if (!configuredProof) {
+    return path.join(process.env.AGENT_RUNTIME_DIR || "/tmp/agent-team", `release-proof-${workItem.id}.json`);
+  }
+  return path.isAbsolute(configuredProof)
+    ? configuredProof
+    : path.join(config.repo.localPath || process.cwd(), configuredProof);
 }
 
 async function getActivityStore(): Promise<ControllerStore> {
@@ -688,7 +884,7 @@ async function getActivityStore(): Promise<ControllerStore> {
   return storePromise;
 }
 
-async function persistArtifact(artifact: StageArtifact): Promise<void> {
+async function persistArtifact(artifact: StageArtifact, options: { updateWorkItemState?: boolean } = {}): Promise<void> {
   const store = await getActivityStore();
   await store.addArtifact(artifact);
   await store.addEvent({
@@ -702,7 +898,9 @@ async function persistArtifact(artifact: StageArtifact): Promise<void> {
   const nextState = artifact.status === "blocked" || artifact.status === "failed"
     ? "BLOCKED"
     : artifact.nextStage || artifact.stage;
-  await store.updateWorkItemState(artifact.workItemId, nextState);
+  if (options.updateWorkItemState !== false) {
+    await store.updateWorkItemState(artifact.workItemId, nextState);
+  }
 }
 
 async function readTeamBusMessages(store: ControllerStore, workItemId: string): Promise<TeamBusMessage[]> {
@@ -780,7 +978,12 @@ async function writeTeamBusMessage(
   }
 }
 
-async function persistProposal(store: ControllerStore, workItem: WorkItem, artifact: StageArtifact): Promise<void> {
+async function persistProposal(
+  store: ControllerStore,
+  workItem: WorkItem,
+  artifact: StageArtifact,
+  status: "draft" | "proposed" | "accepted" | "revising" | "rejected" = "proposed"
+): Promise<void> {
   const scope = strictScopeForWorkItem(workItem);
   if (!scope) return;
   try {
@@ -798,7 +1001,7 @@ async function persistProposal(store: ControllerStore, workItem: WorkItem, artif
         "Verify acceptance criteria, regression behavior, release gates, rollback evidence, and local/GitHub sync."
       ],
       risks: artifact.risks,
-      status: "accepted"
+      status
     });
   } catch (error) {
     await store.addEvent({
@@ -816,7 +1019,7 @@ async function updateLoopRun(
   store: ControllerStore,
   workItem: WorkItem,
   input: {
-    status: "running" | "completed" | "blocked";
+    status: "running" | "awaiting_acceptance" | "closed" | "blocked";
     summary: string;
     closedAt?: string;
   }

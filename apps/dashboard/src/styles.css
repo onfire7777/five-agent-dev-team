@@ -1019,6 +1019,8 @@ button:focus-visible {
   border-radius: 8px;
   background: #fbfcfd;
   padding: 10px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .direction-current strong,
@@ -1040,6 +1042,7 @@ button:focus-visible {
   color: #596579;
   font-size: 12px;
   line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .micro-meta {
@@ -1187,6 +1190,7 @@ button:focus-visible {
   color: #596579;
   font-size: 12px;
   line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .decision-disclosure textarea {

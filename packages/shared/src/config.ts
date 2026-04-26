@@ -40,7 +40,7 @@ export function targetRepoConfigFromProjectConnection(project: ProjectConnection
       test: "npm test --if-present",
       build: "npm run build --if-present",
       security: "npm audit --audit-level=high",
-      release: `gh workflow run release.yml --ref ${parsed.defaultBranch}`
+      release: `gh workflow run agent-release.yml --ref ${parsed.defaultBranch}`
     },
     context: {
       includeDefaultContextDir: true,

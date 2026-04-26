@@ -349,5 +349,27 @@ describe("additive loop contract", () => {
       proposal: { status: "accepted" },
       loopRun: { status: "running", currentStage: "CONTRACT" }
     });
+
+    const revised = api.applyProposalAcceptanceDecision({
+      workItem: workItem({ state: "AWAITING_ACCEPTANCE" }),
+      proposal: { ...proposal, status: "awaiting_acceptance" },
+      loopRun: { ...awaiting.loopRun },
+      decision: {
+        id: "decision-2",
+        projectId: "owner-repo-a",
+        repo: "owner/repo-a",
+        workItemId: "WI-additive-1",
+        proposalId: "proposal-1",
+        decision: "request_changes",
+        actor: "human",
+        feedback: "Clarify the rollback plan before build.",
+        createdAt: "2026-04-26T12:16:00.000Z"
+      }
+    });
+    expect(revised).toMatchObject({
+      workItem: { state: "RND" },
+      proposal: { status: "revision_requested" },
+      loopRun: { status: "running", currentStage: "RND" }
+    });
   });
 });

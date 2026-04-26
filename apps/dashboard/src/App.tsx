@@ -422,6 +422,7 @@ export function App() {
   const [directionDraft, setDirectionDraft] = useState("");
   const [directionPause, setDirectionPause] = useState(false);
   const [proposalFeedback, setProposalFeedback] = useState("");
+  const [pendingAction, setPendingAction] = useState("");
   const [workDraft, setWorkDraft] = useState<WorkDraft>({
     title: "",
     acceptanceCriteria: "",
@@ -446,6 +447,12 @@ export function App() {
   function selectProjectId(projectId: string) {
     selectedProjectIdRef.current = projectId;
     setSelectedProjectId(projectId);
+    setSelectedWorkItem("");
+    setDirectionState(createDirectionState());
+    setOpportunitiesState(createListState());
+    setTeamMessagesState(createListState());
+    setLoopRunsState(createListState());
+    setProposalState(createProposalState());
   }
 
   function hydrateProjectDraft(project: ProjectConnection, force = false) {
@@ -537,7 +544,7 @@ export function App() {
       headers: { "Content-Type": "application/json" },
       body: body ? JSON.stringify(body) : undefined
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) throw new Error(await readErrorMessage(response));
     return response.json();
   }
 
@@ -545,10 +552,11 @@ export function App() {
     try {
       const response = await fetch(`${API_BASE}${path}`);
       if (!response.ok) {
+        const message = await readErrorMessage(response);
         return {
           ok: false as const,
           unavailable: response.status === 404 || response.status === 405,
-          message: response.status === 404 || response.status === 405 ? missingEndpointMessage : `HTTP ${response.status}`
+          message: response.status === 404 || response.status === 405 ? missingEndpointMessage : message
         };
       }
       return { ok: true as const, data: await readResponseJson(response) };
@@ -569,10 +577,11 @@ export function App() {
         body: body ? JSON.stringify(body) : undefined
       });
       if (!response.ok) {
+        const message = await readErrorMessage(response);
         return {
           ok: false as const,
           unavailable: response.status === 404 || response.status === 405,
-          message: response.status === 404 || response.status === 405 ? missingEndpointMessage : `HTTP ${response.status}`
+          message: response.status === 404 || response.status === 405 ? missingEndpointMessage : message
         };
       }
       return { ok: true as const, data: await readResponseJson(response) };
@@ -586,7 +595,7 @@ export function App() {
   }
 
   async function loadDirection(projectId: string) {
-    setDirectionState((state) => ({ ...state, projectId, status: "loading", message: "" }));
+    setDirectionState({ projectId, status: "loading", message: "" });
     const result = await fetchOptional(`/api/projects/${encodeURIComponent(projectId)}/direction`);
     if (!result.ok) {
       setDirectionState({
@@ -606,7 +615,7 @@ export function App() {
   }
 
   async function loadOpportunities(projectId: string) {
-    setOpportunitiesState((state) => ({ ...state, projectId, status: "loading", message: "" }));
+    setOpportunitiesState({ projectId, items: [], status: "loading", message: "" });
     const result = await fetchOptional(`/api/projects/${encodeURIComponent(projectId)}/opportunities`);
     if (!result.ok) {
       setOpportunitiesState({
@@ -627,7 +636,7 @@ export function App() {
   }
 
   async function loadTeamMessages(projectId: string) {
-    setTeamMessagesState((state) => ({ ...state, projectId, status: "loading", message: "" }));
+    setTeamMessagesState({ projectId, items: [], status: "loading", message: "" });
     const result = await fetchOptional(`/api/projects/${encodeURIComponent(projectId)}/team-bus`);
     if (!result.ok) {
       setTeamMessagesState({
@@ -648,7 +657,7 @@ export function App() {
   }
 
   async function loadLoopRuns(projectId: string) {
-    setLoopRunsState((state) => ({ ...state, projectId, status: "loading", message: "" }));
+    setLoopRunsState({ projectId, items: [], status: "loading", message: "" });
     const result = await fetchOptional(`/api/projects/${encodeURIComponent(projectId)}/loop-runs`);
     if (!result.ok) {
       setLoopRunsState({
@@ -673,7 +682,7 @@ export function App() {
       setProposalState({ workItemId: "", status: "empty", message: "No selected work item has a proposal yet." });
       return;
     }
-    setProposalState((state) => ({ ...state, workItemId, status: "loading", message: "" }));
+    setProposalState({ workItemId, status: "loading", message: "" });
     const result = await fetchOptional(`/api/work-items/${encodeURIComponent(workItemId)}/proposal`);
     if (!result.ok) {
       setProposalState({
@@ -696,89 +705,110 @@ export function App() {
     const active = projects.find((project) => project.id === selectedProjectIdRef.current) ||
       projects.find((project) => project.active);
     if (!active || !directionDraft.trim()) return;
+    setPendingAction(`direction-${mode}`);
     setDirectionState((state) => ({ ...state, projectId: active.projectId, status: "loading", message: "" }));
-    const result = await postOptional(`/api/projects/${encodeURIComponent(active.projectId)}/direction`, {
-      mode,
-      instruction: directionDraft.trim(),
-      pauseNewLoopsAfterCurrent: directionPause
-    });
-    if (!result.ok) {
+    try {
+      const result = await postOptional(`/api/projects/${encodeURIComponent(active.projectId)}/direction`, {
+        mode,
+        instruction: directionDraft.trim(),
+        pauseNewLoopsAfterCurrent: directionPause
+      });
+      if (!result.ok) {
+        setDirectionState({
+          projectId: active.projectId,
+          direction: directionState.direction,
+          status: result.unavailable ? "unavailable" : "error",
+          message: result.message
+        });
+        return;
+      }
+      setDirectionDraft("");
+      const direction = extractObject<ProjectDirection>(result.data, ["direction", "projectDirection"]) || {
+        [mode === "standing" ? "standingDirection" : "nextLoopDirection"]: directionDraft.trim(),
+        pauseNewLoopsAfterCurrent: directionPause,
+        updatedAt: new Date().toISOString()
+      };
       setDirectionState({
         projectId: active.projectId,
-        direction: directionState.direction,
-        status: result.unavailable ? "unavailable" : "error",
-        message: result.message
+        direction,
+        status: "ready",
+        message: ""
       });
-      return;
+    } finally {
+      setPendingAction("");
     }
-    setDirectionDraft("");
-    const direction = extractObject<ProjectDirection>(result.data, ["direction", "projectDirection"]) || {
-      [mode === "standing" ? "standingDirection" : "nextLoopDirection"]: directionDraft.trim(),
-      pauseNewLoopsAfterCurrent: directionPause,
-      updatedAt: new Date().toISOString()
-    };
-    setDirectionState({
-      projectId: active.projectId,
-      direction,
-      status: "ready",
-      message: ""
-    });
   }
 
   async function scanOpportunities() {
     const projectId = activeProjectIdFromState(projects, selectedProjectIdRef.current);
     if (!projectId) return;
+    setPendingAction("scan");
     setOpportunitiesState((state) => ({ ...state, projectId, status: "loading", message: "" }));
-    const result = await postOptional(`/api/projects/${encodeURIComponent(projectId)}/opportunities/scan`);
-    if (!result.ok) {
-      setOpportunitiesState({
-        projectId,
-        items: [],
-        status: result.unavailable ? "unavailable" : "error",
-        message: result.message
-      });
-      return;
-    }
-    const items = extractList<OpportunityCandidate>(result.data, ["opportunities", "candidates", "items"]);
-    if (items.length) {
-      setOpportunitiesState({ projectId, items, status: "ready", message: "" });
-    } else {
-      await loadOpportunities(projectId);
+    try {
+      const result = await postOptional(`/api/projects/${encodeURIComponent(projectId)}/opportunities/scan`);
+      if (!result.ok) {
+        setOpportunitiesState({
+          projectId,
+          items: [],
+          status: result.unavailable ? "unavailable" : "error",
+          message: result.message
+        });
+        return;
+      }
+      const items = extractList<OpportunityCandidate>(result.data, ["opportunities", "candidates", "items"]);
+      if (items.length) {
+        setOpportunitiesState({ projectId, items, status: "ready", message: "" });
+      } else {
+        await loadOpportunities(projectId);
+      }
+    } finally {
+      setPendingAction("");
     }
   }
 
   async function promoteOpportunity(id: string) {
-    const result = await postOptional(`/api/opportunities/${encodeURIComponent(id)}/promote`);
-    if (!result.ok) {
-      setOpportunitiesState((state) => ({
-        ...state,
-        status: result.unavailable ? "unavailable" : "error",
-        message: result.message
-      }));
-      return;
+    if (pendingAction) return;
+    setPendingAction(`promote-${id}`);
+    try {
+      const result = await postOptional(`/api/opportunities/${encodeURIComponent(id)}/promote`);
+      if (!result.ok) {
+        setOpportunitiesState((state) => ({
+          ...state,
+          status: result.unavailable ? "unavailable" : "error",
+          message: result.message
+        }));
+        return;
+      }
+      const projectId = activeProjectIdFromState(projects, selectedProjectIdRef.current);
+      if (projectId) await loadOpportunities(projectId);
+      await refreshAll();
+    } finally {
+      setPendingAction("");
     }
-    const projectId = activeProjectIdFromState(projects, selectedProjectIdRef.current);
-    if (projectId) await loadOpportunities(projectId);
-    await loadStatus();
   }
 
   async function decideProposal(decision: "accept" | "revise" | "reject") {
     const workItemId = proposalState.proposal?.workItemId || proposalState.workItemId;
-    if (!workItemId) return;
-    const result = await postOptional(`/api/work-items/${encodeURIComponent(workItemId)}/proposal/${decision}`, {
-      feedback: proposalFeedback.trim() || undefined
-    });
-    if (!result.ok) {
-      setProposalState((state) => ({
-        ...state,
-        status: result.unavailable ? "unavailable" : "error",
-        message: result.message
-      }));
-      return;
+    if (!workItemId || pendingAction) return;
+    setPendingAction(`proposal-${decision}`);
+    try {
+      const result = await postOptional(`/api/work-items/${encodeURIComponent(workItemId)}/proposal/${decision}`, {
+        feedback: proposalFeedback.trim() || undefined
+      });
+      if (!result.ok) {
+        setProposalState((state) => ({
+          ...state,
+          status: result.unavailable ? "unavailable" : "error",
+          message: result.message
+        }));
+        return;
+      }
+      setProposalFeedback("");
+      await loadProposal(workItemId);
+      await refreshAll();
+    } finally {
+      setPendingAction("");
     }
-    setProposalFeedback("");
-    await loadProposal(workItemId);
-    await loadStatus();
   }
 
   async function startGithubConnection() {
@@ -815,6 +845,28 @@ export function App() {
     }
   }
 
+  async function refreshActiveDetails() {
+    const projectId = activeProjectIdFromState(projects, selectedProjectIdRef.current);
+    if (!apiState.connected || !projectId) return;
+    if (activeInsight === "direction") {
+      await loadDirection(projectId);
+    } else if (activeInsight === "ideas") {
+      await Promise.all([
+        loadOpportunities(projectId),
+        loadProposal(selectedWorkItem || undefined)
+      ]);
+    } else if (activeInsight === "teamMessages") {
+      await loadTeamMessages(projectId);
+    } else if (activeInsight === "loopHistory") {
+      await loadLoopRuns(projectId);
+    }
+  }
+
+  async function refreshAll() {
+    const connected = await loadStatus();
+    if (connected) await refreshActiveDetails();
+  }
+
   async function createWorkItem(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setCreateError("");
@@ -847,7 +899,7 @@ export function App() {
       });
       setSelectedWorkItem(response.workItem.id);
       setWorkDraft((draft) => ({ ...draft, title: "", acceptanceCriteria: "" }));
-      await loadStatus();
+      await refreshAll();
       if (response.blocked) setCreateError(response.reason || "Queued while emergency stop is active.");
     } catch (error) {
       setCreateError(error instanceof Error ? error.message : "Work item creation failed.");
@@ -877,7 +929,7 @@ export function App() {
       }) as ProjectConnection;
       selectProjectId(project.id);
       await loadProjects();
-      await loadStatus();
+      await refreshAll();
       if (project.validationErrors.length) {
         setProjectError(project.validationErrors[0]);
       }
@@ -896,7 +948,7 @@ export function App() {
       selectProjectId(project.id);
       hydrateProjectDraft(project, true);
       await loadProjects();
-      await loadStatus();
+      await refreshAll();
       if (project.validationErrors.length) setProjectError(project.validationErrors[0]);
     } catch (error) {
       setProjectError(error instanceof Error ? error.message : "Project activation failed.");
@@ -910,7 +962,7 @@ export function App() {
     try {
       const path = status.system.emergencyStop ? "/api/emergency-resume" : "/api/emergency-stop";
       await postControl(path, { reason: "Operator dashboard stop" });
-      await loadStatus();
+      await refreshAll();
     } catch {
       setApiState({
         connected: false,
@@ -923,9 +975,9 @@ export function App() {
   }
 
   useEffect(() => {
-    loadStatus();
+    refreshAll();
     loadGithubAccount().catch(() => setGithubAccount(defaultGitHubAccount));
-    const timer = window.setInterval(loadStatus, 10000);
+    const timer = window.setInterval(refreshAll, 10000);
     return () => window.clearInterval(timer);
   }, []);
 
@@ -947,7 +999,7 @@ export function App() {
             status: "connected",
             message: "GitHub account connected. Repo checks now use the same account."
           });
-          await loadStatus();
+          await refreshAll();
           return;
         }
         if (result.status === "pending") {
@@ -979,7 +1031,7 @@ export function App() {
     if (!("EventSource" in window)) return undefined;
     const source = new EventSource(`${API_BASE}/api/events/stream`);
     source.addEventListener("agent-event", () => {
-      loadStatus();
+      refreshAll();
     });
     return () => source.close();
   }, []);
@@ -989,11 +1041,16 @@ export function App() {
   const visibleMemories = memories.slice(0, 3);
   const visibleEvents = status.logs.slice(0, 4);
   const pipeline = status.pipeline as Record<string, number>;
-  const activeWorkItems = useMemo(() => status.workItems.filter((item) => item.state !== "CLOSED").slice(0, 5), [status.workItems]);
   const activeProject = useMemo(
     () => projects.find((project) => project.id === selectedProjectId) || projects.find((project) => project.active),
     [projects, selectedProjectId]
   );
+  const activeWorkItems = useMemo(() => status.workItems
+    .filter((item) =>
+      item.state !== "CLOSED" &&
+      (!activeProject || item.projectId === activeProject.projectId || item.repo === activeProject.repo)
+    )
+    .slice(0, 5), [status.workItems, activeProject]);
   const activeTeam = useMemo(
     () => activeProject ? status.projectTeams.find((team) => team.projectId === activeProject.projectId) : undefined,
     [status.projectTeams, activeProject]
@@ -1050,7 +1107,7 @@ export function App() {
         </div>
 
         <div className="header-actions">
-          <button className="icon-button" onClick={loadStatus} disabled={loading} data-testid="refresh-state" aria-label="Refresh">
+          <button className="icon-button" onClick={refreshAll} disabled={loading} data-testid="refresh-state" aria-label="Refresh">
             <RefreshCw size={16} />
             <span>Refresh</span>
           </button>
@@ -1101,7 +1158,16 @@ export function App() {
 
             <details className="options-menu">
               <summary>Project</summary>
-              <div className="project-grid" data-testid="project-connection">
+              <div
+                className="project-grid"
+                data-testid="project-connection"
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    connectProject();
+                  }
+                }}
+              >
                 <div className="project-current">
                   <span className={`project-status ${activeProject?.status === "connected" ? "ready" : "attention"}`}>
                     <Github size={15} />
@@ -1394,6 +1460,7 @@ export function App() {
               loopRunsState,
               proposalState,
               proposalFeedback,
+              pendingAction,
               onDirectionDraftChange: setDirectionDraft,
               onDirectionPauseChange: setDirectionPause,
               onSaveDirection: saveDirection,
@@ -1426,6 +1493,7 @@ function renderInsight(
     loopRunsState: DetailListState<LoopRun>;
     proposalState: ProposalDetailState;
     proposalFeedback: string;
+    pendingAction: string;
     onDirectionDraftChange: (value: string) => void;
     onDirectionPauseChange: (value: boolean) => void;
     onSaveDirection: (mode: "next_loop" | "standing") => void;
@@ -1450,6 +1518,7 @@ function renderInsight(
     loopRunsState,
     proposalState,
     proposalFeedback,
+    pendingAction,
     onDirectionDraftChange,
     onDirectionPauseChange,
     onSaveDirection,
@@ -1507,11 +1576,11 @@ function renderInsight(
               <span>Pause new loops after this one</span>
             </label>
             <div className="compact-actions">
-              <button className="secondary-button" type="button" disabled={!directionDraft.trim()} onClick={() => onSaveDirection("next_loop")}>
+              <button className="secondary-button" type="button" disabled={!directionDraft.trim() || Boolean(pendingAction)} onClick={() => onSaveDirection("next_loop")}>
                 <Send size={14} />
                 Use for next loop
               </button>
-              <button className="secondary-button" type="button" disabled={!directionDraft.trim()} onClick={() => onSaveDirection("standing")}>
+              <button className="secondary-button" type="button" disabled={!directionDraft.trim() || Boolean(pendingAction)} onClick={() => onSaveDirection("standing")}>
                 <Activity size={14} />
                 Save standing direction
               </button>
@@ -1532,7 +1601,7 @@ function renderInsight(
       <div className="ideas-panel" data-testid="ideas-panel">
         <div className="insight-inline-header">
           <span className="insight-kicker"><Lightbulb size={14} /> Autonomous ideation</span>
-          <button className="text-button" type="button" disabled={!activeProject || opportunitiesState.status === "loading"} onClick={onScanOpportunities}>
+          <button className="text-button" type="button" disabled={!activeProject || opportunitiesState.status === "loading" || Boolean(pendingAction)} onClick={onScanOpportunities}>
             Scan
           </button>
         </div>
@@ -1548,7 +1617,7 @@ function renderInsight(
                   </span>
                   <p>{item.summary || "No summary provided yet."}</p>
                   <div className="compact-actions inline">
-                    <button className="secondary-button" type="button" onClick={() => onPromoteOpportunity(item.id)}>
+                    <button className="secondary-button" type="button" disabled={Boolean(pendingAction)} onClick={() => onPromoteOpportunity(item.id)}>
                       Promote
                     </button>
                   </div>
@@ -1590,9 +1659,9 @@ function renderInsight(
                   placeholder="Optional feedback for request changes..."
                 />
                 <div className="compact-actions">
-                  <button className="secondary-button" type="button" onClick={() => onProposalDecision("accept")}>Accept</button>
-                  <button className="secondary-button" type="button" onClick={() => onProposalDecision("revise")}>Request changes</button>
-                  <button className="secondary-button danger" type="button" onClick={() => onProposalDecision("reject")}>Reject</button>
+                  <button className="secondary-button" type="button" disabled={Boolean(pendingAction) || !isProposalActionable(proposal)} onClick={() => onProposalDecision("accept")}>Accept</button>
+                  <button className="secondary-button" type="button" disabled={Boolean(pendingAction) || !isProposalActionable(proposal)} onClick={() => onProposalDecision("revise")}>Request changes</button>
+                  <button className="secondary-button danger" type="button" disabled={Boolean(pendingAction) || !isProposalActionable(proposal)} onClick={() => onProposalDecision("reject")}>Reject</button>
                 </div>
               </details>
             </article>
@@ -1882,6 +1951,17 @@ async function readResponseJson(response: Response): Promise<unknown> {
   }
 }
 
+async function readErrorMessage(response: Response): Promise<string> {
+  const payload = await readResponseJson(response);
+  const record = asRecord(payload);
+  const message = record && typeof record.error === "string"
+    ? record.error
+    : record && typeof record.message === "string"
+      ? record.message
+      : "";
+  return message || `HTTP ${response.status}`;
+}
+
 function extractList<T>(payload: unknown, keys: string[]): T[] {
   if (Array.isArray(payload)) return payload as T[];
   const record = asRecord(payload);
@@ -1915,6 +1995,10 @@ function activeProjectIdFromState(projects: ProjectConnection[], selectedProject
   return projects.find((project) => project.id === selectedProjectId)?.projectId ||
     projects.find((project) => project.active)?.projectId ||
     "";
+}
+
+function isProposalActionable(proposal: ProposalArtifact): boolean {
+  return !/accepted|auto_accepted|rejected|revision_requested|revising/i.test(proposal.status || "");
 }
 
 function compactMeta(values: Array<string | number | false | null | undefined>): string {

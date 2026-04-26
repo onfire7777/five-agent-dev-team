@@ -20,12 +20,12 @@ commands:
   # GitHub CLI is a first-class local/release path. Provide credentials with
   # GH_TOKEN/GITHUB_TOKEN or mount the gh config directory into the runtime.
   install: npm ci
-  lint: npm run lint
+  lint: npm run lint --if-present
   typecheck: npm run typecheck
   test: npm test
   build: npm run build
   security: npm audit --audit-level=high
-  release: gh workflow run release.yml --ref main
+  release: gh workflow run agent-release.yml --ref main
 context:
   # Lean AutoMaker-inspired context packs. Put only durable repo rules here:
   # architecture decisions, command conventions, safety rules, and recurring gotchas.

@@ -102,7 +102,7 @@ async function runLiveOpenAIAgentWithModel(
 
     const result = await run(agent, buildAgentPrompt(definition, context, model));
     const rawOutput = String(result?.finalOutput ?? result?.output ?? result ?? "");
-    const artifact = parseLiveArtifact(definition, context, rawOutput) || createTemplateArtifact(definition, context, rawOutput);
+    const artifact = parseLiveArtifact(definition, context, rawOutput) || createInvalidLiveArtifact(definition, context, rawOutput);
     return { artifact, rawOutput, live: true };
   } finally {
     await mcpSession?.close();
@@ -335,10 +335,38 @@ function createTemplateArtifact(
   return StageArtifactSchema.parse(artifact);
 }
 
+function createInvalidLiveArtifact(
+  definition: AgentDefinition,
+  context: AgentRunContext,
+  rawOutput: string
+): StageArtifact {
+  return StageArtifactSchema.parse({
+    workItemId: context.workItem.id,
+    projectId: context.workItem.projectId,
+    repo: context.workItem.repo,
+    stage: context.stage,
+    ownerAgent: definition.role,
+    status: "failed",
+    title: `${definition.shortName} returned invalid output for ${context.stage}`,
+    summary: `Live agent output could not be parsed into a valid stage artifact. The workflow is blocked so invalid or incomplete agent output cannot advance implementation.`,
+    decisions: [
+      "Block this stage until the agent returns valid JSON matching the StageArtifact schema."
+    ],
+    risks: [
+      `Invalid live output preview: ${rawOutput.trim().slice(0, 500) || "empty output"}`
+    ],
+    filesChanged: [],
+    testsRun: [],
+    releaseReadiness: "not_ready",
+    nextStage: "BLOCKED",
+    createdAt: new Date().toISOString()
+  });
+}
+
 function inferNextStage(stage: WorkItemState, workItem: WorkItem): WorkItemState | null {
   if (stage === "INTAKE") return workItem.rndNeeded ? "RND" : "CONTRACT";
   if (stage === "RND") return "PROPOSAL";
-  if (stage === "PROPOSAL") return "CONTRACT";
+  if (stage === "PROPOSAL") return "AWAITING_ACCEPTANCE";
   if (stage === "AWAITING_ACCEPTANCE") return "CONTRACT";
   if (stage === "CONTRACT") {
     if (workItem.frontendNeeded) return "FRONTEND_BUILD";
