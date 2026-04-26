@@ -20,6 +20,7 @@ import {
   memoryFromArtifact,
   selectRelevantMemories,
   WorkItemSchema,
+  githubToken,
   type AgentEvent,
   type MemoryRecord,
   type ProjectConnection,
@@ -764,7 +765,7 @@ function readConfiguredProjectConnection(): ProjectConnection | null {
         server.transport === "stdio" &&
         server.command === "github-mcp-server"
       ),
-      githubMcpAuthenticated: Boolean(process.env.GITHUB_PERSONAL_ACCESS_TOKEN || process.env.GH_TOKEN || process.env.GITHUB_TOKEN),
+      githubMcpAuthenticated: Boolean(githubToken()),
       githubSdkConnected: false,
       createdAt: now,
       updatedAt: now

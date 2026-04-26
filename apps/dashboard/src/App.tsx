@@ -5,9 +5,11 @@ import {
   Bot,
   CheckCircle2,
   CircleStop,
+  ExternalLink,
   GitBranch,
   Github,
   LayoutDashboard,
+  LogOut,
   PlayCircle,
   RefreshCw,
   Rocket,
@@ -56,6 +58,35 @@ type ApiState = {
   connected: boolean;
   usingFallback: boolean;
   lastError: string;
+};
+
+type GitHubAccount = {
+  connected: boolean;
+  source: "env" | "local" | "none";
+  sourceName?: string;
+  login?: string;
+  name?: string | null;
+  avatarUrl?: string;
+  scopes: string[];
+  clientIdConfigured: boolean;
+  authFile?: string;
+  message: string;
+};
+
+type GitHubDeviceSession = {
+  sessionId: string;
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete?: string;
+  expiresAt: string;
+  interval: number;
+  scope: string;
+};
+
+type GitHubConnectState = {
+  status: "idle" | "starting" | "pending" | "connected" | "failed";
+  message: string;
+  session?: GitHubDeviceSession;
 };
 
 type AgentLane = {
@@ -219,6 +250,14 @@ const requestTypeOptions: RequestType[] = ["feature", "bug", "performance", "sec
 const priorityOptions: Priority[] = ["low", "medium", "high", "urgent"];
 const riskLevelOptions: RiskLevel[] = ["low", "medium", "high"];
 
+const defaultGitHubAccount: GitHubAccount = {
+  connected: false,
+  source: "none",
+  scopes: [],
+  clientIdConfigured: false,
+  message: "GitHub account status has not loaded yet."
+};
+
 export function App() {
   const [status, setStatus] = useState<Status>(() => createSampleStatus());
   const [apiState, setApiState] = useState<ApiState>({
@@ -236,6 +275,12 @@ export function App() {
   const hydratedProjectIdRef = useRef("");
   const [createError, setCreateError] = useState("");
   const [projectError, setProjectError] = useState("");
+  const [githubAccountError, setGithubAccountError] = useState("");
+  const [githubAccount, setGithubAccount] = useState<GitHubAccount>(defaultGitHubAccount);
+  const [githubConnect, setGithubConnect] = useState<GitHubConnectState>({
+    status: "idle",
+    message: ""
+  });
   const [workDraft, setWorkDraft] = useState<WorkDraft>({
     title: "",
     acceptanceCriteria: "",
@@ -294,11 +339,17 @@ export function App() {
       } catch {
         setProjects([]);
       }
+      try {
+        await loadGithubAccount();
+      } catch {
+        setGithubAccount(defaultGitHubAccount);
+      }
       return true;
     } catch (error) {
       setStatus(createOfflineStatus());
       setMemories([]);
       setProjects([]);
+      setGithubAccount(defaultGitHubAccount);
       setApiState({
         connected: false,
         usingFallback: true,
@@ -314,6 +365,14 @@ export function App() {
     const response = await fetch(url);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     setMemories(await response.json());
+  }
+
+  async function loadGithubAccount() {
+    const response = await fetch(`${API_BASE}/api/github/account`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const account = await response.json() as GitHubAccount;
+    setGithubAccount(account);
+    return account;
   }
 
   async function loadProjects() {
@@ -339,6 +398,40 @@ export function App() {
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     return response.json();
+  }
+
+  async function startGithubConnection() {
+    setGithubAccountError("");
+    setGithubConnect({ status: "starting", message: "Starting GitHub connection..." });
+    try {
+      const session = await postControl("/api/github/device/start") as GitHubDeviceSession;
+      setGithubConnect({
+        status: "pending",
+        message: "Approve this app in GitHub, then this screen will finish automatically.",
+        session
+      });
+    } catch (error) {
+      setGithubConnect({
+        status: "failed",
+        message: error instanceof Error ? error.message : "GitHub connection could not start."
+      });
+    }
+  }
+
+  async function disconnectGithubAccount() {
+    setGithubAccountError("");
+    setLoading(true);
+    try {
+      const result = await postControl("/api/github/disconnect");
+      if (result.account) setGithubAccount(result.account);
+      if (!result.disconnected) setGithubAccountError(result.message || "GitHub auth is not dashboard-managed.");
+      setGithubConnect({ status: "idle", message: "" });
+      await loadStatus();
+    } catch (error) {
+      setGithubAccountError(error instanceof Error ? error.message : "GitHub disconnect failed.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function createWorkItem(event: FormEvent<HTMLFormElement>) {
@@ -450,9 +543,56 @@ export function App() {
 
   useEffect(() => {
     loadStatus();
+    loadGithubAccount().catch(() => setGithubAccount(defaultGitHubAccount));
     const timer = window.setInterval(loadStatus, 10000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (githubConnect.status !== "pending" || !githubConnect.session) return undefined;
+    const timer = window.setTimeout(async () => {
+      try {
+        const result = await postControl("/api/github/device/poll", {
+          sessionId: githubConnect.session?.sessionId
+        }) as {
+          status: "pending" | "connected" | "expired" | "denied" | "failed";
+          interval?: number;
+          message?: string;
+          account?: GitHubAccount;
+        };
+        if (result.status === "connected" && result.account) {
+          setGithubAccount(result.account);
+          setGithubConnect({
+            status: "connected",
+            message: "GitHub account connected. Repo checks now use the same account."
+          });
+          await loadStatus();
+          return;
+        }
+        if (result.status === "pending") {
+          setGithubConnect((current) => ({
+            ...current,
+            message: result.message || current.message,
+            session: current.session ? {
+              ...current.session,
+              interval: result.interval || current.session.interval
+            } : current.session
+          }));
+          return;
+        }
+        setGithubConnect({
+          status: "failed",
+          message: result.message || "GitHub connection did not complete."
+        });
+      } catch (error) {
+        setGithubConnect({
+          status: "failed",
+          message: error instanceof Error ? error.message : "GitHub polling failed."
+        });
+      }
+    }, Math.max(githubConnect.session.interval, 5) * 1000);
+    return () => window.clearTimeout(timer);
+  }, [githubConnect]);
 
   useEffect(() => {
     if (!("EventSource" in window)) return undefined;
@@ -577,6 +717,66 @@ export function App() {
                       <span>{activeTeam ? `${activeTeam.agentsOnline}/${activeTeam.agentsTotal} agents` : "5-agent team"}</span>
                       <span>{activeProject.webResearchEnabled ? "Deep research" : "Research off"}</span>
                     </div>
+                  )}
+                </div>
+
+                <div className={`github-account-card ${githubAccount.connected ? "ready" : "attention"}`} data-testid="github-account-card">
+                  <div className="github-account-main">
+                    {githubAccount.avatarUrl ? (
+                      <img className="github-account-avatar" src={githubAccount.avatarUrl} alt="" />
+                    ) : (
+                      <span className="github-account-avatar fallback">
+                        <Github size={16} />
+                      </span>
+                    )}
+                    <span>
+                      <strong>{githubAccount.connected ? `GitHub: ${githubAccount.login}` : "Connect GitHub account"}</strong>
+                      <small>
+                        {githubAccount.connected
+                          ? `${githubAccount.source === "local" ? "Dashboard OAuth" : githubAccount.sourceName || "Environment"} powers CLI, SDK, and MCP.`
+                          : githubAccount.message}
+                      </small>
+                    </span>
+                  </div>
+                  <div className="github-account-actions">
+                    {githubConnect.status === "pending" && githubConnect.session ? (
+                      <>
+                        <span className="github-connect-code" aria-label="GitHub verification code">{githubConnect.session.userCode}</span>
+                        <a
+                          className="secondary-link"
+                          href={githubConnect.session.verificationUriComplete || githubConnect.session.verificationUri}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          <ExternalLink size={14} />
+                          Open GitHub
+                        </a>
+                      </>
+                    ) : githubAccount.connected ? (
+                      githubAccount.source === "local" ? (
+                        <button className="secondary-button" type="button" onClick={disconnectGithubAccount} disabled={loading}>
+                          <LogOut size={15} />
+                          Disconnect
+                        </button>
+                      ) : (
+                        <span className="github-managed">Env managed</span>
+                      )
+                    ) : (
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={startGithubConnection}
+                        disabled={loading || githubConnect.status === "starting" || !apiState.connected || !githubAccount.clientIdConfigured}
+                      >
+                        <Github size={15} />
+                        {githubAccount.clientIdConfigured ? "Connect GitHub" : "OAuth setup needed"}
+                      </button>
+                    )}
+                  </div>
+                  {(githubConnect.message || githubAccountError) && (
+                    <small className={githubConnect.status === "failed" || githubAccountError ? "github-account-message error" : "github-account-message"}>
+                      {githubAccountError || githubConnect.message}
+                    </small>
                   )}
                 </div>
 

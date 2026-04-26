@@ -4,6 +4,7 @@ import {
   buildSharedContext,
   DEFAULT_SCHEDULER_POLICY,
   formatSharedContext,
+  githubToken,
   shouldActivateCapability,
   shouldUseLiveApi,
   StageArtifactSchema
@@ -205,13 +206,13 @@ export function resolveMcpEnv(env: Record<string, string>): Record<string, strin
   ]));
 
   if ("GITHUB_PERSONAL_ACCESS_TOKEN" in resolved && !resolved.GITHUB_PERSONAL_ACCESS_TOKEN) {
-    resolved.GITHUB_PERSONAL_ACCESS_TOKEN = process.env.GITHUB_PERSONAL_ACCESS_TOKEN || process.env.GH_TOKEN || process.env.GITHUB_TOKEN || "";
+    resolved.GITHUB_PERSONAL_ACCESS_TOKEN = githubToken();
   }
   if ("GH_TOKEN" in resolved && !resolved.GH_TOKEN) {
-    resolved.GH_TOKEN = process.env.GH_TOKEN || process.env.GITHUB_TOKEN || process.env.GITHUB_PERSONAL_ACCESS_TOKEN || "";
+    resolved.GH_TOKEN = githubToken();
   }
   if ("GITHUB_TOKEN" in resolved && !resolved.GITHUB_TOKEN) {
-    resolved.GITHUB_TOKEN = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || process.env.GITHUB_PERSONAL_ACCESS_TOKEN || "";
+    resolved.GITHUB_TOKEN = githubToken();
   }
 
   return resolved;

@@ -7,3 +7,4 @@ export * from "./sample-data";
 export * from "./config";
 export * from "./execution-policy";
 export * from "./context";
+export * from "./github-auth";

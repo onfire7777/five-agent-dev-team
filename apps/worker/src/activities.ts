@@ -12,6 +12,7 @@ import {
   StageArtifactSchema,
   targetConfigMatchesWorkItem,
   targetRepoConfigFromProjectConnection,
+  githubAuthEnv,
   type StageArtifact,
   type TargetRepoConfig,
   type VerificationSignal,
@@ -446,6 +447,7 @@ async function readGitHubActionsEvidence(config: TargetRepoConfig): Promise<Evid
   try {
     const result = await exec(`gh run list --repo ${repo} --branch ${branch} --limit 1 --json status,conclusion,url,workflowName,headSha`, {
       cwd: repoPath,
+      env: githubAuthEnv(),
       timeout: 30_000,
       maxBuffer: 1024 * 1024
     });
@@ -571,6 +573,7 @@ async function runConfiguredCommand(config: TargetRepoConfig, name: string, comm
   try {
     await exec(command, {
       cwd: config.repo.localPath || process.cwd(),
+      env: githubAuthEnv(),
       timeout: Number(process.env.AGENT_COMMAND_TIMEOUT_MS || 300_000),
       maxBuffer: 1024 * 1024 * 8
     });
@@ -786,7 +789,7 @@ async function countAutomationBranches(repoPath: string, branchPrefix: string): 
 }
 
 function execGit(command: string, cwd: string) {
-  return exec(command, { cwd });
+  return exec(command, { cwd, env: githubAuthEnv() });
 }
 
 function assertSafeGitRef(value: string, label: string): string {

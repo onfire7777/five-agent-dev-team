@@ -1,5 +1,6 @@
 import "dotenv/config";
 import childProcess from "node:child_process";
+import crypto from "node:crypto";
 import cors from "cors";
 import express from "express";
 import fs from "node:fs/promises";
@@ -19,6 +20,14 @@ import {
   type ProjectConnection,
   type ProjectConnectionInput
 } from "../../../packages/shared/src";
+import {
+  deleteStoredGitHubAuth,
+  githubAuthEnv,
+  githubAuthFilePath,
+  githubToken,
+  githubTokenSource,
+  writeStoredGitHubAuth
+} from "../../../packages/shared/src/github-auth";
 
 const CreateWorkItemRequest = z.object({
   title: z.string().min(1),
@@ -38,6 +47,13 @@ const app = express();
 const store = createStore();
 const port = Number(process.env.PORT || 4310);
 const execFile = util.promisify(childProcess.execFile);
+const githubDeviceSessions = new Map<string, {
+  clientId: string;
+  deviceCode: string;
+  interval: number;
+  scope: string;
+  expiresAt: number;
+}>();
 const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:5173,http://127.0.0.1:5173")
   .split(",")
   .map((origin) => origin.trim())
@@ -125,6 +141,170 @@ app.get("/api/events", async (req, res, next) => {
 app.get("/api/projects", async (_req, res, next) => {
   try {
     res.json(await store.listProjectConnections());
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/github/account", async (_req, res, next) => {
+  try {
+    res.json(await getGitHubAccountStatus());
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/github/device/start", async (_req, res, next) => {
+  try {
+    const clientId = process.env.GITHUB_OAUTH_CLIENT_ID?.trim();
+    if (!clientId) {
+      throw new HttpError("Set GITHUB_OAUTH_CLIENT_ID to enable dashboard GitHub account connection.", 400);
+    }
+    const scope = process.env.GITHUB_OAUTH_SCOPES?.trim() || "repo workflow read:org";
+    const response = await fetch("https://github.com/login/device/code", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: new URLSearchParams({ client_id: clientId, scope })
+    });
+    const data = await response.json() as {
+      device_code?: string;
+      user_code?: string;
+      verification_uri?: string;
+      verification_uri_complete?: string;
+      expires_in?: number;
+      interval?: number;
+      error?: string;
+      error_description?: string;
+    };
+    if (!response.ok || data.error || !data.device_code || !data.user_code || !data.verification_uri) {
+      throw new HttpError(data.error_description || data.error || "GitHub device authorization could not start.", 502);
+    }
+    const sessionId = crypto.randomUUID();
+    const expiresIn = Number(data.expires_in || 900);
+    const interval = Math.max(Number(data.interval || 5), 5);
+    githubDeviceSessions.set(sessionId, {
+      clientId,
+      deviceCode: data.device_code,
+      interval,
+      scope,
+      expiresAt: Date.now() + expiresIn * 1000
+    });
+    res.status(201).json({
+      sessionId,
+      userCode: data.user_code,
+      verificationUri: data.verification_uri,
+      verificationUriComplete: data.verification_uri_complete,
+      expiresIn,
+      expiresAt: new Date(Date.now() + expiresIn * 1000).toISOString(),
+      interval,
+      scope
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/github/device/poll", async (req, res, next) => {
+  try {
+    const { sessionId } = z.object({ sessionId: z.string().min(1) }).parse(req.body);
+    const session = githubDeviceSessions.get(sessionId);
+    if (!session) throw new HttpError("GitHub connection session was not found. Start a new connection.", 404);
+    if (Date.now() > session.expiresAt) {
+      githubDeviceSessions.delete(sessionId);
+      res.status(410).json({ status: "expired", message: "GitHub connection code expired. Start again." });
+      return;
+    }
+
+    const response = await fetch("https://github.com/login/oauth/access_token", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: new URLSearchParams({
+        client_id: session.clientId,
+        device_code: session.deviceCode,
+        grant_type: "urn:ietf:params:oauth:grant-type:device_code"
+      })
+    });
+    const data = await response.json() as {
+      access_token?: string;
+      token_type?: string;
+      scope?: string;
+      error?: string;
+      error_description?: string;
+      interval?: number;
+    };
+
+    if (data.error === "authorization_pending") {
+      res.json({ status: "pending", interval: session.interval, message: "Waiting for GitHub approval." });
+      return;
+    }
+    if (data.error === "slow_down") {
+      session.interval = Math.max(Number(data.interval || session.interval + 5), session.interval + 5);
+      res.json({ status: "pending", interval: session.interval, message: "GitHub asked us to slow polling." });
+      return;
+    }
+    if (data.error) {
+      githubDeviceSessions.delete(sessionId);
+      res.json({
+        status: data.error === "access_denied" ? "denied" : "failed",
+        message: data.error_description || data.error
+      });
+      return;
+    }
+    if (!response.ok || !data.access_token) {
+      throw new HttpError("GitHub did not return an access token.", 502);
+    }
+
+    const user = await fetchGitHubUser(data.access_token);
+    await writeStoredGitHubAuth({
+      accessToken: data.access_token,
+      tokenType: data.token_type || "bearer",
+      scope: data.scope || session.scope,
+      login: user.login,
+      name: user.name,
+      avatarUrl: user.avatarUrl
+    });
+    githubDeviceSessions.delete(sessionId);
+    await store.addEvent({
+      level: "info",
+      type: "system",
+      message: `GitHub account ${user.login} connected through dashboard device authorization.`
+    });
+    res.json({ status: "connected", account: await getGitHubAccountStatus() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/github/disconnect", async (_req, res, next) => {
+  try {
+    const source = githubTokenSource();
+    if (source?.source === "local") {
+      await deleteStoredGitHubAuth();
+      await store.addEvent({
+        level: "warn",
+        type: "system",
+        message: "Dashboard-managed GitHub account disconnected."
+      });
+      res.json({
+        disconnected: true,
+        message: "Dashboard-managed GitHub account disconnected.",
+        account: await getGitHubAccountStatus()
+      });
+      return;
+    }
+    res.json({
+      disconnected: false,
+      message: source?.source === "env"
+        ? `GitHub auth is managed by ${source.sourceName}; remove that environment token to disconnect.`
+        : "No dashboard-managed GitHub account is connected.",
+      account: await getGitHubAccountStatus()
+    });
   } catch (error) {
     next(error);
   }
@@ -289,9 +469,9 @@ async function inspectProjectConnection(input: ProjectConnectionInput): Promise<
     validationErrors.push("GitHub CLI is not available in this runtime.");
   } else {
     const authStatus = await runTool("gh", ["auth", "status", "--hostname", "github.com"], input.localPath);
-    diagnostics.ghAuthed = authStatus.ok || Boolean(process.env.GH_TOKEN || process.env.GITHUB_TOKEN || process.env.GITHUB_PERSONAL_ACCESS_TOKEN);
+    diagnostics.ghAuthed = authStatus.ok || Boolean(githubToken());
     if (!diagnostics.ghAuthed) {
-      validationErrors.push("GitHub CLI is not authenticated. Set GH_TOKEN/GITHUB_TOKEN or mount gh config.");
+      validationErrors.push("GitHub CLI is not authenticated. Connect GitHub in the dashboard, set GH_TOKEN/GITHUB_TOKEN, or mount gh config.");
     }
 
     const repoView = await runTool("gh", ["repo", "view", `${input.repoOwner}/${input.repoName}`, "--json", "name,owner,url,defaultBranchRef"], input.localPath);
@@ -322,7 +502,7 @@ async function inspectProjectConnection(input: ProjectConnectionInput): Promise<
     validationErrors.push("Official GitHub MCP server is not available in this runtime.");
   }
   if (input.githubMcpEnabled && diagnostics.githubMcpAvailable && !diagnostics.githubMcpAuthenticated) {
-    validationErrors.push("GitHub MCP needs GITHUB_PERSONAL_ACCESS_TOKEN, GH_TOKEN, or GITHUB_TOKEN.");
+    validationErrors.push("GitHub MCP needs a connected dashboard GitHub account, GITHUB_PERSONAL_ACCESS_TOKEN, GH_TOKEN, or GITHUB_TOKEN.");
   }
 
   const sdkResult = await inspectGitHubSdk(input);
@@ -360,6 +540,7 @@ async function runTool(command: string, args: string[], cwd: string): Promise<{ 
   try {
     const result = await execFile(command, args, {
       cwd,
+      env: githubAuthEnv(),
       timeout: 20_000,
       windowsHide: true,
       maxBuffer: 1024 * 1024
@@ -492,8 +673,76 @@ function buildProjectCapabilities(input: ProjectConnectionInput, diagnostics: Pr
   ].map((capability) => ProjectCapabilityStatusSchema.parse(capability));
 }
 
-function githubToken(): string {
-  return process.env.GITHUB_PERSONAL_ACCESS_TOKEN || process.env.GH_TOKEN || process.env.GITHUB_TOKEN || "";
+async function getGitHubAccountStatus(): Promise<{
+  connected: boolean;
+  source: "env" | "local" | "none";
+  sourceName?: string;
+  login?: string;
+  name?: string | null;
+  avatarUrl?: string;
+  scopes: string[];
+  clientIdConfigured: boolean;
+  authFile?: string;
+  message: string;
+}> {
+  const source = githubTokenSource();
+  const clientIdConfigured = Boolean(process.env.GITHUB_OAUTH_CLIENT_ID?.trim());
+  if (!source) {
+    return {
+      connected: false,
+      source: "none",
+      scopes: [],
+      clientIdConfigured,
+      authFile: githubAuthFilePath(),
+      message: clientIdConfigured
+        ? "Connect GitHub from the dashboard."
+        : "Set GITHUB_OAUTH_CLIENT_ID for one-click dashboard connection, or use GH_TOKEN/GITHUB_TOKEN/gh config."
+    };
+  }
+
+  try {
+    const user = await fetchGitHubUser(source.token);
+    const scopes = source.source === "local"
+      ? source.auth.scope.split(",").map((scope) => scope.trim()).filter(Boolean)
+      : [];
+    return {
+      connected: true,
+      source: source.source,
+      sourceName: source.sourceName,
+      login: user.login,
+      name: user.name,
+      avatarUrl: user.avatarUrl,
+      scopes,
+      clientIdConfigured,
+      authFile: source.source === "local" ? githubAuthFilePath() : undefined,
+      message: source.source === "local"
+        ? "Dashboard-managed GitHub account is connected."
+        : `GitHub account is connected through ${source.sourceName}.`
+    };
+  } catch (error) {
+    return {
+      connected: false,
+      source: source.source,
+      sourceName: source.sourceName,
+      scopes: [],
+      clientIdConfigured,
+      authFile: source.source === "local" ? githubAuthFilePath() : undefined,
+      message: `GitHub token could not be verified: ${error instanceof Error ? error.message : String(error)}`
+    };
+  }
+}
+
+async function fetchGitHubUser(token: string): Promise<{ login: string; name: string | null; avatarUrl?: string }> {
+  const octokit = new Octokit({
+    auth: token,
+    userAgent: "five-agent-dev-team/0.1.0"
+  });
+  const { data } = await octokit.rest.users.getAuthenticated();
+  return {
+    login: data.login,
+    name: data.name || null,
+    avatarUrl: data.avatar_url || undefined
+  };
 }
 
 function firstLine(value: string): string {

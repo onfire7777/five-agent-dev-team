@@ -30,7 +30,9 @@ npm run dev
 
 ## Configuration
 
-Connect target repos from the dashboard, or create `agent-team.config.yaml` from `agent-team.config.example.yaml` when you want a file-backed default repo. Each target repo must expose install, lint, typecheck, test, build, security, and release commands. The controller will not guess project-specific commands.
+Connect GitHub from the dashboard first, then connect target repos from the same `Project` panel. The dashboard supports GitHub's OAuth device flow when `GITHUB_OAUTH_CLIENT_ID` is configured; env tokens and mounted `gh` config still work for advanced setups. Dashboard-managed tokens are stored locally in `.agent-team/github-auth.json`, which is gitignored, and the same account is injected into the GitHub CLI, Octokit SDK, and official GitHub MCP server paths.
+
+Create `agent-team.config.yaml` from `agent-team.config.example.yaml` only when you want a file-backed default repo. Each target repo must expose install, lint, typecheck, test, build, security, and release commands. The controller will not guess project-specific commands.
 
 Each connected repo is treated as an isolated project. Work items and permanent memory carry a project/repo scope so one repository's decisions, gotchas, and automation state are not mixed into another repository. Dashboard/API connections are stored in Postgres and mirrored to `.agent-team/projects/<project-id>.yaml` so controller and worker processes resolve the same per-project config instead of relying on a single mutable config file.
 
@@ -92,6 +94,10 @@ Live agent runs default to the configured best coding model policy: `gpt-5.5` fo
 - `GET /api/memories`
 - `GET /api/events`
 - `GET /api/events/stream`
+- `GET /api/github/account`
+- `POST /api/github/device/start`
+- `POST /api/github/device/poll`
+- `POST /api/github/disconnect`
 - `POST /api/work-items`
 - `POST /api/emergency-stop`
 - `POST /api/emergency-resume`
