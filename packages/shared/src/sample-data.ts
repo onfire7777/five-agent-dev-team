@@ -179,6 +179,8 @@ export function createSampleStatus() {
       NEW: 1,
       INTAKE: 3,
       RND: 2,
+      PROPOSAL: 1,
+      AWAITING_ACCEPTANCE: 0,
       CONTRACT: 1,
       FRONTEND_BUILD: 2,
       BACKEND_BUILD: 2,

@@ -10,6 +10,14 @@ import {
   StageArtifactSchema
 } from "../../shared/src";
 
+export interface TeamBusMessage {
+  createdAt?: string;
+  stage?: WorkItemState;
+  ownerAgent?: string;
+  type?: string;
+  message: string;
+}
+
 export interface AgentRunContext {
   workItem: WorkItem;
   stage: WorkItemState;
@@ -17,6 +25,10 @@ export interface AgentRunContext {
   memories?: MemoryRecord[];
   targetRepoConfig?: TargetRepoConfig;
   input?: string;
+  proposalStage?: boolean;
+  teamMessages?: TeamBusMessage[];
+  teamDirection?: string[];
+  loopContext?: string[];
 }
 
 export interface AgentRunResult {
@@ -105,23 +117,60 @@ function buildAgentPrompt(definition: AgentDefinition, context: AgentRunContext,
   });
   return [
     `Work item: ${context.workItem.id} - ${context.workItem.title}`,
-    `Stage: ${context.stage}`,
+    `Stage: ${context.stage}${context.proposalStage ? " proposal" : ""}`,
     `Agent: ${definition.displayName}`,
     `Project scope: ${context.workItem.projectId || (context.targetRepoConfig ? "configured repo" : "unscoped")}`,
     `Repository scope: ${context.workItem.repo || "not connected"}`,
     `Model policy: ${selectedModel} selected for this run, with configured fallback only if unavailable.`,
+    context.proposalStage
+      ? [
+          "",
+          "Proposal mode:",
+          definition.proposalInstructions || "Propose the next stage plan, risks, dependencies, and handoff needs before implementation.",
+          "Return a normal stage artifact JSON, but make it clear in title and summary that this is a proposal-only handoff. Do not claim files changed or tests run unless already proven."
+        ].join("\n")
+      : "",
     "",
     "Shared team context:",
     formatSharedContext(sharedContext),
+    "",
+    "Team bus messages:",
+    formatTeamMessages(context.teamMessages || []),
+    "",
+    "Team direction:",
+    formatList(context.teamDirection || []),
+    "",
+    "Loop context:",
+    formatList(context.loopContext || []),
     "",
     `Acceptance criteria: ${context.workItem.acceptanceCriteria.join("; ") || "Not provided"}`,
     `Previous artifacts: ${context.previousArtifacts.map((artifact) => `${artifact.stage}: ${artifact.summary}`).join(" | ") || "None"}`,
     "Capability rule: proactively use active MCP tools, skills, plugins, and knowledge packs when they materially improve this stage; do not call inactive or irrelevant tools.",
     "Research rule: use hosted web search or web-search MCP only for current external facts that local repo context cannot prove; summarize sources into decisions, risks, tests, or follow-ups.",
     "When a tool uncovers a durable lesson, convert it into an artifact decision, risk, test, or follow-up rather than relying on transient tool output.",
-    "Cooperate with the team: reference teammate activity, preserve prior decisions, update shared risks, and return only JSON for one stage artifact.",
+    "Cooperate with the team: reference teammate activity, team bus messages, current direction, loop context, preserve prior decisions, update shared risks, and return only JSON for one stage artifact.",
     "The JSON must include title, summary, status, decisions, risks, filesChanged, testsRun, releaseReadiness, and nextStage."
-  ].join("\n");
+  ].filter(Boolean).join("\n");
+}
+
+function formatTeamMessages(messages: TeamBusMessage[]): string {
+  if (!messages.length) return "none";
+  return messages
+    .slice(-12)
+    .map((message) => {
+      const prefix = [
+        message.createdAt,
+        message.ownerAgent,
+        message.stage,
+        message.type
+      ].filter(Boolean).join(" | ");
+      return prefix ? `${prefix}: ${message.message}` : message.message;
+    })
+    .join("\n");
+}
+
+function formatList(values: string[]): string {
+  return values.length ? values.map((value) => `- ${value}`).join("\n") : "none";
 }
 
 function modelForAgent(definition: AgentDefinition, config?: TargetRepoConfig): string {
@@ -271,7 +320,9 @@ function createTemplateArtifact(
     stage: context.stage,
     ownerAgent: definition.role,
     status,
-    title: `${definition.shortName} artifact for ${context.stage}`,
+    title: context.proposalStage
+      ? `${definition.shortName} proposal for ${context.stage}`
+      : `${definition.shortName} artifact for ${context.stage}`,
     summary: liveSummary?.trim() || templateSummary(definition, context),
     decisions: templateDecisions(definition, context),
     risks: templateRisks(context),
@@ -286,7 +337,9 @@ function createTemplateArtifact(
 
 function inferNextStage(stage: WorkItemState, workItem: WorkItem): WorkItemState | null {
   if (stage === "INTAKE") return workItem.rndNeeded ? "RND" : "CONTRACT";
-  if (stage === "RND") return "CONTRACT";
+  if (stage === "RND") return "PROPOSAL";
+  if (stage === "PROPOSAL") return "CONTRACT";
+  if (stage === "AWAITING_ACCEPTANCE") return "CONTRACT";
   if (stage === "CONTRACT") {
     if (workItem.frontendNeeded) return "FRONTEND_BUILD";
     if (workItem.backendNeeded) return "BACKEND_BUILD";
@@ -305,9 +358,13 @@ function inferNextStage(stage: WorkItemState, workItem: WorkItem): WorkItemState
 function templateSummary(definition: AgentDefinition, context: AgentRunContext): string {
   const teammateCount = context.previousArtifacts.length;
   const memoryCount = context.memories?.length || 0;
+  const teamMessageCount = context.teamMessages?.length || 0;
   const criteria = context.workItem.acceptanceCriteria.length
     ? ` Acceptance criteria covered: ${context.workItem.acceptanceCriteria.join("; ")}.`
     : "";
+  if (context.proposalStage) {
+    return `${definition.displayName} proposed the ${context.stage} handoff for ${context.workItem.title} with ${teammateCount} teammate artifact(s), ${teamMessageCount} team bus message(s), and ${memoryCount} durable memory record(s).${criteria}`;
+  }
   return `${definition.displayName} completed ${context.stage} for ${context.workItem.title} with awareness of ${teammateCount} teammate artifact(s) and ${memoryCount} durable memory record(s).${criteria}`;
 }
 

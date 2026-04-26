@@ -8,3 +8,4 @@ export * from "./config";
 export * from "./execution-policy";
 export * from "./context";
 export * from "./github-auth";
+export * from "./additive-loop";

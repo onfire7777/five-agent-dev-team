@@ -5,15 +5,21 @@ import {
   Bot,
   CheckCircle2,
   CircleStop,
+  Compass,
   ExternalLink,
   GitBranch,
   Github,
+  History,
   LayoutDashboard,
+  Lightbulb,
   LogOut,
+  MessageSquareText,
+  PauseCircle,
   PlayCircle,
   RefreshCw,
   Rocket,
   SearchCheck,
+  Send,
   ShieldCheck,
   SquareKanban,
   TerminalSquare,
@@ -27,10 +33,11 @@ declare const __DASHBOARD_API_BASE__: string | undefined;
 
 type Status = ReturnType<typeof createSampleStatus>;
 type RoutingKey = "frontendNeeded" | "backendNeeded" | "rndNeeded";
-type InsightView = "release" | "team" | "capabilities" | "memory" | "events";
+type InsightView = "release" | "direction" | "ideas" | "teamMessages" | "loopHistory" | "team" | "capabilities" | "memory" | "events";
 type RequestType = "feature" | "bug" | "performance" | "security" | "privacy" | "refactor" | "research";
 type Priority = "low" | "medium" | "high" | "urgent";
 type RiskLevel = "low" | "medium" | "high";
+type DetailFetchStatus = "idle" | "loading" | "ready" | "empty" | "unavailable" | "error";
 
 type WorkDraft = {
   title: string;
@@ -106,6 +113,105 @@ type AgentLane = {
   task: string;
   progress: number;
   tone: string;
+};
+
+type DetailListState<T> = {
+  status: DetailFetchStatus;
+  projectId: string;
+  items: T[];
+  message: string;
+};
+
+type DirectionDetailState = {
+  status: DetailFetchStatus;
+  projectId: string;
+  direction?: ProjectDirection;
+  message: string;
+};
+
+type ProposalDetailState = {
+  status: DetailFetchStatus;
+  workItemId: string;
+  proposal?: ProposalArtifact;
+  message: string;
+};
+
+type ProjectDirection = {
+  id?: string;
+  summary?: string;
+  standingDirection?: string;
+  nextLoopDirection?: string;
+  currentPriority?: string;
+  focus?: string;
+  avoid?: string[];
+  pauseNewLoopsAfterCurrent?: boolean;
+  updatedAt?: string;
+  createdAt?: string;
+};
+
+type OpportunityCandidate = {
+  id: string;
+  title?: string;
+  summary?: string;
+  source?: string;
+  risk?: string;
+  score?: number;
+  status?: string;
+  evidence?: string[];
+  workItemId?: string;
+  updatedAt?: string;
+  createdAt?: string;
+};
+
+type ProposalArtifact = {
+  id?: string;
+  workItemId?: string;
+  title?: string;
+  problem?: string;
+  researchSummary?: string;
+  recommendedApproach?: string;
+  status?: string;
+  version?: number;
+  risks?: string[];
+  tasks?: string[];
+  validationPlan?: string;
+  rollbackPlan?: string;
+  autoAcceptEligible?: boolean;
+  updatedAt?: string;
+};
+
+type AgentMessage = {
+  id?: string;
+  type?: string;
+  ownerAgent?: string;
+  agent?: string;
+  stage?: string;
+  workItemId?: string;
+  title?: string;
+  summary?: string;
+  message?: string;
+  status?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+type LoopRun = {
+  id: string;
+  workItemId?: string;
+  triggerSource?: string;
+  currentStage?: string;
+  stage?: string;
+  status?: string;
+  blockingReason?: string;
+  activeAgents?: string[];
+  startRepoSha?: string;
+  endRepoSha?: string;
+  releaseState?: string;
+  closureSummary?: string;
+  nextRecommendedLoop?: string;
+  startedAt?: string;
+  closedAt?: string;
+  updatedAt?: string;
 };
 
 const API_BASE = typeof __DASHBOARD_API_BASE__ === "string" && __DASHBOARD_API_BASE__ ? __DASHBOARD_API_BASE__ : "http://localhost:4310";
@@ -240,7 +346,7 @@ const routeToggles: Array<[RoutingKey, string]> = [
 
 const flowGroups = [
   { label: "Intake", states: ["NEW", "INTAKE"], icon: SquareKanban },
-  { label: "Research", states: ["RND", "CONTRACT"], icon: SearchCheck },
+  { label: "Research", states: ["RND", "PROPOSAL", "AWAITING_ACCEPTANCE", "CONTRACT"], icon: SearchCheck },
   { label: "Build", states: ["FRONTEND_BUILD", "BACKEND_BUILD", "INTEGRATION"], icon: Workflow },
   { label: "Verify", states: ["VERIFY", "BLOCKED"], icon: ShieldCheck },
   { label: "Release", states: ["RELEASE", "CLOSED"], icon: Rocket }
@@ -248,6 +354,10 @@ const flowGroups = [
 
 const insightOptions: Array<[InsightView, string]> = [
   ["release", "Release gate"],
+  ["direction", "Direction"],
+  ["ideas", "Ideas & Proposals"],
+  ["teamMessages", "Team Messages"],
+  ["loopHistory", "Loop History"],
   ["team", "Team lanes"],
   ["capabilities", "Capabilities"],
   ["memory", "Memory"],
@@ -266,6 +376,20 @@ const defaultGitHubAccount: GitHubAccount = {
   clientIdConfigured: false,
   message: "GitHub account status has not loaded yet."
 };
+
+const missingEndpointMessage = "This cooperative loop endpoint is not connected yet.";
+
+function createListState<T>(): DetailListState<T> {
+  return { status: "idle", projectId: "", items: [], message: "" };
+}
+
+function createDirectionState(): DirectionDetailState {
+  return { status: "idle", projectId: "", message: "" };
+}
+
+function createProposalState(): ProposalDetailState {
+  return { status: "idle", workItemId: "", message: "" };
+}
 
 export function App() {
   const [status, setStatus] = useState<Status>(() => createSampleStatus());
@@ -290,6 +414,14 @@ export function App() {
     status: "idle",
     message: ""
   });
+  const [directionState, setDirectionState] = useState<DirectionDetailState>(() => createDirectionState());
+  const [opportunitiesState, setOpportunitiesState] = useState<DetailListState<OpportunityCandidate>>(() => createListState());
+  const [teamMessagesState, setTeamMessagesState] = useState<DetailListState<AgentMessage>>(() => createListState());
+  const [loopRunsState, setLoopRunsState] = useState<DetailListState<LoopRun>>(() => createListState());
+  const [proposalState, setProposalState] = useState<ProposalDetailState>(() => createProposalState());
+  const [directionDraft, setDirectionDraft] = useState("");
+  const [directionPause, setDirectionPause] = useState(false);
+  const [proposalFeedback, setProposalFeedback] = useState("");
   const [workDraft, setWorkDraft] = useState<WorkDraft>({
     title: "",
     acceptanceCriteria: "",
@@ -407,6 +539,246 @@ export function App() {
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     return response.json();
+  }
+
+  async function fetchOptional(path: string) {
+    try {
+      const response = await fetch(`${API_BASE}${path}`);
+      if (!response.ok) {
+        return {
+          ok: false as const,
+          unavailable: response.status === 404 || response.status === 405,
+          message: response.status === 404 || response.status === 405 ? missingEndpointMessage : `HTTP ${response.status}`
+        };
+      }
+      return { ok: true as const, data: await readResponseJson(response) };
+    } catch (error) {
+      return {
+        ok: false as const,
+        unavailable: false,
+        message: error instanceof Error ? error.message : "Request failed."
+      };
+    }
+  }
+
+  async function postOptional(path: string, body?: unknown) {
+    try {
+      const response = await fetch(`${API_BASE}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: body ? JSON.stringify(body) : undefined
+      });
+      if (!response.ok) {
+        return {
+          ok: false as const,
+          unavailable: response.status === 404 || response.status === 405,
+          message: response.status === 404 || response.status === 405 ? missingEndpointMessage : `HTTP ${response.status}`
+        };
+      }
+      return { ok: true as const, data: await readResponseJson(response) };
+    } catch (error) {
+      return {
+        ok: false as const,
+        unavailable: false,
+        message: error instanceof Error ? error.message : "Request failed."
+      };
+    }
+  }
+
+  async function loadDirection(projectId: string) {
+    setDirectionState((state) => ({ ...state, projectId, status: "loading", message: "" }));
+    const result = await fetchOptional(`/api/projects/${encodeURIComponent(projectId)}/direction`);
+    if (!result.ok) {
+      setDirectionState({
+        projectId,
+        status: result.unavailable ? "unavailable" : "error",
+        message: result.message
+      });
+      return;
+    }
+    const direction = extractObject<ProjectDirection>(result.data, ["direction", "projectDirection"]);
+    setDirectionState({
+      projectId,
+      direction,
+      status: direction ? "ready" : "empty",
+      message: direction ? "" : "No project direction has been saved yet."
+    });
+  }
+
+  async function loadOpportunities(projectId: string) {
+    setOpportunitiesState((state) => ({ ...state, projectId, status: "loading", message: "" }));
+    const result = await fetchOptional(`/api/projects/${encodeURIComponent(projectId)}/opportunities`);
+    if (!result.ok) {
+      setOpportunitiesState({
+        projectId,
+        items: [],
+        status: result.unavailable ? "unavailable" : "error",
+        message: result.message
+      });
+      return;
+    }
+    const items = extractList<OpportunityCandidate>(result.data, ["opportunities", "candidates", "items"]);
+    setOpportunitiesState({
+      projectId,
+      items,
+      status: items.length ? "ready" : "empty",
+      message: items.length ? "" : "No opportunities are waiting."
+    });
+  }
+
+  async function loadTeamMessages(projectId: string) {
+    setTeamMessagesState((state) => ({ ...state, projectId, status: "loading", message: "" }));
+    const result = await fetchOptional(`/api/projects/${encodeURIComponent(projectId)}/team-bus`);
+    if (!result.ok) {
+      setTeamMessagesState({
+        projectId,
+        items: [],
+        status: result.unavailable ? "unavailable" : "error",
+        message: result.message
+      });
+      return;
+    }
+    const items = extractList<AgentMessage>(result.data, ["messages", "teamBus", "items"]);
+    setTeamMessagesState({
+      projectId,
+      items,
+      status: items.length ? "ready" : "empty",
+      message: items.length ? "" : "No team messages yet."
+    });
+  }
+
+  async function loadLoopRuns(projectId: string) {
+    setLoopRunsState((state) => ({ ...state, projectId, status: "loading", message: "" }));
+    const result = await fetchOptional(`/api/projects/${encodeURIComponent(projectId)}/loop-runs`);
+    if (!result.ok) {
+      setLoopRunsState({
+        projectId,
+        items: [],
+        status: result.unavailable ? "unavailable" : "error",
+        message: result.message
+      });
+      return;
+    }
+    const items = extractList<LoopRun>(result.data, ["loopRuns", "runs", "items"]);
+    setLoopRunsState({
+      projectId,
+      items,
+      status: items.length ? "ready" : "empty",
+      message: items.length ? "" : "No loop history yet."
+    });
+  }
+
+  async function loadProposal(workItemId?: string) {
+    if (!workItemId) {
+      setProposalState({ workItemId: "", status: "empty", message: "No selected work item has a proposal yet." });
+      return;
+    }
+    setProposalState((state) => ({ ...state, workItemId, status: "loading", message: "" }));
+    const result = await fetchOptional(`/api/work-items/${encodeURIComponent(workItemId)}/proposal`);
+    if (!result.ok) {
+      setProposalState({
+        workItemId,
+        status: result.unavailable ? "unavailable" : "error",
+        message: result.unavailable ? "Proposal details are not available yet." : result.message
+      });
+      return;
+    }
+    const proposal = extractObject<ProposalArtifact>(result.data, ["proposal", "artifact"]);
+    setProposalState({
+      workItemId,
+      proposal,
+      status: proposal ? "ready" : "empty",
+      message: proposal ? "" : "No proposal is attached to the selected work item."
+    });
+  }
+
+  async function saveDirection(mode: "next_loop" | "standing") {
+    const active = projects.find((project) => project.id === selectedProjectIdRef.current) ||
+      projects.find((project) => project.active);
+    if (!active || !directionDraft.trim()) return;
+    setDirectionState((state) => ({ ...state, projectId: active.projectId, status: "loading", message: "" }));
+    const result = await postOptional(`/api/projects/${encodeURIComponent(active.projectId)}/direction`, {
+      mode,
+      instruction: directionDraft.trim(),
+      pauseNewLoopsAfterCurrent: directionPause
+    });
+    if (!result.ok) {
+      setDirectionState({
+        projectId: active.projectId,
+        direction: directionState.direction,
+        status: result.unavailable ? "unavailable" : "error",
+        message: result.message
+      });
+      return;
+    }
+    setDirectionDraft("");
+    const direction = extractObject<ProjectDirection>(result.data, ["direction", "projectDirection"]) || {
+      [mode === "standing" ? "standingDirection" : "nextLoopDirection"]: directionDraft.trim(),
+      pauseNewLoopsAfterCurrent: directionPause,
+      updatedAt: new Date().toISOString()
+    };
+    setDirectionState({
+      projectId: active.projectId,
+      direction,
+      status: "ready",
+      message: ""
+    });
+  }
+
+  async function scanOpportunities() {
+    const projectId = activeProjectIdFromState(projects, selectedProjectIdRef.current);
+    if (!projectId) return;
+    setOpportunitiesState((state) => ({ ...state, projectId, status: "loading", message: "" }));
+    const result = await postOptional(`/api/projects/${encodeURIComponent(projectId)}/opportunities/scan`);
+    if (!result.ok) {
+      setOpportunitiesState({
+        projectId,
+        items: [],
+        status: result.unavailable ? "unavailable" : "error",
+        message: result.message
+      });
+      return;
+    }
+    const items = extractList<OpportunityCandidate>(result.data, ["opportunities", "candidates", "items"]);
+    if (items.length) {
+      setOpportunitiesState({ projectId, items, status: "ready", message: "" });
+    } else {
+      await loadOpportunities(projectId);
+    }
+  }
+
+  async function promoteOpportunity(id: string) {
+    const result = await postOptional(`/api/opportunities/${encodeURIComponent(id)}/promote`);
+    if (!result.ok) {
+      setOpportunitiesState((state) => ({
+        ...state,
+        status: result.unavailable ? "unavailable" : "error",
+        message: result.message
+      }));
+      return;
+    }
+    const projectId = activeProjectIdFromState(projects, selectedProjectIdRef.current);
+    if (projectId) await loadOpportunities(projectId);
+    await loadStatus();
+  }
+
+  async function decideProposal(decision: "accept" | "revise" | "reject") {
+    const workItemId = proposalState.proposal?.workItemId || proposalState.workItemId;
+    if (!workItemId) return;
+    const result = await postOptional(`/api/work-items/${encodeURIComponent(workItemId)}/proposal/${decision}`, {
+      feedback: proposalFeedback.trim() || undefined
+    });
+    if (!result.ok) {
+      setProposalState((state) => ({
+        ...state,
+        status: result.unavailable ? "unavailable" : "error",
+        message: result.message
+      }));
+      return;
+    }
+    setProposalFeedback("");
+    await loadProposal(workItemId);
+    await loadStatus();
   }
 
   async function startGithubConnection() {
@@ -636,6 +1008,21 @@ export function App() {
     utility.status === "ready" || utility.status === "available"
   );
   const githubUtilityPreview = connectedGithubUtilities.slice(0, 5);
+
+  useEffect(() => {
+    if (!apiState.connected || !activeProject) return;
+    const projectId = activeProject.projectId;
+    if (activeInsight === "direction") {
+      loadDirection(projectId);
+    } else if (activeInsight === "ideas") {
+      loadOpportunities(projectId);
+      loadProposal(selected?.id);
+    } else if (activeInsight === "teamMessages") {
+      loadTeamMessages(projectId);
+    } else if (activeInsight === "loopHistory") {
+      loadLoopRuns(projectId);
+    }
+  }, [activeInsight, activeProject?.projectId, selected?.id, apiState.connected]);
 
   return (
     <div className="app-shell">
@@ -992,7 +1379,29 @@ export function App() {
                 </select>
               </label>
             </div>
-            {renderInsight(activeInsight, { agentRows, releaseReady, status, visibleMemories, visibleEvents, activeProject })}
+            {renderInsight(activeInsight, {
+              agentRows,
+              releaseReady,
+              status,
+              visibleMemories,
+              visibleEvents,
+              activeProject,
+              directionState,
+              directionDraft,
+              directionPause,
+              opportunitiesState,
+              teamMessagesState,
+              loopRunsState,
+              proposalState,
+              proposalFeedback,
+              onDirectionDraftChange: setDirectionDraft,
+              onDirectionPauseChange: setDirectionPause,
+              onSaveDirection: saveDirection,
+              onScanOpportunities: scanOpportunities,
+              onPromoteOpportunity: promoteOpportunity,
+              onProposalFeedbackChange: setProposalFeedback,
+              onProposalDecision: decideProposal
+            })}
           </aside>
         </div>
       </main>
@@ -1009,9 +1418,265 @@ function renderInsight(
     visibleMemories: MemoryRecord[];
     visibleEvents: Status["logs"];
     activeProject?: ProjectConnection;
+    directionState: DirectionDetailState;
+    directionDraft: string;
+    directionPause: boolean;
+    opportunitiesState: DetailListState<OpportunityCandidate>;
+    teamMessagesState: DetailListState<AgentMessage>;
+    loopRunsState: DetailListState<LoopRun>;
+    proposalState: ProposalDetailState;
+    proposalFeedback: string;
+    onDirectionDraftChange: (value: string) => void;
+    onDirectionPauseChange: (value: boolean) => void;
+    onSaveDirection: (mode: "next_loop" | "standing") => void;
+    onScanOpportunities: () => void;
+    onPromoteOpportunity: (id: string) => void;
+    onProposalFeedbackChange: (value: string) => void;
+    onProposalDecision: (decision: "accept" | "revise" | "reject") => void;
   }
 ) {
-  const { agentRows, releaseReady, status, visibleMemories, visibleEvents, activeProject } = input;
+  const {
+    agentRows,
+    releaseReady,
+    status,
+    visibleMemories,
+    visibleEvents,
+    activeProject,
+    directionState,
+    directionDraft,
+    directionPause,
+    opportunitiesState,
+    teamMessagesState,
+    loopRunsState,
+    proposalState,
+    proposalFeedback,
+    onDirectionDraftChange,
+    onDirectionPauseChange,
+    onSaveDirection,
+    onScanOpportunities,
+    onPromoteOpportunity,
+    onProposalFeedbackChange,
+    onProposalDecision
+  } = input;
+
+  if (activeInsight === "direction") {
+    const direction = directionState.direction;
+    return (
+      <div className="direction-panel" data-testid="direction-panel">
+        <div className="insight-inline-header">
+          <span className="insight-kicker"><Compass size={14} /> Project steering</span>
+          <small>{activeProject?.repo || "No project"}</small>
+        </div>
+        {activeProject ? (
+          <>
+            {direction ? (
+              <div className="direction-current">
+                <strong>{direction.summary || direction.currentPriority || "Current direction"}</strong>
+                <p>{direction.standingDirection || direction.nextLoopDirection || direction.focus || "Direction exists, but no summary was provided."}</p>
+                <div className="micro-meta">
+                  {direction.currentPriority && <span>Priority: {direction.currentPriority}</span>}
+                  {direction.focus && <span>Focus: {direction.focus}</span>}
+                  {direction.pauseNewLoopsAfterCurrent && <span>Pause after current loop</span>}
+                  {direction.updatedAt && <span>{formatDate(direction.updatedAt)}</span>}
+                </div>
+                {direction.avoid?.length ? (
+                  <details className="compact-disclosure">
+                    <summary>Avoid</summary>
+                    <ul>{direction.avoid.map((item) => <li key={item}>{item}</li>)}</ul>
+                  </details>
+                ) : null}
+              </div>
+            ) : (
+              <DetailEmpty state={directionState} fallback="No direction saved yet." />
+            )}
+            <label className="direction-input">
+              <span>Guide the team</span>
+              <textarea
+                value={directionDraft}
+                onChange={(event) => onDirectionDraftChange(event.target.value)}
+                placeholder="Example: focus on reliability and fixing failing CI before proposing new features."
+              />
+            </label>
+            <label className="quiet-check">
+              <input
+                type="checkbox"
+                checked={directionPause}
+                onChange={(event) => onDirectionPauseChange(event.target.checked)}
+              />
+              <PauseCircle size={14} />
+              <span>Pause new loops after this one</span>
+            </label>
+            <div className="compact-actions">
+              <button className="secondary-button" type="button" disabled={!directionDraft.trim()} onClick={() => onSaveDirection("next_loop")}>
+                <Send size={14} />
+                Use for next loop
+              </button>
+              <button className="secondary-button" type="button" disabled={!directionDraft.trim()} onClick={() => onSaveDirection("standing")}>
+                <Activity size={14} />
+                Save standing direction
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="empty-state compact">Connect a project to steer an isolated team.</div>
+        )}
+      </div>
+    );
+  }
+
+  if (activeInsight === "ideas") {
+    const suggested = opportunitiesState.items.filter((item) => !/accepted|promoted|dismissed|rejected/i.test(item.status || "")).slice(0, 3);
+    const recentlyAccepted = opportunitiesState.items.filter((item) => /accepted|promoted/i.test(item.status || "")).slice(0, 3);
+    const proposal = proposalState.proposal;
+    return (
+      <div className="ideas-panel" data-testid="ideas-panel">
+        <div className="insight-inline-header">
+          <span className="insight-kicker"><Lightbulb size={14} /> Autonomous ideation</span>
+          <button className="text-button" type="button" disabled={!activeProject || opportunitiesState.status === "loading"} onClick={onScanOpportunities}>
+            Scan
+          </button>
+        </div>
+        <section className="compact-section">
+          <h3>Suggested next</h3>
+          {suggested.length ? (
+            <div className="opportunity-list">
+              {suggested.map((item) => (
+                <article className="opportunity-row" key={item.id}>
+                  <span>
+                    <strong>{item.title || "Untitled opportunity"}</strong>
+                    <small>{compactMeta([item.source, item.risk && `risk ${item.risk}`, item.score !== undefined && `score ${item.score}`])}</small>
+                  </span>
+                  <p>{item.summary || "No summary provided yet."}</p>
+                  <div className="compact-actions inline">
+                    <button className="secondary-button" type="button" onClick={() => onPromoteOpportunity(item.id)}>
+                      Promote
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <DetailEmpty state={opportunitiesState} fallback="No suggested opportunities yet." />
+          )}
+        </section>
+
+        <section className="compact-section">
+          <h3>Awaiting decision</h3>
+          {proposal ? (
+            <article className="proposal-card">
+              <div className="proposal-title">
+                <span>
+                  <strong>{proposal.title || proposal.problem || "Proposal for selected work"}</strong>
+                  <small>{compactMeta([proposal.status, proposal.version !== undefined && `v${proposal.version}`, proposal.autoAcceptEligible ? "auto-eligible" : "reviewable"])}</small>
+                </span>
+              </div>
+              <p>{proposal.recommendedApproach || proposal.researchSummary || "Proposal details are available."}</p>
+              <details className="compact-disclosure">
+                <summary>Plan details</summary>
+                <dl className="proposal-details">
+                  {proposal.problem && <><dt>Problem</dt><dd>{proposal.problem}</dd></>}
+                  {proposal.researchSummary && <><dt>Research</dt><dd>{proposal.researchSummary}</dd></>}
+                  {proposal.validationPlan && <><dt>Validation</dt><dd>{proposal.validationPlan}</dd></>}
+                  {proposal.rollbackPlan && <><dt>Rollback</dt><dd>{proposal.rollbackPlan}</dd></>}
+                </dl>
+                <InlineList title="Tasks" items={proposal.tasks} />
+                <InlineList title="Risks" items={proposal.risks} />
+              </details>
+              <details className="compact-disclosure decision-disclosure">
+                <summary>Decision</summary>
+                <textarea
+                  value={proposalFeedback}
+                  onChange={(event) => onProposalFeedbackChange(event.target.value)}
+                  placeholder="Optional feedback for request changes..."
+                />
+                <div className="compact-actions">
+                  <button className="secondary-button" type="button" onClick={() => onProposalDecision("accept")}>Accept</button>
+                  <button className="secondary-button" type="button" onClick={() => onProposalDecision("revise")}>Request changes</button>
+                  <button className="secondary-button danger" type="button" onClick={() => onProposalDecision("reject")}>Reject</button>
+                </div>
+              </details>
+            </article>
+          ) : (
+            <DetailEmpty state={proposalState} fallback="No proposal is awaiting a decision." />
+          )}
+        </section>
+
+        <section className="compact-section">
+          <h3>Recently accepted</h3>
+          {recentlyAccepted.length ? (
+            <div className="accepted-list">
+              {recentlyAccepted.map((item) => (
+                <div className="accepted-row" key={item.id}>
+                  <strong>{item.title || "Accepted opportunity"}</strong>
+                  <span>{item.status || "accepted"}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-state compact">No accepted proposals yet.</div>
+          )}
+        </section>
+      </div>
+    );
+  }
+
+  if (activeInsight === "teamMessages") {
+    return (
+      <div className="team-message-list" data-testid="team-messages-panel">
+        <div className="insight-inline-header">
+          <span className="insight-kicker"><MessageSquareText size={14} /> Agent communication</span>
+          <small>{teamMessagesState.items.length ? `${teamMessagesState.items.length} messages` : "Quiet"}</small>
+        </div>
+        {teamMessagesState.items.length ? (
+          teamMessagesState.items.slice(0, 6).map((message, index) => (
+            <article className="team-message-row" key={message.id || `${message.createdAt}-${index}`}>
+              <div>
+                <strong>{message.title || readableToken(message.type || "team message")}</strong>
+                <span>{compactMeta([readableToken(message.ownerAgent || message.agent), message.stage, message.workItemId, formatDate(message.createdAt || message.updatedAt)])}</span>
+              </div>
+              <p>{message.summary || message.message || "No message body provided."}</p>
+            </article>
+          ))
+        ) : (
+          <DetailEmpty state={teamMessagesState} fallback="No durable team messages yet." />
+        )}
+      </div>
+    );
+  }
+
+  if (activeInsight === "loopHistory") {
+    return (
+      <div className="loop-history-list" data-testid="loop-history-panel">
+        <div className="insight-inline-header">
+          <span className="insight-kicker"><History size={14} /> Loop history</span>
+          <small>{loopRunsState.items.length ? `${loopRunsState.items.length} runs` : "No runs"}</small>
+        </div>
+        {loopRunsState.items.length ? (
+          loopRunsState.items.slice(0, 5).map((run) => (
+            <article className="loop-run-row" key={run.id}>
+              <div className="loop-run-title">
+                <span>
+                  <strong>{run.workItemId || run.id}</strong>
+                  <small>{compactMeta([run.status, run.currentStage || run.stage, run.triggerSource])}</small>
+                </span>
+                {run.blockingReason ? <em>Blocked</em> : null}
+              </div>
+              <p>{run.closureSummary || run.blockingReason || run.nextRecommendedLoop || "Loop is waiting for its first closure summary."}</p>
+              <div className="micro-meta">
+                {run.activeAgents?.length ? <span>{run.activeAgents.length} agents</span> : null}
+                {run.startRepoSha && <span>{shortSha(run.startRepoSha)} start</span>}
+                {run.endRepoSha && <span>{shortSha(run.endRepoSha)} end</span>}
+                {run.releaseState && <span>{run.releaseState}</span>}
+                {(run.closedAt || run.updatedAt || run.startedAt) && <span>{formatDate(run.closedAt || run.updatedAt || run.startedAt)}</span>}
+              </div>
+            </article>
+          ))
+        ) : (
+          <DetailEmpty state={loopRunsState} fallback="No loop history yet." />
+        )}
+      </div>
+    );
+  }
 
   if (activeInsight === "team") {
     return (
@@ -1185,7 +1850,101 @@ function statusForAgent(artifact: StageArtifact | undefined, state?: string): st
 }
 
 function progressForStage(stage: string): number {
-  const order = ["NEW", "INTAKE", "RND", "CONTRACT", "FRONTEND_BUILD", "BACKEND_BUILD", "INTEGRATION", "VERIFY", "RELEASE", "CLOSED"];
+  const order = ["NEW", "INTAKE", "RND", "PROPOSAL", "AWAITING_ACCEPTANCE", "CONTRACT", "FRONTEND_BUILD", "BACKEND_BUILD", "INTEGRATION", "VERIFY", "RELEASE", "CLOSED"];
   const index = order.indexOf(stage);
   return index === -1 ? 0 : Math.round(((index + 1) / order.length) * 100);
+}
+
+function DetailEmpty(input: { state: { status: DetailFetchStatus; message: string }; fallback: string }) {
+  const copy = input.state.status === "loading"
+    ? "Loading..."
+    : input.state.message || input.fallback;
+  return <div className="empty-state compact">{copy}</div>;
+}
+
+function InlineList(input: { title: string; items?: string[] }) {
+  if (!input.items?.length) return null;
+  return (
+    <div className="inline-list">
+      <strong>{input.title}</strong>
+      <ul>{input.items.map((item) => <li key={item}>{item}</li>)}</ul>
+    </div>
+  );
+}
+
+async function readResponseJson(response: Response): Promise<unknown> {
+  const text = await response.text();
+  if (!text.trim()) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function extractList<T>(payload: unknown, keys: string[]): T[] {
+  if (Array.isArray(payload)) return payload as T[];
+  const record = asRecord(payload);
+  if (!record) return [];
+  for (const key of keys) {
+    const value = record[key];
+    if (Array.isArray(value)) return value as T[];
+  }
+  return [];
+}
+
+function extractObject<T>(payload: unknown, keys: string[]): T | undefined {
+  const record = asRecord(payload);
+  if (!record) return undefined;
+  let sawKnownKey = false;
+  for (const key of keys) {
+    if (key in record) sawKnownKey = true;
+    const nested = asRecord(record[key]);
+    if (nested) return nested as T;
+  }
+  if (sawKnownKey) return undefined;
+  return Object.keys(record).length ? record as T : undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
+}
+
+function activeProjectIdFromState(projects: ProjectConnection[], selectedProjectId: string): string {
+  return projects.find((project) => project.id === selectedProjectId)?.projectId ||
+    projects.find((project) => project.active)?.projectId ||
+    "";
+}
+
+function compactMeta(values: Array<string | number | false | null | undefined>): string {
+  return values
+    .filter((value): value is string | number => value !== false && value !== null && value !== undefined && String(value).trim().length > 0)
+    .map((value) => String(value))
+    .join(" · ");
+}
+
+function readableToken(value?: string): string {
+  if (!value) return "";
+  return value
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function formatDate(value?: string): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  });
+}
+
+function shortSha(value: string): string {
+  return value.length > 8 ? value.slice(0, 8) : value;
 }

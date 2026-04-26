@@ -4,6 +4,8 @@ export const WORKFLOW_SEQUENCE: WorkItemState[] = [
   "NEW",
   "INTAKE",
   "RND",
+  "PROPOSAL",
+  "AWAITING_ACCEPTANCE",
   "CONTRACT",
   "FRONTEND_BUILD",
   "BACKEND_BUILD",
@@ -18,10 +20,22 @@ export const ALL_WORK_ITEM_STATES: WorkItemState[] = [
   "BLOCKED"
 ];
 
+export const PROPOSAL_GATE_STATES: WorkItemState[] = [
+  "PROPOSAL",
+  "AWAITING_ACCEPTANCE"
+];
+
+export const TERMINAL_WORK_ITEM_STATES: WorkItemState[] = [
+  "CLOSED",
+  "BLOCKED"
+];
+
 const transitions: Record<WorkItemState, WorkItemState[]> = {
   NEW: ["INTAKE", "BLOCKED"],
   INTAKE: ["RND", "CONTRACT", "VERIFY", "BLOCKED"],
-  RND: ["CONTRACT", "BLOCKED"],
+  RND: ["PROPOSAL", "CONTRACT", "BLOCKED"],
+  PROPOSAL: ["AWAITING_ACCEPTANCE", "CONTRACT", "RND", "CLOSED", "BLOCKED"],
+  AWAITING_ACCEPTANCE: ["CONTRACT", "RND", "CLOSED", "BLOCKED"],
   CONTRACT: ["FRONTEND_BUILD", "BACKEND_BUILD", "INTEGRATION", "BLOCKED"],
   FRONTEND_BUILD: ["BACKEND_BUILD", "INTEGRATION", "VERIFY", "BLOCKED"],
   BACKEND_BUILD: ["FRONTEND_BUILD", "INTEGRATION", "VERIFY", "BLOCKED"],
@@ -29,7 +43,7 @@ const transitions: Record<WorkItemState, WorkItemState[]> = {
   VERIFY: ["RELEASE", "FRONTEND_BUILD", "BACKEND_BUILD", "RND", "BLOCKED"],
   RELEASE: ["CLOSED", "VERIFY", "BLOCKED"],
   CLOSED: [],
-  BLOCKED: ["INTAKE", "RND", "CONTRACT", "FRONTEND_BUILD", "BACKEND_BUILD", "VERIFY", "RELEASE"]
+  BLOCKED: ["INTAKE", "RND", "PROPOSAL", "AWAITING_ACCEPTANCE", "CONTRACT", "FRONTEND_BUILD", "BACKEND_BUILD", "VERIFY", "RELEASE"]
 };
 
 export function canTransition(from: WorkItemState, to: WorkItemState): boolean {
@@ -38,6 +52,18 @@ export function canTransition(from: WorkItemState, to: WorkItemState): boolean {
 
 export function nextStates(from: WorkItemState): WorkItemState[] {
   return [...(transitions[from] ?? [])];
+}
+
+export function isProposalGateState(state: WorkItemState): boolean {
+  return PROPOSAL_GATE_STATES.includes(state);
+}
+
+export function isTerminalWorkItemState(state: WorkItemState): boolean {
+  return TERMINAL_WORK_ITEM_STATES.includes(state);
+}
+
+export function isActiveWorkItemState(state: WorkItemState): boolean {
+  return !isTerminalWorkItemState(state) && state !== "NEW";
 }
 
 export function assertTransition(from: WorkItemState, to: WorkItemState): void {

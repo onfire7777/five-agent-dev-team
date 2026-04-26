@@ -36,7 +36,7 @@ describe("agent runner", () => {
 
     expect(result.live).toBe(false);
     expect(result.artifact.ownerAgent).toBe("rnd-architecture-innovation");
-    expect(result.artifact.nextStage).toBe("CONTRACT");
+    expect(result.artifact.nextStage).toBe("PROPOSAL");
   });
 
   it("interpolates MCP environment placeholders from process env", () => {

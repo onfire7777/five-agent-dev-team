@@ -35,6 +35,99 @@ type WorkItemCreateInput = Pick<WorkItem, "title" | "priority" | "requestType" |
 type ProjectScope = { projectId?: string; repo?: string };
 type ProjectConnectionPersistInput = ProjectConnectionInput & Partial<Pick<ProjectConnection, "remoteUrl" | "ghAvailable" | "ghAuthed" | "githubCliVersion" | "githubMcpAvailable" | "githubMcpAuthenticated" | "githubMcpVersion" | "githubSdkConnected" | "githubSdkVersion" | "githubConnected" | "remoteMatches" | "defaultBranchVerified" | "capabilities" | "validationErrors" | "lastValidatedAt" | "status">>;
 
+export type StrictProjectScope = { projectId: string; repo: string };
+
+export type TeamBusMessage = StrictProjectScope & {
+  id: string;
+  workItemId?: string;
+  loopRunId?: string;
+  from: string;
+  to: string[];
+  kind: "note" | "handoff" | "decision" | "blocker" | "status";
+  topic: string;
+  body: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type LoopRun = StrictProjectScope & {
+  id: string;
+  workItemId?: string;
+  directionId?: string;
+  opportunityId?: string;
+  proposalId?: string;
+  status: "planned" | "running" | "awaiting_acceptance" | "accepted" | "revising" | "rejected" | "implementing" | "completed" | "blocked";
+  summary: string;
+  createdAt: string;
+  updatedAt: string;
+  closedAt?: string;
+};
+
+export type Direction = StrictProjectScope & {
+  id: string;
+  title: string;
+  summary: string;
+  goals: string[];
+  constraints: string[];
+  acceptanceCriteria: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type Opportunity = StrictProjectScope & {
+  id: string;
+  workItemId?: string;
+  title: string;
+  summary: string;
+  source: "operator" | "agent" | "github" | "research" | "system";
+  priority: "low" | "medium" | "high" | "urgent";
+  status: "new" | "evaluating" | "proposed" | "accepted" | "rejected";
+  tags: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ProposalOption = {
+  title: string;
+  summary: string;
+  tradeoffs: string[];
+};
+
+export type ProposalDecision = {
+  decision: "accept" | "revise" | "reject";
+  decidedBy: string;
+  reason: string;
+  requestedChanges: string[];
+  decidedAt: string;
+};
+
+export type Proposal = StrictProjectScope & {
+  id: string;
+  workItemId?: string;
+  loopRunId?: string;
+  opportunityId?: string;
+  title: string;
+  summary: string;
+  researchFindings: string[];
+  options: ProposalOption[];
+  recommendation: string;
+  acceptanceCriteria: string[];
+  implementationPlan: string[];
+  validationPlan: string[];
+  risks: string[];
+  status: "draft" | "proposed" | "accepted" | "revising" | "rejected";
+  decision?: ProposalDecision;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type TeamBusMessageInput = Pick<TeamBusMessage, "from" | "kind" | "topic" | "body"> & Partial<Pick<TeamBusMessage, "id" | "workItemId" | "loopRunId" | "to" | "payload">>;
+export type LoopRunInput = Partial<Pick<LoopRun, "id" | "workItemId" | "directionId" | "opportunityId" | "proposalId" | "status" | "summary" | "closedAt">>;
+export type DirectionInput = Pick<Direction, "title" | "summary"> & Partial<Pick<Direction, "id" | "goals" | "constraints" | "acceptanceCriteria">>;
+export type OpportunityInput = Pick<Opportunity, "title" | "summary"> & Partial<Pick<Opportunity, "id" | "workItemId" | "source" | "priority" | "status" | "tags">>;
+export type ProposalInput = Pick<Proposal, "title" | "summary" | "recommendation"> & Partial<Pick<Proposal, "id" | "workItemId" | "loopRunId" | "opportunityId" | "researchFindings" | "options" | "acceptanceCriteria" | "implementationPlan" | "validationPlan" | "risks" | "status">>;
+export type ProposalDecisionInput = Pick<ProposalDecision, "decision" | "decidedBy" | "reason"> & Partial<Pick<ProposalDecision, "requestedChanges">>;
+
 export interface ControllerStore {
   init(): Promise<void>;
   getStatus(): Promise<ControllerStatus>;
@@ -49,6 +142,17 @@ export interface ControllerStore {
   listProjectConnections(): Promise<ProjectConnection[]>;
   upsertProjectConnection(input: ProjectConnectionPersistInput): Promise<ProjectConnection>;
   activateProjectConnection(id: string): Promise<ProjectConnection>;
+  listTeamBusMessages(scope: StrictProjectScope): Promise<TeamBusMessage[]>;
+  addTeamBusMessage(scope: StrictProjectScope, input: TeamBusMessageInput): Promise<TeamBusMessage>;
+  listLoopRuns(scope: StrictProjectScope): Promise<LoopRun[]>;
+  upsertLoopRun(scope: StrictProjectScope, input: LoopRunInput): Promise<LoopRun>;
+  getDirection(scope: StrictProjectScope): Promise<Direction | null>;
+  upsertDirection(scope: StrictProjectScope, input: DirectionInput): Promise<Direction>;
+  listOpportunities(scope: StrictProjectScope): Promise<Opportunity[]>;
+  upsertOpportunity(scope: StrictProjectScope, input: OpportunityInput): Promise<Opportunity>;
+  listProposals(scope: StrictProjectScope): Promise<Proposal[]>;
+  upsertProposal(scope: StrictProjectScope, input: ProposalInput): Promise<Proposal>;
+  decideProposal(scope: StrictProjectScope, proposalId: string, input: ProposalDecisionInput): Promise<Proposal>;
   claimWorkItemForWorkflow(id: string): Promise<boolean>;
   listWorkflowClaims(): Promise<string[]>;
   releaseWorkItemWorkflowClaim(id: string): Promise<void>;
@@ -60,6 +164,11 @@ export class MemoryStore implements ControllerStore {
   private artifacts = createSampleArtifacts();
   private memories: MemoryRecord[] = [];
   private projectConnections: ProjectConnection[] = [];
+  private teamBusMessages: TeamBusMessage[] = [];
+  private loopRuns: LoopRun[] = [];
+  private directions: Direction[] = [];
+  private opportunities: Opportunity[] = [];
+  private proposals: Proposal[] = [];
   private events: AgentEvent[] = [];
   private nextEventSequence = 1;
   private workflowClaims = new Set<string>();
@@ -229,6 +338,181 @@ export class MemoryStore implements ControllerStore {
     return activated;
   }
 
+  async listTeamBusMessages(scope: StrictProjectScope): Promise<TeamBusMessage[]> {
+    await this.assertProjectScope(scope);
+    return this.teamBusMessages
+      .filter((message) => sameScope(message, scope))
+      .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+  }
+
+  async addTeamBusMessage(scope: StrictProjectScope, input: TeamBusMessageInput): Promise<TeamBusMessage> {
+    await this.assertProjectScope(scope);
+    const message: TeamBusMessage = {
+      id: input.id || createRecordId("bus"),
+      ...scope,
+      workItemId: input.workItemId,
+      loopRunId: input.loopRunId,
+      from: input.from,
+      to: input.to || [],
+      kind: input.kind,
+      topic: input.topic,
+      body: input.body,
+      payload: input.payload || {},
+      createdAt: nowIso()
+    };
+    this.teamBusMessages.push(message);
+    return message;
+  }
+
+  async listLoopRuns(scope: StrictProjectScope): Promise<LoopRun[]> {
+    await this.assertProjectScope(scope);
+    return this.loopRuns
+      .filter((run) => sameScope(run, scope))
+      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+  }
+
+  async upsertLoopRun(scope: StrictProjectScope, input: LoopRunInput): Promise<LoopRun> {
+    await this.assertProjectScope(scope);
+    const now = nowIso();
+    const existing = input.id ? this.loopRuns.find((run) => run.id === input.id && sameScope(run, scope)) : undefined;
+    const run: LoopRun = {
+      id: input.id || createRecordId("loop"),
+      ...scope,
+      workItemId: input.workItemId ?? existing?.workItemId,
+      directionId: input.directionId ?? existing?.directionId,
+      opportunityId: input.opportunityId ?? existing?.opportunityId,
+      proposalId: input.proposalId ?? existing?.proposalId,
+      status: input.status || existing?.status || "planned",
+      summary: input.summary || existing?.summary || "",
+      createdAt: existing?.createdAt || now,
+      updatedAt: now,
+      closedAt: input.closedAt ?? existing?.closedAt
+    };
+    this.loopRuns = upsertByScopedId(this.loopRuns, run);
+    return run;
+  }
+
+  async getDirection(scope: StrictProjectScope): Promise<Direction | null> {
+    await this.assertProjectScope(scope);
+    return this.directions.find((direction) => sameScope(direction, scope)) || null;
+  }
+
+  async upsertDirection(scope: StrictProjectScope, input: DirectionInput): Promise<Direction> {
+    await this.assertProjectScope(scope);
+    const now = nowIso();
+    const existing = this.directions.find((direction) => sameScope(direction, scope));
+    const direction: Direction = {
+      id: input.id || existing?.id || createRecordId("direction"),
+      ...scope,
+      title: input.title,
+      summary: input.summary,
+      goals: input.goals || [],
+      constraints: input.constraints || [],
+      acceptanceCriteria: input.acceptanceCriteria || [],
+      createdAt: existing?.createdAt || now,
+      updatedAt: now
+    };
+    this.directions = this.directions.filter((item) => !sameScope(item, scope));
+    this.directions.push(direction);
+    return direction;
+  }
+
+  async listOpportunities(scope: StrictProjectScope): Promise<Opportunity[]> {
+    await this.assertProjectScope(scope);
+    return this.opportunities
+      .filter((opportunity) => sameScope(opportunity, scope))
+      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+  }
+
+  async upsertOpportunity(scope: StrictProjectScope, input: OpportunityInput): Promise<Opportunity> {
+    await this.assertProjectScope(scope);
+    const now = nowIso();
+    const existing = input.id ? this.opportunities.find((opportunity) => opportunity.id === input.id && sameScope(opportunity, scope)) : undefined;
+    const opportunity: Opportunity = {
+      id: input.id || createRecordId("opp"),
+      ...scope,
+      workItemId: input.workItemId ?? existing?.workItemId,
+      title: input.title,
+      summary: input.summary,
+      source: input.source || existing?.source || "operator",
+      priority: input.priority || existing?.priority || "medium",
+      status: input.status || existing?.status || "new",
+      tags: input.tags || existing?.tags || [],
+      createdAt: existing?.createdAt || now,
+      updatedAt: now
+    };
+    this.opportunities = upsertByScopedId(this.opportunities, opportunity);
+    return opportunity;
+  }
+
+  async listProposals(scope: StrictProjectScope): Promise<Proposal[]> {
+    await this.assertProjectScope(scope);
+    return this.proposals
+      .filter((proposal) => sameScope(proposal, scope))
+      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+  }
+
+  async upsertProposal(scope: StrictProjectScope, input: ProposalInput): Promise<Proposal> {
+    await this.assertProjectScope(scope);
+    const now = nowIso();
+    const existing = input.id ? this.proposals.find((proposal) => proposal.id === input.id && sameScope(proposal, scope)) : undefined;
+    const proposal: Proposal = {
+      id: input.id || createRecordId("proposal"),
+      ...scope,
+      workItemId: input.workItemId ?? existing?.workItemId,
+      loopRunId: input.loopRunId ?? existing?.loopRunId,
+      opportunityId: input.opportunityId ?? existing?.opportunityId,
+      title: input.title,
+      summary: input.summary,
+      researchFindings: input.researchFindings || existing?.researchFindings || [],
+      options: input.options || existing?.options || [],
+      recommendation: input.recommendation,
+      acceptanceCriteria: input.acceptanceCriteria || existing?.acceptanceCriteria || [],
+      implementationPlan: input.implementationPlan || existing?.implementationPlan || [],
+      validationPlan: input.validationPlan || existing?.validationPlan || [],
+      risks: input.risks || existing?.risks || [],
+      status: input.status || existing?.status || "proposed",
+      decision: existing?.decision,
+      createdAt: existing?.createdAt || now,
+      updatedAt: now
+    };
+    this.proposals = upsertByScopedId(this.proposals, proposal);
+    return proposal;
+  }
+
+  async decideProposal(scope: StrictProjectScope, proposalId: string, input: ProposalDecisionInput): Promise<Proposal> {
+    await this.assertProjectScope(scope);
+    const proposal = this.proposals.find((item) => item.id === proposalId && sameScope(item, scope));
+    if (!proposal) throw new Error(`Proposal ${proposalId} was not found for ${scope.projectId}.`);
+    const now = nowIso();
+    const decision: ProposalDecision = {
+      decision: input.decision,
+      decidedBy: input.decidedBy,
+      reason: input.reason,
+      requestedChanges: input.requestedChanges || [],
+      decidedAt: now
+    };
+    const updated: Proposal = {
+      ...proposal,
+      status: decision.decision === "accept" ? "accepted" : decision.decision === "revise" ? "revising" : "rejected",
+      decision,
+      updatedAt: now
+    };
+    this.proposals = upsertByScopedId(this.proposals, updated);
+    if (updated.loopRunId) {
+      const loopRun = this.loopRuns.find((run) => run.id === updated.loopRunId && sameScope(run, scope));
+      if (loopRun) {
+        this.loopRuns = upsertByScopedId(this.loopRuns, {
+          ...loopRun,
+          proposalId: updated.id,
+          status: loopStatusForProposalDecision(decision.decision),
+          updatedAt: now
+        });
+      }
+    }
+    return updated;
+  }
+
   async claimWorkItemForWorkflow(id: string): Promise<boolean> {
     if (this.workflowClaims.has(id)) return false;
     this.workflowClaims.add(id);
@@ -258,6 +542,13 @@ export class MemoryStore implements ControllerStore {
     const connections = await this.listProjectConnections();
     const resolved = resolveProjectScopeFromConnections(input, connections);
     return resolved || resolveConfiguredProject();
+  }
+
+  protected async assertProjectScope(scope: StrictProjectScope): Promise<void> {
+    const connections = await this.listProjectConnections();
+    const project = connections.find((connection) => connection.projectId === scope.projectId && connection.repo === scope.repo);
+    if (!project) throw new Error(`Connected project was not found for ${scope.projectId}/${scope.repo}.`);
+    if (!project.active) throw new Error(`Project ${scope.repo} is not active.`);
   }
 }
 
@@ -323,6 +614,41 @@ export class PostgresStore extends MemoryStore {
       create table if not exists controller_flags (
         key text primary key,
         value jsonb not null
+      );
+      create table if not exists team_bus_messages (
+        id text primary key,
+        project_id text not null,
+        repo text not null,
+        payload jsonb not null,
+        created_at timestamptz not null default now()
+      );
+      create table if not exists loop_runs (
+        id text primary key,
+        project_id text not null,
+        repo text not null,
+        payload jsonb not null,
+        updated_at timestamptz not null default now()
+      );
+      create table if not exists project_directions (
+        project_id text not null,
+        repo text not null,
+        payload jsonb not null,
+        updated_at timestamptz not null default now(),
+        primary key (project_id, repo)
+      );
+      create table if not exists opportunities (
+        id text primary key,
+        project_id text not null,
+        repo text not null,
+        payload jsonb not null,
+        updated_at timestamptz not null default now()
+      );
+      create table if not exists proposals (
+        id text primary key,
+        project_id text not null,
+        repo text not null,
+        payload jsonb not null,
+        updated_at timestamptz not null default now()
       );
     `);
     await this.seedProjectConnectionsFromConfig();
@@ -546,6 +872,157 @@ export class PostgresStore extends MemoryStore {
     return activated;
   }
 
+  override async listTeamBusMessages(scope: StrictProjectScope): Promise<TeamBusMessage[]> {
+    await this.assertProjectScope(scope);
+    const result = await this.pool.query(
+      "select payload from team_bus_messages where project_id = $1 and repo = $2 order by created_at asc",
+      [scope.projectId, scope.repo]
+    );
+    return result.rows.map((row) => row.payload as TeamBusMessage);
+  }
+
+  override async addTeamBusMessage(scope: StrictProjectScope, input: TeamBusMessageInput): Promise<TeamBusMessage> {
+    const message = await super.addTeamBusMessage(scope, input);
+    await this.pool.query(
+      `insert into team_bus_messages (id, project_id, repo, payload, created_at)
+       values ($1, $2, $3, $4, $5)
+       on conflict (id) do update set payload = excluded.payload`,
+      [message.id, message.projectId, message.repo, message, message.createdAt]
+    );
+    return message;
+  }
+
+  override async listLoopRuns(scope: StrictProjectScope): Promise<LoopRun[]> {
+    await this.assertProjectScope(scope);
+    const result = await this.pool.query(
+      "select payload from loop_runs where project_id = $1 and repo = $2 order by updated_at desc",
+      [scope.projectId, scope.repo]
+    );
+    return result.rows.map((row) => row.payload as LoopRun);
+  }
+
+  override async upsertLoopRun(scope: StrictProjectScope, input: LoopRunInput): Promise<LoopRun> {
+    await this.assertProjectScope(scope);
+    const now = nowIso();
+    const existing = input.id
+      ? (await this.listLoopRuns(scope)).find((run) => run.id === input.id)
+      : undefined;
+    const run: LoopRun = {
+      id: input.id || createRecordId("loop"),
+      ...scope,
+      workItemId: input.workItemId ?? existing?.workItemId,
+      directionId: input.directionId ?? existing?.directionId,
+      opportunityId: input.opportunityId ?? existing?.opportunityId,
+      proposalId: input.proposalId ?? existing?.proposalId,
+      status: input.status || existing?.status || "planned",
+      summary: input.summary ?? existing?.summary ?? "",
+      createdAt: existing?.createdAt || now,
+      updatedAt: now,
+      closedAt: input.closedAt ?? existing?.closedAt
+    };
+    await this.pool.query(
+      `insert into loop_runs (id, project_id, repo, payload, updated_at)
+       values ($1, $2, $3, $4, $5)
+       on conflict (id) do update set payload = excluded.payload, updated_at = excluded.updated_at`,
+      [run.id, run.projectId, run.repo, run, run.updatedAt]
+    );
+    return run;
+  }
+
+  override async getDirection(scope: StrictProjectScope): Promise<Direction | null> {
+    await this.assertProjectScope(scope);
+    const result = await this.pool.query(
+      "select payload from project_directions where project_id = $1 and repo = $2",
+      [scope.projectId, scope.repo]
+    );
+    return result.rows[0] ? result.rows[0].payload as Direction : null;
+  }
+
+  override async upsertDirection(scope: StrictProjectScope, input: DirectionInput): Promise<Direction> {
+    const direction = await super.upsertDirection(scope, input);
+    await this.pool.query(
+      `insert into project_directions (project_id, repo, payload, updated_at)
+       values ($1, $2, $3, $4)
+       on conflict (project_id, repo) do update set payload = excluded.payload, updated_at = excluded.updated_at`,
+      [direction.projectId, direction.repo, direction, direction.updatedAt]
+    );
+    return direction;
+  }
+
+  override async listOpportunities(scope: StrictProjectScope): Promise<Opportunity[]> {
+    await this.assertProjectScope(scope);
+    const result = await this.pool.query(
+      "select payload from opportunities where project_id = $1 and repo = $2 order by updated_at desc",
+      [scope.projectId, scope.repo]
+    );
+    return result.rows.map((row) => row.payload as Opportunity);
+  }
+
+  override async upsertOpportunity(scope: StrictProjectScope, input: OpportunityInput): Promise<Opportunity> {
+    const opportunity = await super.upsertOpportunity(scope, input);
+    await this.pool.query(
+      `insert into opportunities (id, project_id, repo, payload, updated_at)
+       values ($1, $2, $3, $4, $5)
+       on conflict (id) do update set payload = excluded.payload, updated_at = excluded.updated_at`,
+      [opportunity.id, opportunity.projectId, opportunity.repo, opportunity, opportunity.updatedAt]
+    );
+    return opportunity;
+  }
+
+  override async listProposals(scope: StrictProjectScope): Promise<Proposal[]> {
+    await this.assertProjectScope(scope);
+    const result = await this.pool.query(
+      "select payload from proposals where project_id = $1 and repo = $2 order by updated_at desc",
+      [scope.projectId, scope.repo]
+    );
+    return result.rows.map((row) => row.payload as Proposal);
+  }
+
+  override async upsertProposal(scope: StrictProjectScope, input: ProposalInput): Promise<Proposal> {
+    const proposal = await super.upsertProposal(scope, input);
+    await this.pool.query(
+      `insert into proposals (id, project_id, repo, payload, updated_at)
+       values ($1, $2, $3, $4, $5)
+       on conflict (id) do update set payload = excluded.payload, updated_at = excluded.updated_at`,
+      [proposal.id, proposal.projectId, proposal.repo, proposal, proposal.updatedAt]
+    );
+    return proposal;
+  }
+
+  override async decideProposal(scope: StrictProjectScope, proposalId: string, input: ProposalDecisionInput): Promise<Proposal> {
+    const existing = await this.listProposals(scope);
+    const proposal = existing.find((item) => item.id === proposalId);
+    if (!proposal) {
+      throw new Error(`Proposal ${proposalId} was not found for ${scope.projectId}.`);
+    }
+    const now = nowIso();
+    const decision: ProposalDecision = {
+      decision: input.decision,
+      decidedBy: input.decidedBy,
+      reason: input.reason,
+      requestedChanges: input.requestedChanges || [],
+      decidedAt: now
+    };
+    const updated: Proposal = {
+      ...proposal,
+      status: decision.decision === "accept" ? "accepted" : decision.decision === "revise" ? "revising" : "rejected",
+      decision,
+      updatedAt: now
+    };
+    await this.pool.query(
+      "update proposals set payload = $2, updated_at = $3 where id = $1 and project_id = $4 and repo = $5",
+      [updated.id, updated, updated.updatedAt, updated.projectId, updated.repo]
+    );
+    if (updated.loopRunId) {
+      await this.upsertLoopRun(scope, {
+        id: updated.loopRunId,
+        proposalId: updated.id,
+        status: loopStatusForProposalDecision(decision.decision)
+      });
+    }
+    return updated;
+  }
+
   protected override async resolveProjectScope(input: ProjectScope): Promise<ProjectScope> {
     const connections = await this.listProjectConnections();
     return resolveProjectScopeFromConnections(input, connections) || resolveConfiguredProject();
@@ -599,6 +1076,8 @@ function buildPipelineSummary(workItems: WorkItem[]): ControllerStatus["pipeline
     NEW: workItems.filter((item) => item.state === "NEW").length,
     INTAKE: workItems.filter((item) => item.state === "INTAKE").length,
     RND: workItems.filter((item) => item.state === "RND").length,
+    PROPOSAL: workItems.filter((item) => item.state === "PROPOSAL").length,
+    AWAITING_ACCEPTANCE: workItems.filter((item) => item.state === "AWAITING_ACCEPTANCE").length,
     CONTRACT: workItems.filter((item) => item.state === "CONTRACT").length,
     FRONTEND_BUILD: workItems.filter((item) => item.state === "FRONTEND_BUILD").length,
     BACKEND_BUILD: workItems.filter((item) => item.state === "BACKEND_BUILD").length,
@@ -803,6 +1282,31 @@ function resolveProjectScopeFromConnections(input: ProjectScope, connections: Pr
 
 function createWorkItemId(): string {
   return `WI-${Date.now().toString(36).toUpperCase()}-${crypto.randomUUID().slice(0, 6).toUpperCase()}`;
+}
+
+function createRecordId(prefix: string): string {
+  return `${prefix}-${crypto.randomUUID()}`;
+}
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function sameScope(value: StrictProjectScope, scope: StrictProjectScope): boolean {
+  return value.projectId === scope.projectId && value.repo === scope.repo;
+}
+
+function upsertByScopedId<T extends StrictProjectScope & { id: string }>(items: T[], item: T): T[] {
+  return [
+    ...items.filter((existing) => existing.id !== item.id || !sameScope(existing, item)),
+    item
+  ];
+}
+
+function loopStatusForProposalDecision(decision: ProposalDecision["decision"]): LoopRun["status"] {
+  if (decision === "accept") return "accepted";
+  if (decision === "revise") return "revising";
+  return "rejected";
 }
 
 function sortProjectConnections(connections: ProjectConnection[]): ProjectConnection[] {

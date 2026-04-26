@@ -19,8 +19,8 @@ import {
   type WorkItem,
   type WorkItemState
 } from "../../../packages/shared/src";
-import { getAgentDefinition, roleForStage, runRoleAgent } from "../../../packages/agents/src";
-import { createStore, type ControllerStore } from "../../controller/src/store";
+import { getAgentDefinition, roleForStage, runRoleAgent, type TeamBusMessage } from "../../../packages/agents/src";
+import { createStore, type ControllerStore, type StrictProjectScope } from "../../controller/src/store";
 
 const exec = util.promisify(childProcess.exec);
 let storePromise: Promise<ControllerStore> | null = null;
@@ -29,6 +29,9 @@ export interface StageInput {
   workItem: WorkItem;
   stage: WorkItemState;
   previousArtifacts: StageArtifact[];
+  teamMessages?: TeamBusMessage[];
+  teamDirection?: string[];
+  loopContext?: string[];
 }
 
 type EvidenceItem = {
@@ -117,10 +120,55 @@ export async function recordLoopStart(workItem: WorkItem): Promise<StageArtifact
     createdAt: new Date().toISOString()
   });
   await persistArtifact(artifact);
+  await updateLoopRun(store, scopedWorkItem, {
+    status: blockingRisks.length ? "blocked" : "running",
+    summary: artifact.summary
+  });
+  await writeTeamBusMessage(store, {
+    workItemId: scopedWorkItem.id,
+    projectId: scopedWorkItem.projectId,
+    repo: scopedWorkItem.repo,
+    stage: "NEW",
+    ownerAgent: "product-delivery-orchestrator",
+    message: artifact.summary
+  });
   return artifact;
 }
 
 export async function runAgentStage(input: StageInput): Promise<StageArtifact> {
+  const result = await runAgentWithTeamContext(input);
+  await persistArtifact(result.artifact);
+  await writeTeamBusMessage(result.store, {
+    workItemId: result.workItem.id,
+    projectId: result.workItem.projectId,
+    repo: result.workItem.repo,
+    stage: input.stage,
+    ownerAgent: result.definition.role,
+    message: `${result.definition.displayName} completed ${input.stage}: ${result.artifact.summary}`
+  });
+  return result.artifact;
+}
+
+export async function runAgentProposal(input: StageInput): Promise<StageArtifact> {
+  const result = await runAgentWithTeamContext(input, true);
+  await writeTeamBusMessage(result.store, {
+    workItemId: result.workItem.id,
+    projectId: result.workItem.projectId,
+    repo: result.workItem.repo,
+    stage: input.stage,
+    ownerAgent: result.definition.role,
+    message: `${result.definition.displayName} proposed ${input.stage}: ${result.artifact.summary}`
+  });
+  await persistProposal(result.store, result.workItem, result.artifact);
+  return result.artifact;
+}
+
+async function runAgentWithTeamContext(input: StageInput, proposalStage = false): Promise<{
+  artifact: StageArtifact;
+  definition: ReturnType<typeof getAgentDefinition>;
+  store: ControllerStore;
+  workItem: WorkItem;
+}> {
   const role = roleForStage(input.stage);
   const definition = getAgentDefinition(role);
   const store = await getActivityStore();
@@ -133,16 +181,36 @@ export async function runAgentStage(input: StageInput): Promise<StageArtifact> {
     ownerAgent: definition.role,
     level: "info",
     type: "stage_started",
-    message: `${definition.displayName} started ${input.stage}.`
+    message: proposalStage
+      ? `${definition.displayName} started ${input.stage} proposal.`
+      : `${definition.displayName} started ${input.stage}.`
   });
   const contextMemories = await loadRepoContextMemories(config, scopedWorkItem);
   const memories = selectRelevantMemories([
     ...(await store.listMemories(scopedWorkItem.id)),
     ...contextMemories
   ], scopedWorkItem);
-  const result = await runRoleAgent(definition, { ...input, workItem: scopedWorkItem, memories, targetRepoConfig: config });
-  await persistArtifact(result.artifact);
-  return result.artifact;
+  const teamMessages = [
+    ...(await readTeamBusMessages(store, scopedWorkItem.id)),
+    ...(input.teamMessages || [])
+  ];
+  const result = await runRoleAgent(definition, {
+    ...input,
+    workItem: scopedWorkItem,
+    memories,
+    targetRepoConfig: config,
+    proposalStage,
+    teamMessages,
+    teamDirection: [
+      ...buildTeamDirection(input, proposalStage),
+      ...(input.teamDirection || [])
+    ],
+    loopContext: [
+      ...buildLoopContext(input.previousArtifacts),
+      ...(input.loopContext || [])
+    ]
+  });
+  return { artifact: result.artifact, definition, store, workItem: scopedWorkItem };
 }
 
 export async function closeWorkLoop(workItem: WorkItem, previousArtifacts: StageArtifact[]): Promise<StageArtifact> {
@@ -210,6 +278,19 @@ export async function closeWorkLoop(workItem: WorkItem, previousArtifacts: Stage
     createdAt: new Date().toISOString()
   });
   await persistArtifact(artifact);
+  await updateLoopRun(await getActivityStore(), scopedWorkItem, {
+    status: passed ? "completed" : "blocked",
+    summary: artifact.summary,
+    closedAt: new Date().toISOString()
+  });
+  await writeTeamBusMessage(await getActivityStore(), {
+    workItemId: scopedWorkItem.id,
+    projectId: scopedWorkItem.projectId,
+    repo: scopedWorkItem.repo,
+    stage: "CLOSED",
+    ownerAgent: "product-delivery-orchestrator",
+    message: artifact.summary
+  });
   return artifact;
 }
 
@@ -622,6 +703,174 @@ async function persistArtifact(artifact: StageArtifact): Promise<void> {
     ? "BLOCKED"
     : artifact.nextStage || artifact.stage;
   await store.updateWorkItemState(artifact.workItemId, nextState);
+}
+
+async function readTeamBusMessages(store: ControllerStore, workItemId: string): Promise<TeamBusMessage[]> {
+  try {
+    const workItem = (await store.listWorkItems()).find((item) => item.id === workItemId);
+    const scope = workItem ? strictScopeForWorkItem(workItem) : null;
+    if (scope) {
+      const messages = await store.listTeamBusMessages(scope);
+      return messages
+        .filter((message) => !message.workItemId || message.workItemId === workItemId)
+        .slice(-20)
+        .map((message) => ({
+          createdAt: message.createdAt,
+          stage: message.payload?.stage as WorkItemState | undefined,
+          ownerAgent: message.from,
+          type: message.kind,
+          message: `${message.topic}: ${message.body}`
+        }));
+    }
+    const events = await store.listEvents(0, 80);
+    return events
+      .filter((event) => event.workItemId === workItemId)
+      .slice(-20)
+      .map((event) => ({
+        createdAt: event.createdAt,
+        stage: event.stage,
+        ownerAgent: event.ownerAgent,
+        type: event.type,
+        message: event.message
+      }));
+  } catch (error) {
+    return [{
+      type: "system",
+      message: `Team bus read unavailable through the current store interface: ${error instanceof Error ? error.message : String(error)}`
+    }];
+  }
+}
+
+async function writeTeamBusMessage(
+  store: ControllerStore,
+  input: {
+    workItemId: string;
+    projectId?: string;
+    repo?: string;
+    stage: WorkItemState;
+    ownerAgent: StageArtifact["ownerAgent"];
+    message: string;
+  }
+): Promise<void> {
+  try {
+    if (input.projectId && input.repo) {
+      await store.addTeamBusMessage({ projectId: input.projectId, repo: input.repo }, {
+        workItemId: input.workItemId,
+        from: input.ownerAgent,
+        kind: input.stage === "BLOCKED" ? "blocker" : input.stage === "CLOSED" ? "handoff" : "status",
+        topic: input.stage,
+        body: input.message,
+        payload: {
+          stage: input.stage,
+          ownerAgent: input.ownerAgent
+        }
+      });
+    }
+    await store.addEvent({
+      workItemId: input.workItemId,
+      stage: input.stage,
+      ownerAgent: input.ownerAgent,
+      level: "info",
+      type: "system",
+      message: input.message
+    });
+  } catch {
+    // The current controller store exposes events as the team bus. If a future
+    // store omits that backing interface, stage artifacts still carry handoff context.
+  }
+}
+
+async function persistProposal(store: ControllerStore, workItem: WorkItem, artifact: StageArtifact): Promise<void> {
+  const scope = strictScopeForWorkItem(workItem);
+  if (!scope) return;
+  try {
+    await store.upsertProposal(scope, {
+      id: `proposal-${workItem.id}-${artifact.stage.toLowerCase()}`,
+      workItemId: workItem.id,
+      loopRunId: loopRunId(workItem),
+      title: artifact.title,
+      summary: artifact.summary,
+      researchFindings: artifact.decisions,
+      recommendation: artifact.decisions[0] || artifact.summary,
+      acceptanceCriteria: workItem.acceptanceCriteria,
+      implementationPlan: artifact.decisions,
+      validationPlan: artifact.testsRun.length ? artifact.testsRun : [
+        "Verify acceptance criteria, regression behavior, release gates, rollback evidence, and local/GitHub sync."
+      ],
+      risks: artifact.risks,
+      status: "accepted"
+    });
+  } catch (error) {
+    await store.addEvent({
+      workItemId: workItem.id,
+      stage: artifact.stage,
+      ownerAgent: artifact.ownerAgent,
+      level: "warn",
+      type: "system",
+      message: `Proposal persistence was skipped: ${error instanceof Error ? error.message : String(error)}`
+    });
+  }
+}
+
+async function updateLoopRun(
+  store: ControllerStore,
+  workItem: WorkItem,
+  input: {
+    status: "running" | "completed" | "blocked";
+    summary: string;
+    closedAt?: string;
+  }
+): Promise<void> {
+  const scope = strictScopeForWorkItem(workItem);
+  if (!scope) return;
+  try {
+    await store.upsertLoopRun(scope, {
+      id: loopRunId(workItem),
+      workItemId: workItem.id,
+      status: input.status,
+      summary: input.summary,
+      closedAt: input.closedAt
+    });
+  } catch (error) {
+    await store.addEvent({
+      workItemId: workItem.id,
+      level: "warn",
+      type: "system",
+      message: `Loop run persistence was skipped: ${error instanceof Error ? error.message : String(error)}`
+    });
+  }
+}
+
+function strictScopeForWorkItem(workItem: Pick<WorkItem, "projectId" | "repo">): StrictProjectScope | null {
+  return workItem.projectId && workItem.repo
+    ? { projectId: workItem.projectId, repo: workItem.repo }
+    : null;
+}
+
+function loopRunId(workItem: Pick<WorkItem, "id">): string {
+  return `loop-${workItem.id}`;
+}
+
+function buildTeamDirection(input: StageInput, proposalStage: boolean): string[] {
+  const latest = input.previousArtifacts[input.previousArtifacts.length - 1];
+  return [
+    proposalStage
+      ? `Propose the ${input.stage} handoff before implementation; do not claim unperformed file or test work.`
+      : `Execute ${input.stage} using the latest proposal, teammate messages, and prior artifacts as bounded context.`,
+    latest
+      ? `Most recent artifact is ${latest.ownerAgent} on ${latest.stage}: ${latest.summary}`
+      : "No prior artifact is available; rely on the work item and loop start rules.",
+    "Prefer additive progress: preserve existing decisions, surface blockers early, and hand off concrete next steps."
+  ];
+}
+
+function buildLoopContext(previousArtifacts: StageArtifact[]): string[] {
+  if (!previousArtifacts.length) {
+    return ["No previous artifacts have been produced in this loop."];
+  }
+  return previousArtifacts.slice(-8).map((artifact) =>
+    `${artifact.stage}/${artifact.ownerAgent}/${artifact.status}: ${artifact.summary}`
+  );
 }
 
 function createDefaultReleaseConfig(): TargetRepoConfig {

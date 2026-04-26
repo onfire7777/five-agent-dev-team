@@ -951,9 +951,263 @@ button:focus-visible {
 .capability-list,
 .memory-list,
 .event-list,
+.direction-panel,
+.ideas-panel,
+.team-message-list,
+.loop-history-list,
 .check-grid {
   display: grid;
   gap: 9px;
+}
+
+.insight-inline-header,
+.compact-actions,
+.micro-meta,
+.accepted-row,
+.loop-run-title,
+.proposal-title {
+  display: flex;
+  align-items: center;
+}
+
+.insight-inline-header {
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.insight-inline-header small,
+.micro-meta,
+.proposal-title small,
+.loop-run-title small,
+.opportunity-row small,
+.team-message-row span {
+  color: #687386;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.insight-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #354154;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.text-button {
+  border: 0;
+  background: transparent;
+  color: #1f2937;
+  font-size: 12px;
+  font-weight: 850;
+  padding: 4px 0;
+}
+
+.text-button:hover {
+  color: #2d6cdf;
+}
+
+.direction-current,
+.opportunity-row,
+.proposal-card,
+.team-message-row,
+.loop-run-row {
+  display: grid;
+  gap: 7px;
+  border: 1px solid #e7ecf3;
+  border-radius: 8px;
+  background: #fbfcfd;
+  padding: 10px;
+}
+
+.direction-current strong,
+.opportunity-row strong,
+.proposal-card strong,
+.team-message-row strong,
+.loop-run-row strong,
+.accepted-row strong {
+  color: #111827;
+  font-size: 13px;
+}
+
+.direction-current p,
+.opportunity-row p,
+.proposal-card p,
+.team-message-row p,
+.loop-run-row p {
+  margin: 0;
+  color: #596579;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.micro-meta {
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.micro-meta span,
+.accepted-row span,
+.loop-run-title em {
+  border-radius: 999px;
+  background: #eef2f7;
+  color: #596579;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 850;
+  padding: 3px 6px;
+}
+
+.direction-input {
+  display: grid;
+  gap: 7px;
+}
+
+.direction-input span,
+.compact-section h3,
+.inline-list strong {
+  color: #596579;
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.direction-input textarea,
+.decision-disclosure textarea {
+  width: 100%;
+  min-height: 78px;
+  border: 1px solid #d5dde8;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #151b27;
+  outline: none;
+  padding: 10px 11px;
+  resize: vertical;
+}
+
+.direction-input textarea:focus,
+.decision-disclosure textarea:focus {
+  border-color: #2d6cdf;
+  box-shadow: 0 0 0 3px rgba(45, 108, 223, 0.13);
+}
+
+.quiet-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #354154;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.quiet-check input {
+  accent-color: #111827;
+}
+
+.compact-actions {
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.compact-actions.inline {
+  justify-content: flex-end;
+}
+
+.compact-actions .secondary-button {
+  min-height: 34px;
+  padding: 7px 10px;
+  font-size: 12px;
+}
+
+.secondary-button.danger {
+  border-color: #efc2c7;
+  color: #a91d2b;
+}
+
+.compact-section {
+  display: grid;
+  gap: 8px;
+}
+
+.compact-section h3 {
+  margin: 0;
+}
+
+.opportunity-list,
+.accepted-list {
+  display: grid;
+  gap: 8px;
+}
+
+.proposal-title,
+.loop-run-title {
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.proposal-title span,
+.loop-run-title span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.compact-disclosure summary {
+  color: #384456;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.compact-disclosure ul,
+.inline-list ul {
+  margin: 7px 0 0;
+  padding-left: 18px;
+  color: #596579;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.proposal-details {
+  display: grid;
+  gap: 5px;
+  margin: 8px 0 0;
+}
+
+.proposal-details dt {
+  color: #111827;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.proposal-details dd {
+  margin: 0 0 3px;
+  color: #596579;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.decision-disclosure textarea {
+  margin-top: 8px;
+}
+
+.accepted-row {
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid #e7ecf3;
+  padding-bottom: 8px;
+}
+
+.accepted-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.team-message-row > div {
+  display: grid;
+  gap: 2px;
 }
 
 .agent-row {

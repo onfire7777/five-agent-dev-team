@@ -4,6 +4,8 @@ export const WorkItemStateSchema = z.enum([
   "NEW",
   "INTAKE",
   "RND",
+  "PROPOSAL",
+  "AWAITING_ACCEPTANCE",
   "CONTRACT",
   "FRONTEND_BUILD",
   "BACKEND_BUILD",
@@ -15,6 +17,23 @@ export const WorkItemStateSchema = z.enum([
 ]);
 
 export type WorkItemState = z.infer<typeof WorkItemStateSchema>;
+
+export const AgentMessageTypeSchema = z.enum([
+  "status_update",
+  "handoff",
+  "research_finding",
+  "architecture_decision",
+  "contract_question",
+  "contract_answer",
+  "build_update",
+  "blocker",
+  "review_request",
+  "verification_result",
+  "release_decision",
+  "loop_closure"
+]);
+
+export type AgentMessageType = z.infer<typeof AgentMessageTypeSchema>;
 
 export const AgentRoleSchema = z.enum([
   "product-delivery-orchestrator",
@@ -159,6 +178,283 @@ export const WorkItemSchema = z.object({
 });
 
 export type WorkItem = z.infer<typeof WorkItemSchema>;
+
+export const LoopTriggerSourceSchema = z.enum([
+  "user",
+  "github_issue",
+  "opportunity_engine",
+  "failed_ci",
+  "scheduled_improvement",
+  "manual"
+]);
+
+export type LoopTriggerSource = z.infer<typeof LoopTriggerSourceSchema>;
+
+export const LoopRunStatusSchema = z.enum([
+  "running",
+  "awaiting_acceptance",
+  "blocked",
+  "closed",
+  "failed"
+]);
+
+export type LoopRunStatus = z.infer<typeof LoopRunStatusSchema>;
+
+export const LoopRunSchema = z.object({
+  id: z.string().min(1),
+  projectId: z.string().min(1),
+  repo: z.string().min(1),
+  memoryNamespace: z.string().min(1).optional(),
+  workItemId: z.string().min(1),
+  triggerSource: LoopTriggerSourceSchema.default("user"),
+  status: LoopRunStatusSchema.default("running"),
+  currentStage: WorkItemStateSchema.default("NEW"),
+  startRepoSha: z.string().min(1).default("unknown"),
+  startBranch: z.string().min(1).default("unknown"),
+  startClean: z.boolean().default(false),
+  startSynced: z.boolean().default(false),
+  activeAgents: z.array(AgentRoleSchema).default([]),
+  blockingReason: z.string().optional(),
+  endRepoSha: z.string().optional(),
+  githubPrNumber: z.number().int().positive().optional(),
+  githubRunId: z.string().min(1).optional(),
+  releaseTag: z.string().min(1).optional(),
+  releaseState: z.string().optional(),
+  closureSummary: z.string().optional(),
+  nextRecommendedLoop: z.string().optional(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+  closedAt: z.string().datetime().optional()
+});
+
+export type LoopRun = z.infer<typeof LoopRunSchema>;
+
+export const AgentMessageSchema = z.object({
+  id: z.string().min(1),
+  projectId: z.string().min(1),
+  repo: z.string().min(1),
+  workItemId: z.string().min(1),
+  loopRunId: z.string().min(1),
+  fromAgent: AgentRoleSchema,
+  toAgent: AgentRoleSchema.optional(),
+  type: AgentMessageTypeSchema,
+  summary: z.string().min(1),
+  details: z.array(z.string()).default([]),
+  decisions: z.array(z.string()).default([]),
+  risks: z.array(z.string()).default([]),
+  requiresResponse: z.boolean().default(false),
+  createdAt: z.string().datetime()
+});
+
+export type AgentMessage = z.infer<typeof AgentMessageSchema>;
+
+export const TeamContextSnapshotSchema = z.object({
+  id: z.string().min(1),
+  projectId: z.string().min(1),
+  repo: z.string().min(1),
+  workItemId: z.string().min(1),
+  loopRunId: z.string().min(1),
+  currentStage: WorkItemStateSchema.default("NEW"),
+  summary: z.string().min(1),
+  activeGoal: z.string().min(1),
+  latestLoopSummary: z.string().optional(),
+  activeDirection: z.array(z.string()).default([]),
+  activeAgents: z.array(AgentRoleSchema).default([]),
+  teammateActivity: z.array(TeammateActivitySchema).default([]),
+  decisions: z.array(z.string()).default([]),
+  blockers: z.array(z.string()).default([]),
+  openQuestions: z.array(z.string()).default([]),
+  recentMessages: z.array(AgentMessageSchema).default([]),
+  updatedAt: z.string().datetime()
+}).superRefine((snapshot, ctx) => {
+  snapshot.recentMessages.forEach((message, index) => {
+    if (message.projectId !== snapshot.projectId) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["recentMessages", index, "projectId"],
+        message: "Team context snapshots cannot include messages from another project."
+      });
+    }
+    if (message.repo !== snapshot.repo) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["recentMessages", index, "repo"],
+        message: "Team context snapshots cannot include messages from another repo."
+      });
+    }
+    if (message.workItemId !== snapshot.workItemId) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["recentMessages", index, "workItemId"],
+        message: "Team context snapshots cannot include messages from another work item."
+      });
+    }
+    if (message.loopRunId !== snapshot.loopRunId) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["recentMessages", index, "loopRunId"],
+        message: "Team context snapshots cannot include messages from another loop run."
+      });
+    }
+  });
+});
+
+export type TeamContextSnapshot = z.infer<typeof TeamContextSnapshotSchema>;
+
+export const AgentHeartbeatSchema = z.object({
+  id: z.string().min(1),
+  projectId: z.string().min(1),
+  repo: z.string().min(1),
+  loopRunId: z.string().min(1).optional(),
+  workItemId: z.string().min(1).optional(),
+  agent: AgentRoleSchema,
+  status: z.enum(["idle", "working", "blocked", "complete"]).default("idle"),
+  currentStage: WorkItemStateSchema.optional(),
+  currentTask: z.string().min(1).default("available for project-scoped work"),
+  lastMessageId: z.string().min(1).optional(),
+  updatedAt: z.string().datetime()
+});
+
+export type AgentHeartbeat = z.infer<typeof AgentHeartbeatSchema>;
+
+export const AgentTaskLeaseSchema = z.object({
+  id: z.string().min(1),
+  projectId: z.string().min(1),
+  repo: z.string().min(1),
+  loopRunId: z.string().min(1),
+  workItemId: z.string().min(1),
+  agent: AgentRoleSchema,
+  stage: WorkItemStateSchema,
+  task: z.string().min(1),
+  purpose: z.enum(["coordination", "research", "proposal", "build", "verification", "release", "opportunity_scan"]).default("coordination"),
+  status: z.enum(["active", "released", "expired"]).default("active"),
+  leasedAt: z.string().datetime(),
+  expiresAt: z.string().datetime()
+});
+
+export type AgentTaskLease = z.infer<typeof AgentTaskLeaseSchema>;
+
+export const ProjectDirectionSchema = z.object({
+  id: z.string().min(1),
+  projectId: z.string().min(1),
+  repo: z.string().min(1),
+  scope: z.enum(["next_loop", "standing"]).default("next_loop"),
+  content: z.string().min(1),
+  createdBy: z.enum(["human", "agent", "policy"]).default("human"),
+  active: z.boolean().default(true),
+  consumedAt: z.string().datetime().optional(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+});
+
+export type ProjectDirection = z.infer<typeof ProjectDirectionSchema>;
+
+export const OpportunitySourceSchema = z.enum([
+  "user_prompt",
+  "github_issue",
+  "failed_ci",
+  "dependabot",
+  "security_alert",
+  "todo",
+  "test_gap",
+  "failed_loop",
+  "recent_bug",
+  "performance_signal",
+  "documentation_gap",
+  "repo_memory",
+  "human_direction",
+  "rnd_finding"
+]);
+
+export type OpportunitySource = z.infer<typeof OpportunitySourceSchema>;
+
+export const OpportunityCandidateSchema = z.object({
+  id: z.string().min(1),
+  projectId: z.string().min(1),
+  repo: z.string().min(1),
+  source: OpportunitySourceSchema,
+  title: z.string().min(1),
+  summary: z.string().min(1),
+  evidence: z.array(z.string()).default([]),
+  duplicateKey: z.string().min(1),
+  score: z.number().min(0).max(100),
+  impact: z.number().int().min(1).max(5).default(3),
+  confidence: z.number().int().min(1).max(5).default(3),
+  urgency: z.number().int().min(1).max(5).default(3),
+  implementationSize: z.number().int().min(1).max(5).default(3),
+  riskLevel: RiskLevelSchema.default("medium"),
+  suggestedRequestType: z.enum(["feature", "bug", "performance", "security", "privacy", "refactor", "research"]).default("refactor"),
+  status: z.enum(["suggested", "promoted", "dismissed", "duplicate"]).default("suggested"),
+  workItemId: z.string().min(1).optional(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+});
+
+export type OpportunityCandidate = z.infer<typeof OpportunityCandidateSchema>;
+
+export const ProposalArtifactSchema = z.object({
+  id: z.string().min(1),
+  projectId: z.string().min(1),
+  repo: z.string().min(1),
+  workItemId: z.string().min(1),
+  loopRunId: z.string().min(1).optional(),
+  version: z.number().int().positive().default(1),
+  status: z.enum(["draft", "awaiting_acceptance", "accepted", "revision_requested", "rejected", "auto_accepted"]).default("draft"),
+  problem: z.string().min(1),
+  researchSummary: z.string().min(1),
+  recommendedApproach: z.string().min(1),
+  rejectedAlternatives: z.array(z.string()).default([]),
+  taskBreakdown: z.array(z.string()).default([]),
+  buildContract: z.array(z.string()).default([]),
+  acceptanceCriteria: z.array(z.string()).default([]),
+  affectedFiles: z.array(z.string()).default([]),
+  acceptanceTrace: z.array(z.string()).default([]),
+  validationPlan: z.array(z.string()).default([]),
+  rollbackNote: z.string().default("Rollback through the existing release gate and Git history if verification fails."),
+  risks: z.array(z.string()).default([]),
+  riskLevel: RiskLevelSchema.default("medium"),
+  requiredTools: z.array(z.string()).default([]),
+  autoAcceptEligible: z.boolean().default(false),
+  requiresHumanAcceptance: z.boolean().default(false),
+  policyReason: z.string().optional(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+});
+
+export type ProposalArtifact = z.infer<typeof ProposalArtifactSchema>;
+
+export const AcceptanceDecisionSchema = z.object({
+  id: z.string().min(1),
+  projectId: z.string().min(1),
+  repo: z.string().min(1),
+  workItemId: z.string().min(1),
+  proposalId: z.string().min(1),
+  proposalVersion: z.number().int().positive().default(1),
+  decision: z.enum(["accept", "edit_accept", "request_changes", "reject", "auto_accept"]),
+  actor: z.enum(["human", "policy"]).default("human"),
+  feedback: z.string().optional(),
+  editedProposal: ProposalArtifactSchema.optional(),
+  policyReason: z.string().optional(),
+  createdAt: z.string().datetime()
+});
+
+export type AcceptanceDecision = z.infer<typeof AcceptanceDecisionSchema>;
+
+export const OpportunityScanRunSchema = z.object({
+  id: z.string().min(1),
+  projectId: z.string().min(1),
+  repo: z.string().min(1),
+  status: z.enum(["running", "complete", "failed"]).default("complete"),
+  sources: z.array(OpportunitySourceSchema).default([]),
+  repoSha: z.string().min(1).optional(),
+  memoryVersion: z.string().min(1).optional(),
+  candidatesCreated: z.number().int().nonnegative().default(0),
+  summary: z.string().min(1),
+  startedAt: z.string().datetime(),
+  completedAt: z.string().datetime().optional()
+});
+
+export type OpportunityScanRun = z.infer<typeof OpportunityScanRunSchema>;
 
 export const ProjectConnectionInputSchema = z.object({
   projectId: z.string().min(1).optional(),

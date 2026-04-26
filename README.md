@@ -100,6 +100,17 @@ Live agent runs default to the configured best coding model policy: `gpt-5.5` fo
 - `POST /api/github/device/start`
 - `POST /api/github/device/poll`
 - `POST /api/github/disconnect`
+- `GET /api/projects/:projectId/team-bus`
+- `GET /api/projects/:projectId/loop-runs`
+- `GET /api/projects/:projectId/direction`
+- `POST /api/projects/:projectId/direction`
+- `GET /api/projects/:projectId/opportunities`
+- `POST /api/projects/:projectId/opportunities/scan`
+- `POST /api/opportunities/:id/promote`
+- `GET /api/work-items/:id/proposal`
+- `POST /api/work-items/:id/proposal/accept`
+- `POST /api/work-items/:id/proposal/revise`
+- `POST /api/work-items/:id/proposal/reject`
 - `POST /api/work-items`
 - `POST /api/emergency-stop`
 - `POST /api/emergency-resume`

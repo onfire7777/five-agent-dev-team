@@ -9,16 +9,26 @@ import util from "node:util";
 import YAML from "yaml";
 import { z } from "zod";
 import { Octokit } from "@octokit/rest";
-import { createStore } from "./store";
+import {
+  createStore,
+  type Direction,
+  type LoopRun,
+  type Opportunity,
+  type Proposal,
+  type StrictProjectScope,
+  type TeamBusMessage as StoreTeamBusMessage
+} from "./store";
 import { checkTemporalConnection, startAutonomousWorkflow } from "./temporal";
 import { startSmartScheduler } from "./scheduler";
 import {
+  canTransition,
   ProjectCapabilityStatusSchema,
   ProjectConnectionInputSchema,
   targetRepoConfigFromProjectConnection,
   type ProjectCapabilityStatus,
   type ProjectConnection,
-  type ProjectConnectionInput
+  type ProjectConnectionInput,
+  type WorkItem
 } from "../../../packages/shared/src";
 import {
   deleteStoredGitHubAuth,
@@ -41,6 +51,94 @@ const CreateWorkItemRequest = z.object({
   rndNeeded: z.boolean().default(true),
   projectId: z.string().min(1).optional(),
   repo: z.string().min(1).optional()
+});
+
+const ProjectScopeRequest = z.object({
+  projectId: z.string().min(1),
+  repo: z.string().min(1)
+});
+
+const TeamBusMessageRequest = ProjectScopeRequest.extend({
+  id: z.string().min(1).optional(),
+  workItemId: z.string().min(1).optional(),
+  loopRunId: z.string().min(1).optional(),
+  from: z.string().min(1),
+  to: z.array(z.string().min(1)).default([]),
+  kind: z.enum(["note", "handoff", "decision", "blocker", "status"]),
+  topic: z.string().min(1),
+  body: z.string().min(1),
+  payload: z.record(z.string(), z.unknown()).default({})
+});
+
+const LoopRunRequest = ProjectScopeRequest.extend({
+  id: z.string().min(1).optional(),
+  workItemId: z.string().min(1).optional(),
+  directionId: z.string().min(1).optional(),
+  opportunityId: z.string().min(1).optional(),
+  proposalId: z.string().min(1).optional(),
+  status: z.enum(["planned", "running", "awaiting_acceptance", "accepted", "revising", "rejected", "implementing", "completed", "blocked"]).optional(),
+  summary: z.string().optional(),
+  closedAt: z.string().datetime().optional()
+});
+
+const DirectionRequest = ProjectScopeRequest.extend({
+  id: z.string().min(1).optional(),
+  title: z.string().min(1),
+  summary: z.string().min(1),
+  goals: z.array(z.string()).default([]),
+  constraints: z.array(z.string()).default([]),
+  acceptanceCriteria: z.array(z.string()).default([])
+});
+
+const OpportunityRequest = ProjectScopeRequest.extend({
+  id: z.string().min(1).optional(),
+  workItemId: z.string().min(1).optional(),
+  title: z.string().min(1),
+  summary: z.string().min(1),
+  source: z.enum(["operator", "agent", "github", "research", "system"]).default("operator"),
+  priority: z.enum(["low", "medium", "high", "urgent"]).default("medium"),
+  status: z.enum(["new", "evaluating", "proposed", "accepted", "rejected"]).default("new"),
+  tags: z.array(z.string()).default([])
+});
+
+const ProposalOptionRequest = z.object({
+  title: z.string().min(1),
+  summary: z.string().min(1),
+  tradeoffs: z.array(z.string()).default([])
+});
+
+const ProposalRequest = ProjectScopeRequest.extend({
+  id: z.string().min(1).optional(),
+  workItemId: z.string().min(1).optional(),
+  loopRunId: z.string().min(1).optional(),
+  opportunityId: z.string().min(1).optional(),
+  title: z.string().min(1),
+  summary: z.string().min(1),
+  researchFindings: z.array(z.string()).default([]),
+  options: z.array(ProposalOptionRequest).default([]),
+  recommendation: z.string().min(1),
+  acceptanceCriteria: z.array(z.string()).default([]),
+  implementationPlan: z.array(z.string()).default([]),
+  validationPlan: z.array(z.string()).default([]),
+  risks: z.array(z.string()).default([]),
+  status: z.enum(["draft", "proposed", "accepted", "revising", "rejected"]).default("proposed")
+});
+
+const ProposalDecisionRequest = ProjectScopeRequest.extend({
+  decision: z.enum(["accept", "revise", "reject"]),
+  decidedBy: z.string().min(1),
+  reason: z.string().min(1),
+  requestedChanges: z.array(z.string()).default([])
+});
+
+const DirectionAliasRequest = z.object({
+  mode: z.enum(["next_loop", "standing"]).default("next_loop"),
+  instruction: z.string().min(1),
+  pauseNewLoopsAfterCurrent: z.boolean().default(false)
+});
+
+const WorkItemProposalDecisionRequest = z.object({
+  feedback: z.string().optional()
 });
 
 const app = express();
@@ -141,6 +239,323 @@ app.get("/api/events", async (req, res, next) => {
 app.get("/api/projects", async (_req, res, next) => {
   try {
     res.json(await store.listProjectConnections());
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/team-bus", async (req, res, next) => {
+  try {
+    const scope = await requireStrictProjectScope(req.query);
+    res.json(await store.listTeamBusMessages(scope));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/team-bus", async (req, res, next) => {
+  try {
+    const input = TeamBusMessageRequest.parse(req.body);
+    const scope = await requireStrictProjectScope(input);
+    const message = await store.addTeamBusMessage(scope, input);
+    await store.addEvent({
+      workItemId: message.workItemId,
+      level: message.kind === "blocker" ? "warn" : "info",
+      type: "system",
+      message: `Team bus ${message.kind}: ${message.topic}`
+    });
+    res.status(201).json(message);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/loop-runs", async (req, res, next) => {
+  try {
+    const scope = await requireStrictProjectScope(req.query);
+    res.json(await store.listLoopRuns(scope));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/loop-runs", async (req, res, next) => {
+  try {
+    const input = LoopRunRequest.parse(req.body);
+    const scope = await requireStrictProjectScope(input);
+    const run = await store.upsertLoopRun(scope, input);
+    res.status(input.id ? 200 : 201).json(run);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/direction", async (req, res, next) => {
+  try {
+    const scope = await requireStrictProjectScope(req.query);
+    const direction = await store.getDirection(scope);
+    if (!direction) {
+      res.status(404).json({ error: `Direction was not found for ${scope.projectId}.` });
+      return;
+    }
+    res.json(direction);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/direction", async (req, res, next) => {
+  try {
+    const input = DirectionRequest.parse(req.body);
+    const scope = await requireStrictProjectScope(input);
+    res.json(await store.upsertDirection(scope, input));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/opportunities", async (req, res, next) => {
+  try {
+    const scope = await requireStrictProjectScope(req.query);
+    res.json(await store.listOpportunities(scope));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/opportunities", async (req, res, next) => {
+  try {
+    const input = OpportunityRequest.parse(req.body);
+    const scope = await requireStrictProjectScope(input);
+    const opportunity = await store.upsertOpportunity(scope, input);
+    res.status(input.id ? 200 : 201).json(opportunity);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/proposals", async (req, res, next) => {
+  try {
+    const scope = await requireStrictProjectScope(req.query);
+    res.json(await store.listProposals(scope));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/proposals", async (req, res, next) => {
+  try {
+    const input = ProposalRequest.parse(req.body);
+    const scope = await requireStrictProjectScope(input);
+    const proposal = await store.upsertProposal(scope, input);
+    res.status(input.id ? 200 : 201).json(proposal);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/proposals/:id/decision", async (req, res, next) => {
+  try {
+    const input = ProposalDecisionRequest.parse(req.body);
+    const scope = await requireStrictProjectScope(input);
+    res.json(await store.decideProposal(scope, req.params.id, input));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/proposals/:id/accept", async (req, res, next) => {
+  try {
+    const input = ProposalDecisionRequest.parse({ ...req.body, decision: "accept" });
+    const scope = await requireStrictProjectScope(input);
+    res.json(await store.decideProposal(scope, req.params.id, input));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/proposals/:id/revise", async (req, res, next) => {
+  try {
+    const input = ProposalDecisionRequest.parse({ ...req.body, decision: "revise" });
+    const scope = await requireStrictProjectScope(input);
+    res.json(await store.decideProposal(scope, req.params.id, input));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/proposals/:id/reject", async (req, res, next) => {
+  try {
+    const input = ProposalDecisionRequest.parse({ ...req.body, decision: "reject" });
+    const scope = await requireStrictProjectScope(input);
+    res.json(await store.decideProposal(scope, req.params.id, input));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/projects/:projectId/team-bus", async (req, res, next) => {
+  try {
+    const scope = await requireScopeForProjectId(req.params.projectId);
+    const messages = await store.listTeamBusMessages(scope);
+    res.json({ messages: messages.map(mapTeamBusMessageForUi) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/projects/:projectId/loop-runs", async (req, res, next) => {
+  try {
+    const scope = await requireScopeForProjectId(req.params.projectId);
+    const loopRuns = await store.listLoopRuns(scope);
+    res.json({ loopRuns: loopRuns.map(mapLoopRunForUi) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/projects/:projectId/direction", async (req, res, next) => {
+  try {
+    const scope = await requireScopeForProjectId(req.params.projectId);
+    const direction = await store.getDirection(scope);
+    res.json({ direction: direction ? mapDirectionForUi(direction) : null });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/projects/:projectId/direction", async (req, res, next) => {
+  try {
+    const scope = await requireScopeForProjectId(req.params.projectId);
+    const input = DirectionAliasRequest.parse(req.body);
+    const title = input.mode === "standing" ? "Standing direction" : "Next loop direction";
+    const direction = await store.upsertDirection(scope, {
+      title,
+      summary: input.instruction,
+      goals: [input.instruction],
+      constraints: input.pauseNewLoopsAfterCurrent ? ["Pause new loops after current"] : [],
+      acceptanceCriteria: []
+    });
+    await store.addEvent({
+      level: "info",
+      type: "system",
+      message: `${title} saved for ${scope.repo}.`
+    });
+    res.status(201).json({ direction: mapDirectionForUi(direction, input) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/projects/:projectId/opportunities", async (req, res, next) => {
+  try {
+    const scope = await requireScopeForProjectId(req.params.projectId);
+    const opportunities = await store.listOpportunities(scope);
+    res.json({ opportunities: opportunities.map(mapOpportunityForUi) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/projects/:projectId/opportunities/scan", async (req, res, next) => {
+  try {
+    const scope = await requireScopeForProjectId(req.params.projectId);
+    const opportunity = await scanLeanOpportunity(scope);
+    const opportunities = await store.listOpportunities(scope);
+    res.status(201).json({
+      scan: {
+        projectId: scope.projectId,
+        repo: scope.repo,
+        status: "completed",
+        candidateCount: opportunities.length
+      },
+      opportunity: mapOpportunityForUi(opportunity),
+      opportunities: opportunities.map(mapOpportunityForUi)
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/opportunities/:id/promote", async (req, res, next) => {
+  try {
+    const { scope, opportunity } = await findOpportunityById(req.params.id);
+    const existingWorkItem = opportunity.workItemId
+      ? (await store.listWorkItems()).find((item) => item.id === opportunity.workItemId)
+      : undefined;
+    const workItem = existingWorkItem || await store.createWorkItem({
+      title: opportunity.title,
+      requestType: "feature",
+      priority: opportunity.priority,
+      dependencies: [],
+      acceptanceCriteria: [opportunity.summary],
+      riskLevel: opportunity.priority === "urgent" || opportunity.priority === "high" ? "high" : "medium",
+      frontendNeeded: true,
+      backendNeeded: true,
+      rndNeeded: true,
+      projectId: scope.projectId,
+      repo: scope.repo
+    });
+    const updated = await store.upsertOpportunity(scope, {
+      ...opportunity,
+      workItemId: workItem.id,
+      status: "accepted",
+      tags: [...new Set([...opportunity.tags, "promoted"])]
+    });
+    await store.addTeamBusMessage(scope, {
+      workItemId: workItem.id,
+      from: "product-delivery-orchestrator",
+      kind: "handoff",
+      topic: "Opportunity promoted",
+      body: `Promoted ${opportunity.title} into ${workItem.id}.`,
+      payload: { opportunityId: opportunity.id }
+    });
+
+    const started = await startWorkflowIfSafe(workItem);
+    res.status(201).json({
+      opportunity: mapOpportunityForUi(updated),
+      workItem,
+      workflowId: started.workflowId,
+      queued: started.queued,
+      reason: started.reason
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/work-items/:id/proposal", async (req, res, next) => {
+  try {
+    const { scope, workItem } = await requireScopeForWorkItem(req.params.id);
+    const proposal = await findLatestProposalForWorkItem(scope, workItem.id);
+    res.json({ proposal: proposal ? mapProposalForUi(proposal) : null });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/work-items/:id/proposal/accept", async (req, res, next) => {
+  try {
+    const result = await decideWorkItemProposal(req.params.id, "accept", req.body);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/work-items/:id/proposal/revise", async (req, res, next) => {
+  try {
+    const result = await decideWorkItemProposal(req.params.id, "revise", req.body);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/work-items/:id/proposal/reject", async (req, res, next) => {
+  try {
+    const result = await decideWorkItemProposal(req.params.id, "reject", req.body);
+    res.json(result);
   } catch (error) {
     next(error);
   }
@@ -845,42 +1260,253 @@ function safeFileSegment(value: string): string {
     .replace(/^-|-$/g, "") || "project";
 }
 
+async function requireStrictProjectScope(input: unknown): Promise<StrictProjectScope> {
+  const scope = ProjectScopeRequest.parse(input);
+  const projects = await store.listProjectConnections();
+  const project = projects.find((candidate) =>
+    candidate.projectId === scope.projectId &&
+    candidate.repo === scope.repo
+  );
+  if (!project) {
+    throw new HttpError(`Connected project was not found for ${scope.projectId}/${scope.repo}.`, 400);
+  }
+  if (!project.active) {
+    throw new HttpError(`Project ${project.repo} is not enabled for additive loop records.`, 400);
+  }
+  return { projectId: project.projectId, repo: project.repo };
+}
+
+async function requireScopeForProjectId(projectId: string): Promise<StrictProjectScope> {
+  const projects = await store.listProjectConnections();
+  const project = projects.find((candidate) => candidate.projectId === projectId || candidate.id === projectId);
+  if (!project) throw new HttpError(`Connected project ${projectId} was not found.`, 404);
+  if (!project.active) throw new HttpError(`Project ${project.repo} is not active.`, 400);
+  return { projectId: project.projectId, repo: project.repo };
+}
+
+async function requireScopeForWorkItem(workItemId: string): Promise<{ scope: StrictProjectScope; workItem: WorkItem }> {
+  const workItem = (await store.listWorkItems()).find((item) => item.id === workItemId);
+  if (!workItem) throw new HttpError(`Work item ${workItemId} was not found.`, 404);
+  if (!workItem.projectId || !workItem.repo) {
+    throw new HttpError(`Work item ${workItemId} is not scoped to a connected project.`, 400);
+  }
+  return {
+    scope: await requireStrictProjectScope({ projectId: workItem.projectId, repo: workItem.repo }),
+    workItem
+  };
+}
+
+async function findOpportunityById(id: string): Promise<{ scope: StrictProjectScope; opportunity: Opportunity }> {
+  const projects = await store.listProjectConnections();
+  for (const project of projects.filter((candidate) => candidate.active)) {
+    const scope = { projectId: project.projectId, repo: project.repo };
+    const opportunity = (await store.listOpportunities(scope)).find((item) => item.id === id);
+    if (opportunity) return { scope, opportunity };
+  }
+  throw new HttpError(`Opportunity ${id} was not found.`, 404);
+}
+
+async function findLatestProposalForWorkItem(scope: StrictProjectScope, workItemId: string): Promise<Proposal | null> {
+  const proposals = await store.listProposals(scope);
+  return proposals.find((proposal) => proposal.workItemId === workItemId) || null;
+}
+
+async function scanLeanOpportunity(scope: StrictProjectScope): Promise<Opportunity> {
+  const existing = (await store.listOpportunities(scope)).find((item) =>
+    item.status !== "accepted" &&
+    item.status !== "rejected" &&
+    item.tags.includes("autonomous-scan")
+  );
+  if (existing) return existing;
+
+  const direction = await store.getDirection(scope);
+  const title = direction?.summary
+    ? `Act on project direction: ${direction.summary.slice(0, 80)}`
+    : "Strengthen repo reliability, tests, and release readiness";
+  const summary = direction?.summary
+    ? `Use the saved project direction as steering input, then prefer hardening, debugging, testing, performance, and maintainability work before proposing feature expansion. Direction: ${direction.summary}`
+    : "No user work is blocking, so run a lean autonomous hardening pass: inspect failed checks, TODO/FIXME markers, weak tests, recent blockers, release-gate gaps, and repo memory before proposing the next safest improvement.";
+  return store.upsertOpportunity(scope, {
+    title,
+    summary,
+    source: direction ? "operator" : "agent",
+    priority: "medium",
+    status: "new",
+    tags: ["autonomous-scan", "hardening", "deduped"]
+  });
+}
+
+async function decideWorkItemProposal(workItemId: string, decision: "accept" | "revise" | "reject", body: unknown) {
+  const { scope, workItem } = await requireScopeForWorkItem(workItemId);
+  const proposal = await findLatestProposalForWorkItem(scope, workItem.id);
+  if (!proposal) throw new HttpError(`No proposal is attached to ${workItem.id}.`, 404);
+  const input = WorkItemProposalDecisionRequest.parse(body);
+  const updated = await store.decideProposal(scope, proposal.id, {
+    decision,
+    decidedBy: "human",
+    reason: input.feedback || defaultProposalDecisionReason(decision),
+    requestedChanges: input.feedback ? [input.feedback] : []
+  });
+  const nextState = decision === "accept" ? "CONTRACT" : decision === "revise" ? "RND" : "CLOSED";
+  if (workItem.state !== nextState && canTransition(workItem.state, nextState)) {
+    await store.updateWorkItemState(workItem.id, nextState);
+  }
+  await store.addTeamBusMessage(scope, {
+    workItemId: workItem.id,
+    from: "product-delivery-orchestrator",
+    kind: decision === "accept" ? "decision" : decision === "revise" ? "handoff" : "blocker",
+    topic: `Proposal ${decision}`,
+    body: input.feedback || defaultProposalDecisionReason(decision),
+    payload: { proposalId: proposal.id, nextState }
+  });
+  return { proposal: mapProposalForUi(updated), workItemId: workItem.id, nextState };
+}
+
+async function startWorkflowIfSafe(workItem: WorkItem): Promise<{ workflowId: string | null; queued: boolean; reason?: string }> {
+  const status = await store.getStatus();
+  if (status.system.emergencyStop) {
+    return {
+      workflowId: null,
+      queued: true,
+      reason: status.system.emergencyReason || "Emergency stop is active"
+    };
+  }
+
+  if (workItem.projectId && workItem.repo) {
+    const activeSameProject = status.workItems.some((item) =>
+      item.id !== workItem.id &&
+      item.projectId === workItem.projectId &&
+      item.repo === workItem.repo &&
+      !["NEW", "CLOSED", "BLOCKED"].includes(item.state)
+    );
+    if (activeSameProject) {
+      return {
+        workflowId: null,
+        queued: true,
+        reason: "A same-project loop is already running. This work item will wait until that loop closes or blocks."
+      };
+    }
+  }
+
+  const claimed = await store.claimWorkItemForWorkflow(workItem.id);
+  if (!claimed) {
+    return { workflowId: null, queued: true, reason: "Work item is already claimed by a workflow." };
+  }
+
+  await store.addEvent({
+    workItemId: workItem.id,
+    stage: "NEW",
+    ownerAgent: "product-delivery-orchestrator",
+    level: "info",
+    type: "workflow_claimed",
+    message: `Workflow claimed for ${workItem.title}.`
+  });
+  try {
+    const workflowId = await startAutonomousWorkflow(workItem);
+    if (workflowId) {
+      await store.updateWorkItemState(workItem.id, "INTAKE");
+      if (workItem.projectId && workItem.repo) {
+        await store.upsertLoopRun({ projectId: workItem.projectId, repo: workItem.repo }, {
+          id: `loop-${workItem.id}`,
+          workItemId: workItem.id,
+          status: "running",
+          summary: `Autonomous loop started for ${workItem.title}.`
+        });
+      }
+    } else {
+      await store.releaseWorkItemWorkflowClaim(workItem.id);
+    }
+    return { workflowId, queued: !workflowId };
+  } catch (error) {
+    await store.releaseWorkItemWorkflowClaim(workItem.id);
+    throw error;
+  }
+}
+
+function mapDirectionForUi(direction: Direction, alias?: z.infer<typeof DirectionAliasRequest>) {
+  const pause = alias?.pauseNewLoopsAfterCurrent ?? direction.constraints.some((item) => /pause new loops/i.test(item));
+  const standingDirection = alias?.mode === "standing" || /standing/i.test(direction.title) ? direction.summary : undefined;
+  const nextLoopDirection = alias?.mode !== "standing" && !/standing/i.test(direction.title) ? direction.summary : undefined;
+  return {
+    ...direction,
+    standingDirection,
+    nextLoopDirection,
+    currentPriority: direction.goals[0],
+    focus: direction.summary,
+    avoid: direction.constraints.filter((item) => !/pause new loops/i.test(item)),
+    pauseNewLoopsAfterCurrent: pause
+  };
+}
+
+function mapTeamBusMessageForUi(message: StoreTeamBusMessage) {
+  return {
+    ...message,
+    type: message.kind,
+    ownerAgent: message.from,
+    agent: message.from,
+    stage: String(message.payload?.stage || message.topic || ""),
+    title: message.topic,
+    summary: message.body,
+    message: message.body
+  };
+}
+
+function mapLoopRunForUi(run: LoopRun) {
+  return {
+    ...run,
+    currentStage: run.status,
+    startedAt: run.createdAt,
+    closureSummary: run.status === "completed" ? run.summary : undefined,
+    blockingReason: run.status === "blocked" ? run.summary : undefined,
+    nextRecommendedLoop: run.status === "completed" ? "Scan for the next highest-value queued work or opportunity." : undefined,
+    releaseState: run.status === "completed" ? "closed" : run.status
+  };
+}
+
+function mapOpportunityForUi(opportunity: Opportunity) {
+  return {
+    ...opportunity,
+    risk: opportunity.priority === "urgent" || opportunity.priority === "high" ? "high" : "medium",
+    score: opportunity.priority === "urgent" ? 95 : opportunity.priority === "high" ? 85 : opportunity.priority === "medium" ? 70 : 50,
+    evidence: opportunity.tags
+  };
+}
+
+function mapProposalForUi(proposal: Proposal) {
+  return {
+    ...proposal,
+    problem: proposal.summary,
+    researchSummary: proposal.researchFindings.join(" ") || proposal.summary,
+    recommendedApproach: proposal.recommendation,
+    tasks: proposal.implementationPlan,
+    validationPlan: proposal.validationPlan.join("; "),
+    rollbackPlan: proposal.risks.find((risk) => /rollback/i.test(risk)) || "Use the existing release rollback path and block release if rollback cannot be proven.",
+    autoAcceptEligible: proposal.status === "accepted"
+  };
+}
+
+function defaultProposalDecisionReason(decision: "accept" | "revise" | "reject"): string {
+  if (decision === "accept") return "Proposal accepted through dashboard steering.";
+  if (decision === "revise") return "Proposal changes requested through dashboard steering.";
+  return "Proposal rejected through dashboard steering.";
+}
+
 app.post("/api/work-items", async (req, res, next) => {
   try {
     const input = CreateWorkItemRequest.parse(req.body);
     await requireConnectedProjectForWork(input);
     const workItem = await store.createWorkItem(input);
-    const currentStatus = await store.getStatus();
-    if (currentStatus.system.emergencyStop) {
-      res.status(202).json({
-        workItem,
-        workflowId: null,
-        blocked: true,
-        reason: currentStatus.system.emergencyReason || "Emergency stop is active"
-      });
-      return;
-    }
-
-    const claimed = await store.claimWorkItemForWorkflow(workItem.id);
-    if (!claimed) throw new HttpError(`Work item ${workItem.id} is already claimed by an active workflow.`, 409);
-    await store.addEvent({
-      workItemId: workItem.id,
-      stage: "NEW",
-      ownerAgent: "product-delivery-orchestrator",
-      level: "info",
-      type: "workflow_claimed",
-      message: `Workflow claimed for ${workItem.title}.`
-    });
-    const workflowId = claimed ? await startAutonomousWorkflow(workItem) : null;
-    if (workflowId) {
-      await store.updateWorkItemState(workItem.id, "INTAKE");
-    } else {
-      await store.releaseWorkItemWorkflowClaim(workItem.id);
-    }
+    const started = await startWorkflowIfSafe(workItem);
+    const workflowId = started.workflowId;
     const responseWorkItem = workflowId
       ? { ...workItem, state: "INTAKE" as const, updatedAt: new Date().toISOString() }
       : workItem;
-    res.status(201).json({ workItem: responseWorkItem, workflowId });
+    res.status(started.queued ? 202 : 201).json({
+      workItem: responseWorkItem,
+      workflowId,
+      queued: started.queued,
+      reason: started.reason
+    });
   } catch (error) {
     next(error);
   }

@@ -9,6 +9,7 @@ export interface AgentDefinition {
   requiredOutputs: string[];
   primaryStages: WorkItemState[];
   instructions: string;
+  proposalInstructions?: string;
 }
 
 export const AGENT_DEFINITIONS: AgentDefinition[] = [
@@ -20,6 +21,11 @@ export const AGENT_DEFINITIONS: AgentDefinition[] = [
     doesNotOwn: ["Technical architecture", "Implementation", "Independent release approval"],
     requiredOutputs: ["Work Item Brief", "Routing Plan", "Delivery Status", "Final Work Summary", "Follow-up Work Items"],
     primaryStages: ["INTAKE", "CLOSED"],
+    proposalInstructions: [
+      "Before downstream agents act, propose the smallest bounded loop that satisfies the user goal.",
+      "Call out scope splits, acceptance checks, explicit non-goals, and the next owner.",
+      "Do not create implementation detail beyond what routing and acceptance require."
+    ].join("\n"),
     instructions: [
       "You are the Product & Delivery Orchestrator for an autonomous software development team.",
       "Convert raw requests into bounded work items with testable acceptance criteria.",
@@ -36,6 +42,11 @@ export const AGENT_DEFINITIONS: AgentDefinition[] = [
     doesNotOwn: ["Product priority", "Production code ownership", "Release approval"],
     requiredOutputs: ["Research Brief", "Technical Options Analysis", "Recommended Architecture", "ADR", "Implementation Strategy"],
     primaryStages: ["RND", "CONTRACT"],
+    proposalInstructions: [
+      "Before implementation, propose the technical contract the builders should follow.",
+      "Include interface boundaries, sequencing, assumptions, risks, and concrete acceptance gates.",
+      "Prefer additive changes that keep the loop moving without widening the user request."
+    ].join("\n"),
     instructions: [
       "You are the R&D, Architecture & Innovation Agent.",
       "Research the best technical direction before production implementation begins.",
@@ -52,6 +63,11 @@ export const AGENT_DEFINITIONS: AgentDefinition[] = [
     doesNotOwn: ["Product priority", "Backend architecture", "Release approval"],
     requiredOutputs: ["Frontend Implementation Plan", "UI State Map", "Component Changes", "Accessibility Notes", "Frontend Test Notes"],
     primaryStages: ["FRONTEND_BUILD"],
+    proposalInstructions: [
+      "Before building, propose the user-facing states, component touch points, accessibility checks, and tests.",
+      "Call out dependencies on backend contract or shared state and any UX risk that should be resolved before coding.",
+      "Keep the proposal minimal and implementation-ready."
+    ].join("\n"),
     instructions: [
       "You are the Frontend & UX Engineering Agent.",
       "Own user-facing implementation, accessibility, responsive behavior, client validation, and frontend tests.",
@@ -67,6 +83,11 @@ export const AGENT_DEFINITIONS: AgentDefinition[] = [
     doesNotOwn: ["Product priority", "UI/UX decisions", "Independent release approval"],
     requiredOutputs: ["Backend Implementation Plan", "API Contract", "Data Change Summary", "Migration Notes", "Backend Test Notes"],
     primaryStages: ["BACKEND_BUILD", "INTEGRATION"],
+    proposalInstructions: [
+      "Before building or integrating, propose the API/data/service changes and how they compose with teammate work.",
+      "Call out migration, auth, observability, and rollback risks before code changes are made.",
+      "Keep the proposal compatible with the locked build contract."
+    ].join("\n"),
     instructions: [
       "You are the Backend & Systems Engineering Agent.",
       "Own server-side behavior, data, APIs, integrations, jobs, observability hooks, and backend tests.",
@@ -82,6 +103,11 @@ export const AGENT_DEFINITIONS: AgentDefinition[] = [
     doesNotOwn: ["Product scope", "Main implementation", "Architecture invention"],
     requiredOutputs: ["Test Plan", "Verification Report", "Security Review", "Privacy Review", "Release Checklist", "Rollback Plan", "Go/No-Go"],
     primaryStages: ["VERIFY", "RELEASE", "BLOCKED"],
+    proposalInstructions: [
+      "Before final verification or release, propose the proof plan and release gate sequence.",
+      "Call out missing evidence, blocker conditions, rollback requirements, and teammate claims that need independent proof.",
+      "Do not approve release readiness from proposal-only context."
+    ].join("\n"),
     instructions: [
       "You are the Quality, Security, Privacy & Release Agent.",
       "Independently prove whether work is correct, safe, performant, private, and ready to release.",
@@ -103,6 +129,8 @@ export function roleForStage(stage: WorkItemState): AgentRole {
     case "CLOSED":
       return "product-delivery-orchestrator";
     case "RND":
+    case "PROPOSAL":
+    case "AWAITING_ACCEPTANCE":
     case "CONTRACT":
       return "rnd-architecture-innovation";
     case "FRONTEND_BUILD":
@@ -116,5 +144,7 @@ export function roleForStage(stage: WorkItemState): AgentRole {
       return "quality-security-privacy-release";
     case "NEW":
       return "product-delivery-orchestrator";
+    default:
+      throw new Error(`Unknown work-item stage: ${stage}`);
   }
 }
