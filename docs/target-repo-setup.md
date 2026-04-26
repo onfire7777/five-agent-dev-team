@@ -79,6 +79,8 @@ The easiest operator path is dashboard GitHub account connection:
 
 The controller stores the resulting token in `.agent-team/github-auth.json`, which is ignored by git. That token is then injected into `gh`, Octokit, and the official GitHub MCP server as `GH_TOKEN`, `GITHUB_TOKEN`, and `GITHUB_PERSONAL_ACCESS_TOKEN` for the current runtime. Advanced setups may still authenticate through `GH_TOKEN`/`GITHUB_TOKEN`, `GITHUB_PERSONAL_ACCESS_TOKEN`, or a deliberate mount of the user's `gh` config directory. Do not hardcode credentials.
 
+Treat the connected GitHub account as an account-scoped utility bundle. One verified account should unlock every GitHub-backed path that can safely run under that token: local/remote sync checks, GitHub CLI operations, Octokit repository coordination, official GitHub MCP dynamic toolsets, issues, pull requests, Actions, releases, Projects, security context, and optional Copilot-agent coordination. The dashboard reports broad availability, but the agent runner still activates concrete tools only when the current stage, role, risk, and repo policy justify them.
+
 Deep web research should also stay on demand. Use it for current official docs, release notes, security advisories, and source-backed investigation that the local repo cannot answer. Keep the returned context small and promote durable findings into `.agent-team/context` or tests.
 
 Recommended defaults:

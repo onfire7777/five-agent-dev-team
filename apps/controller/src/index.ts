@@ -681,6 +681,7 @@ async function getGitHubAccountStatus(): Promise<{
   name?: string | null;
   avatarUrl?: string;
   scopes: string[];
+  utilities: GitHubConnectedUtility[];
   clientIdConfigured: boolean;
   authFile?: string;
   message: string;
@@ -692,6 +693,7 @@ async function getGitHubAccountStatus(): Promise<{
       connected: false,
       source: "none",
       scopes: [],
+      utilities: buildGitHubConnectedUtilities(false, []),
       clientIdConfigured,
       authFile: githubAuthFilePath(),
       message: clientIdConfigured
@@ -702,9 +704,10 @@ async function getGitHubAccountStatus(): Promise<{
 
   try {
     const user = await fetchGitHubUser(source.token);
-    const scopes = source.source === "local"
-      ? source.auth.scope.split(",").map((scope) => scope.trim()).filter(Boolean)
+    const storedScopes = source.source === "local"
+      ? source.auth.scope.split(/[,\s]+/).map((scope) => scope.trim()).filter(Boolean)
       : [];
+    const scopes = storedScopes.length ? storedScopes : user.scopes;
     return {
       connected: true,
       source: source.source,
@@ -713,11 +716,12 @@ async function getGitHubAccountStatus(): Promise<{
       name: user.name,
       avatarUrl: user.avatarUrl,
       scopes,
+      utilities: buildGitHubConnectedUtilities(true, scopes),
       clientIdConfigured,
       authFile: source.source === "local" ? githubAuthFilePath() : undefined,
       message: source.source === "local"
-        ? "Dashboard-managed GitHub account is connected."
-        : `GitHub account is connected through ${source.sourceName}.`
+        ? "Dashboard-managed GitHub account is connected across GitHub CLI, SDK, MCP, Actions, PRs, releases, and repo memory."
+        : `GitHub account is connected through ${source.sourceName} across GitHub CLI, SDK, MCP, Actions, PRs, releases, and repo memory.`
     };
   } catch (error) {
     return {
@@ -725,6 +729,7 @@ async function getGitHubAccountStatus(): Promise<{
       source: source.source,
       sourceName: source.sourceName,
       scopes: [],
+      utilities: buildGitHubConnectedUtilities(false, []),
       clientIdConfigured,
       authFile: source.source === "local" ? githubAuthFilePath() : undefined,
       message: `GitHub token could not be verified: ${error instanceof Error ? error.message : String(error)}`
@@ -732,16 +737,99 @@ async function getGitHubAccountStatus(): Promise<{
   }
 }
 
-async function fetchGitHubUser(token: string): Promise<{ login: string; name: string | null; avatarUrl?: string }> {
+type GitHubConnectedUtility = {
+  id: string;
+  label: string;
+  status: "ready" | "available" | "needs_scope" | "blocked";
+  summary: string;
+};
+
+function buildGitHubConnectedUtilities(connected: boolean, scopes: string[]): GitHubConnectedUtility[] {
+  const definitions: Array<Omit<GitHubConnectedUtility, "status"> & { scopes?: string[] }> = [
+    {
+      id: "github-sdk",
+      label: "GitHub SDK",
+      summary: "Octokit API access for repository metadata, issues, PRs, checks, releases, and automation state."
+    },
+    {
+      id: "github-cli",
+      label: "GitHub CLI",
+      summary: "Token-backed gh commands for deterministic branch, PR, Actions, release, and sync workflows."
+    },
+    {
+      id: "github-mcp",
+      label: "GitHub MCP",
+      summary: "Official GitHub MCP dynamic toolsets for repo, issue, PR, Actions, Projects, and security context."
+    },
+    {
+      id: "repo-code",
+      label: "Repos & code",
+      scopes: ["repo", "public_repo"],
+      summary: "Repository discovery, file context, branches, commits, tags, and release coordination."
+    },
+    {
+      id: "issues-prs",
+      label: "Issues & PRs",
+      scopes: ["repo", "public_repo"],
+      summary: "Requests, acceptance criteria, comments, labels, reviews, and autonomous pull requests."
+    },
+    {
+      id: "actions-checks",
+      label: "Actions & checks",
+      scopes: ["repo", "workflow"],
+      summary: "Remote CI status, workflow dispatch, release gates, and check evidence."
+    },
+    {
+      id: "projects",
+      label: "Projects",
+      scopes: ["project", "read:project"],
+      summary: "GitHub Projects context through MCP when the account and organization allow it."
+    },
+    {
+      id: "security",
+      label: "Security",
+      scopes: ["repo", "security_events"],
+      summary: "Code scanning, dependency, secret-protection, and security advisory context where permitted."
+    },
+    {
+      id: "copilot-agent",
+      label: "Copilot agent",
+      scopes: ["repo"],
+      summary: "Optional GitHub MCP Copilot toolset for tracking or delegating Copilot coding-agent work when available."
+    }
+  ];
+
+  return definitions.map((definition) => ({
+    id: definition.id,
+    label: definition.label,
+    summary: definition.summary,
+    status: connected ? scopeStatus(scopes, definition.scopes || []) : "blocked"
+  }));
+}
+
+function scopeStatus(scopes: string[], requiredScopes: string[]): GitHubConnectedUtility["status"] {
+  if (!requiredScopes.length) return "ready";
+  if (!scopes.length) return "available";
+  const normalized = scopes.map((scope) => scope.toLowerCase());
+  return requiredScopes.some((scope) => normalized.includes(scope.toLowerCase()))
+    ? "ready"
+    : "needs_scope";
+}
+
+async function fetchGitHubUser(token: string): Promise<{ login: string; name: string | null; avatarUrl?: string; scopes: string[] }> {
   const octokit = new Octokit({
     auth: token,
     userAgent: "five-agent-dev-team/0.1.0"
   });
-  const { data } = await octokit.rest.users.getAuthenticated();
+  const response = await octokit.rest.users.getAuthenticated();
+  const scopeHeader = response.headers["x-oauth-scopes"];
   return {
-    login: data.login,
-    name: data.name || null,
-    avatarUrl: data.avatar_url || undefined
+    login: response.data.login,
+    name: response.data.name || null,
+    avatarUrl: response.data.avatar_url || undefined,
+    scopes: typeof scopeHeader === "string"
+      ? scopeHeader.split(",").map((scope) => scope.trim()).filter(Boolean)
+      : []
   };
 }
 

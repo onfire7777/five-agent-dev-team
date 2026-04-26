@@ -32,6 +32,8 @@ npm run dev
 
 Connect GitHub from the dashboard first, then connect target repos from the same `Project` panel. The dashboard supports GitHub's OAuth device flow when `GITHUB_OAUTH_CLIENT_ID` is configured; env tokens and mounted `gh` config still work for advanced setups. Dashboard-managed tokens are stored locally in `.agent-team/github-auth.json`, which is gitignored, and the same account is injected into the GitHub CLI, Octokit SDK, and official GitHub MCP server paths.
 
+The GitHub account connection fans out into a single utility bundle instead of separate setup chores: CLI commands, Octokit API coordination, MCP dynamic toolsets, repo/code context, issues, pull requests, Actions/checks, releases, Projects, security context, and optional Copilot-agent toolsets. The dashboard shows which utilities are ready, available, or blocked by token scope, while actual tool use remains lazy and stage-gated.
+
 Create `agent-team.config.yaml` from `agent-team.config.example.yaml` only when you want a file-backed default repo. Each target repo must expose install, lint, typecheck, test, build, security, and release commands. The controller will not guess project-specific commands.
 
 Each connected repo is treated as an isolated project. Work items and permanent memory carry a project/repo scope so one repository's decisions, gotchas, and automation state are not mixed into another repository. Dashboard/API connections are stored in Postgres and mirrored to `.agent-team/projects/<project-id>.yaml` so controller and worker processes resolve the same per-project config instead of relying on a single mutable config file.

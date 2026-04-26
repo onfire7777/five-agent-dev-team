@@ -68,9 +68,17 @@ type GitHubAccount = {
   name?: string | null;
   avatarUrl?: string;
   scopes: string[];
+  utilities: GitHubConnectedUtility[];
   clientIdConfigured: boolean;
   authFile?: string;
   message: string;
+};
+
+type GitHubConnectedUtility = {
+  id: string;
+  label: string;
+  status: "ready" | "available" | "needs_scope" | "blocked";
+  summary: string;
 };
 
 type GitHubDeviceSession = {
@@ -254,6 +262,7 @@ const defaultGitHubAccount: GitHubAccount = {
   connected: false,
   source: "none",
   scopes: [],
+  utilities: [],
   clientIdConfigured: false,
   message: "GitHub account status has not loaded yet."
 };
@@ -623,6 +632,10 @@ export function App() {
   );
   const systemState = systemPresentation(status, apiState);
   const apiMessage = apiNotice(apiState);
+  const connectedGithubUtilities = githubAccount.utilities.filter((utility) =>
+    utility.status === "ready" || utility.status === "available"
+  );
+  const githubUtilityPreview = connectedGithubUtilities.slice(0, 5);
 
   return (
     <div className="app-shell">
@@ -733,9 +746,14 @@ export function App() {
                       <strong>{githubAccount.connected ? `GitHub: ${githubAccount.login}` : "Connect GitHub account"}</strong>
                       <small>
                         {githubAccount.connected
-                          ? `${githubAccount.source === "local" ? "Dashboard OAuth" : githubAccount.sourceName || "Environment"} powers CLI, SDK, and MCP.`
+                          ? `${githubAccount.source === "local" ? "Dashboard OAuth" : githubAccount.sourceName || "Environment"} powers ${connectedGithubUtilities.length || "GitHub"} utilities.`
                           : githubAccount.message}
                       </small>
+                      {githubUtilityPreview.length > 0 && (
+                        <span className="github-utility-preview" aria-label="Connected GitHub utilities">
+                          {githubUtilityPreview.map((utility) => <i key={utility.id}>{utility.label}</i>)}
+                        </span>
+                      )}
                     </span>
                   </div>
                   <div className="github-account-actions">
@@ -777,6 +795,19 @@ export function App() {
                     <small className={githubConnect.status === "failed" || githubAccountError ? "github-account-message error" : "github-account-message"}>
                       {githubAccountError || githubConnect.message}
                     </small>
+                  )}
+                  {githubAccount.utilities.length > 0 && (
+                    <details className="github-utilities">
+                      <summary>Connected utilities</summary>
+                      <div>
+                        {githubAccount.utilities.map((utility) => (
+                          <span className={`github-utility ${utility.status}`} key={utility.id} title={utility.summary}>
+                            <strong>{utility.label}</strong>
+                            <em>{utility.status.replace(/_/g, " ")}</em>
+                          </span>
+                        ))}
+                      </div>
+                    </details>
                   )}
                 </div>
 
