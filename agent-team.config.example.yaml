@@ -1,0 +1,40 @@
+repo:
+  owner: your-org
+  name: your-repo
+  defaultBranch: main
+  localPath: C:\path\to\your\repo
+commands:
+  install: npm install
+  lint: npm run lint
+  typecheck: npm run typecheck
+  test: npm test
+  build: npm run build
+  security: npm audit --audit-level=high
+  release: gh workflow run release.yml --ref main
+release:
+  mode: autonomous
+  githubActionsRequired: true
+  requireLocalRemoteSync: true
+  requireCleanWorktree: true
+  allowedRisk:
+    low: autonomous
+    medium: autonomous_with_all_gates
+    high: autonomous_with_all_gates
+  emergencyStopFile: .agent-team/emergency-stop
+scheduler:
+  # chatgpt_pro_assisted is optimized for ChatGPT Pro + Codex usage: fully autonomous,
+  # continuous, event-driven, and parallel where the workflow is logically safe.
+  # Use api_live only when you have separate OpenAI API billing configured.
+  mode: chatgpt_pro_assisted
+  continuous: true
+  pollIntervalSeconds: 60
+  maxConcurrentWorkflows: 3
+  maxConcurrentAgentRuns: 5
+  maxConcurrentRepoWrites: 1
+  cooldownSecondsAfterFailure: 300
+  preferCodexForCodingWork: true
+  requireEventTrigger: true
+  parallelDiscovery: true
+  parallelFrontendBackend: true
+  parallelVerificationPlanning: true
+  allowParallelWorkItemsWhenDisjoint: true

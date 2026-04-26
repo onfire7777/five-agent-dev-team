@@ -1,0 +1,82 @@
+import { z } from "zod";
+import type { WorkItem } from "./schemas";
+
+export const AgentExecutionModeSchema = z.enum(["chatgpt_pro_assisted", "api_live", "dry_run"]);
+export type AgentExecutionMode = z.infer<typeof AgentExecutionModeSchema>;
+
+export const SchedulerPolicySchema = z.object({
+  mode: AgentExecutionModeSchema.default("chatgpt_pro_assisted"),
+  continuous: z.boolean().default(true),
+  pollIntervalSeconds: z.number().int().positive().default(60),
+  maxConcurrentWorkflows: z.number().int().positive().default(3),
+  maxConcurrentAgentRuns: z.number().int().positive().default(5),
+  maxConcurrentRepoWrites: z.number().int().positive().default(1),
+  cooldownSecondsAfterFailure: z.number().int().positive().default(300),
+  preferCodexForCodingWork: z.boolean().default(true),
+  requireEventTrigger: z.boolean().default(true),
+  parallelDiscovery: z.boolean().default(true),
+  parallelFrontendBackend: z.boolean().default(true),
+  parallelVerificationPlanning: z.boolean().default(true),
+  allowParallelWorkItemsWhenDisjoint: z.boolean().default(true)
+});
+
+export type SchedulerPolicy = z.infer<typeof SchedulerPolicySchema>;
+
+export const DEFAULT_SCHEDULER_POLICY: SchedulerPolicy = {
+  mode: "chatgpt_pro_assisted",
+  continuous: true,
+  pollIntervalSeconds: 60,
+  maxConcurrentWorkflows: 3,
+  maxConcurrentAgentRuns: 5,
+  maxConcurrentRepoWrites: 1,
+  cooldownSecondsAfterFailure: 300,
+  preferCodexForCodingWork: true,
+  requireEventTrigger: true,
+  parallelDiscovery: true,
+  parallelFrontendBackend: true,
+  parallelVerificationPlanning: true,
+  allowParallelWorkItemsWhenDisjoint: true
+};
+
+export function getPriorityScore(workItem: WorkItem): number {
+  const priority = { urgent: 100, high: 75, medium: 45, low: 20 }[workItem.priority];
+  const riskDrag = { high: -10, medium: 0, low: 5 }[workItem.riskLevel];
+  const blockedBoost = workItem.state === "BLOCKED" ? -100 : 0;
+  return priority + riskDrag + blockedBoost;
+}
+
+export function selectNextWorkItem(workItems: WorkItem[], policy: SchedulerPolicy): WorkItem | null {
+  if (!policy.continuous) return null;
+  const candidates = workItems.filter((item) => !["CLOSED", "BLOCKED"].includes(item.state));
+  if (candidates.length === 0) return null;
+  return [...candidates].sort((a, b) => getPriorityScore(b) - getPriorityScore(a))[0] ?? null;
+}
+
+export function selectParallelWorkItems(workItems: WorkItem[], policy: SchedulerPolicy, activeIds: Set<string>): WorkItem[] {
+  if (!policy.continuous) return [];
+  const capacity = Math.max(0, policy.maxConcurrentWorkflows - activeIds.size);
+  if (capacity === 0) return [];
+  return workItems
+    .filter((item) => !activeIds.has(item.id))
+    .filter((item) => !["CLOSED", "BLOCKED"].includes(item.state))
+    .sort((a, b) => getPriorityScore(b) - getPriorityScore(a))
+    .slice(0, policy.allowParallelWorkItemsWhenDisjoint ? capacity : 1);
+}
+
+export function getSafeParallelStages(workItem: WorkItem): string[] {
+  const stages = ["INTAKE"];
+  if (workItem.rndNeeded) stages.push("RND");
+  if (workItem.frontendNeeded && workItem.backendNeeded) {
+    stages.push("FRONTEND_BUILD+BACKEND_BUILD");
+  } else if (workItem.frontendNeeded) {
+    stages.push("FRONTEND_BUILD");
+  } else if (workItem.backendNeeded) {
+    stages.push("BACKEND_BUILD");
+  }
+  stages.push("VERIFY_PREP", "RELEASE_GATE");
+  return stages;
+}
+
+export function shouldUseLiveApi(policy: SchedulerPolicy): boolean {
+  return policy.mode === "api_live";
+}

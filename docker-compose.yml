@@ -1,0 +1,82 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: agent_team
+      POSTGRES_USER: agent_team
+      POSTGRES_PASSWORD: agent_team
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent_team -d agent_team"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  temporal:
+    image: temporalio/auto-setup:1.25
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB: postgresql
+      DB_PORT: 5432
+      POSTGRES_USER: agent_team
+      POSTGRES_PWD: agent_team
+      POSTGRES_SEEDS: postgres
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
+    ports:
+      - "7233:7233"
+
+  controller:
+    build: .
+    command: npm run dev:controller
+    depends_on:
+      postgres:
+        condition: service_healthy
+      temporal:
+        condition: service_started
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://agent_team:agent_team@postgres:5432/agent_team
+      TEMPORAL_ADDRESS: temporal:7233
+    ports:
+      - "4310:4310"
+    volumes:
+      - .:/app
+      - /app/node_modules
+
+  worker:
+    build: .
+    command: npm run dev:worker
+    depends_on:
+      controller:
+        condition: service_started
+      temporal:
+        condition: service_started
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://agent_team:agent_team@postgres:5432/agent_team
+      TEMPORAL_ADDRESS: temporal:7233
+    volumes:
+      - .:/app
+      - /app/node_modules
+
+  dashboard:
+    build: .
+    command: npm run dev:dashboard
+    depends_on:
+      controller:
+        condition: service_started
+    environment:
+      VITE_API_BASE_URL: http://localhost:4310
+    ports:
+      - "5173:5173"
+    volumes:
+      - .:/app
+      - /app/node_modules
+
+volumes:
+  postgres-data:
