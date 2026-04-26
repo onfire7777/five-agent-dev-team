@@ -91,12 +91,43 @@ describe("github auth helpers", () => {
       PATH: "x",
       GH_TOKEN: "dashboard-token",
       GITHUB_TOKEN: "dashboard-token",
-      GITHUB_PERSONAL_ACCESS_TOKEN: "dashboard-token"
+      GITHUB_PERSONAL_ACCESS_TOKEN: "dashboard-token",
+      GIT_TERMINAL_PROMPT: "0",
+      GIT_CONFIG_COUNT: "3",
+      GIT_CONFIG_KEY_0: "credential.https://github.com.username",
+      GIT_CONFIG_VALUE_0: "x-access-token",
+      GIT_CONFIG_KEY_1: "credential.https://github.com.helper",
+      GIT_CONFIG_VALUE_1: "!f() { echo username=x-access-token; echo password=$GH_TOKEN; }; f",
+      GIT_CONFIG_KEY_2: "credential.useHttpPath",
+      GIT_CONFIG_VALUE_2: "true"
     });
     expect(githubAuthEnv({ GH_TOKEN: "explicit" } as NodeJS.ProcessEnv)).toMatchObject({
       GH_TOKEN: "explicit",
       GITHUB_TOKEN: "dashboard-token",
-      GITHUB_PERSONAL_ACCESS_TOKEN: "dashboard-token"
+      GITHUB_PERSONAL_ACCESS_TOKEN: "dashboard-token",
+      GIT_CONFIG_COUNT: "3"
+    });
+  });
+
+  it("appends git credential config without clobbering existing git config env", async () => {
+    await writeStoredGitHubAuth({
+      accessToken: "dashboard-token",
+      scope: "repo",
+      login: "octo"
+    });
+
+    expect(githubAuthEnv({
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "safe.directory",
+      GIT_CONFIG_VALUE_0: "*"
+    } as NodeJS.ProcessEnv)).toMatchObject({
+      GIT_CONFIG_COUNT: "4",
+      GIT_CONFIG_KEY_0: "safe.directory",
+      GIT_CONFIG_VALUE_0: "*",
+      GIT_CONFIG_KEY_1: "credential.https://github.com.username",
+      GIT_CONFIG_VALUE_1: "x-access-token",
+      GIT_CONFIG_KEY_2: "credential.https://github.com.helper",
+      GIT_CONFIG_KEY_3: "credential.useHttpPath"
     });
   });
 });

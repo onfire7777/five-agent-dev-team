@@ -81,10 +81,31 @@ export function githubToken(): string {
 export function githubAuthEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const token = githubToken();
   if (!token) return { ...base };
-  return {
+  return withGitCredentialEnv({
     ...base,
     GH_TOKEN: base.GH_TOKEN || token,
     GITHUB_TOKEN: base.GITHUB_TOKEN || token,
     GITHUB_PERSONAL_ACCESS_TOKEN: base.GITHUB_PERSONAL_ACCESS_TOKEN || token
+  });
+}
+
+function withGitCredentialEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const existingCount = Number(env.GIT_CONFIG_COUNT || 0);
+  const start = Number.isInteger(existingCount) && existingCount >= 0 ? existingCount : 0;
+  const entries = [
+    ["credential.https://github.com.username", "x-access-token"],
+    ["credential.https://github.com.helper", "!f() { echo username=x-access-token; echo password=$GH_TOKEN; }; f"],
+    ["credential.useHttpPath", "true"]
+  ] as const;
+  const next: NodeJS.ProcessEnv = {
+    ...env,
+    GIT_TERMINAL_PROMPT: env.GIT_TERMINAL_PROMPT || "0",
+    GIT_CONFIG_COUNT: String(start + entries.length)
   };
+  entries.forEach(([key, value], index) => {
+    const position = start + index;
+    next[`GIT_CONFIG_KEY_${position}`] = key;
+    next[`GIT_CONFIG_VALUE_${position}`] = value;
+  });
+  return next;
 }

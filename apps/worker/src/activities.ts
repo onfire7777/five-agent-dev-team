@@ -483,6 +483,13 @@ export async function runVerification(workItem: WorkItem, previousArtifacts: Sta
   await ensureNotStopped(scopedWorkItem.id, config);
   const checks = await runConfiguredChecks(config, ["install", "lint", "typecheck", "test", "build", "security"]);
   const failedChecks = checks.filter((check) => !check.ok);
+  const rollbackDecision = [
+    "Rollback plan:",
+    "use the pre-release default-branch SHA as the rollback target,",
+    "stop new loops if release verification fails,",
+    "revert or rerun the GitHub release workflow from the last known-good SHA,",
+    "then require local checks, GitHub Actions, and local/remote sync before resuming autonomous work."
+  ].join(" ");
   const artifact = StageArtifactSchema.parse({
     workItemId: scopedWorkItem.id,
     projectId: scopedWorkItem.projectId,
@@ -495,8 +502,15 @@ export async function runVerification(workItem: WorkItem, previousArtifacts: Sta
       ? `Verification failed: ${failedChecks.map((check) => check.name).join(", ")}.`
       : "Acceptance, regression, security, privacy, performance, teammate handoffs, and release gates are ready for autonomous release evaluation.",
     decisions: failedChecks.length
-      ? ["Route required fixes back to the owning implementation agent before release."]
-      : ["Proceed to autonomous release only if local and GitHub gates remain synchronized.", "Use shared context to verify every builder claim against actual release candidate state."],
+      ? [
+        "Route required fixes back to the owning implementation agent before release.",
+        rollbackDecision
+      ]
+      : [
+        "Proceed to autonomous release only if local and GitHub gates remain synchronized.",
+        "Use shared context to verify every builder claim against actual release candidate state.",
+        rollbackDecision
+      ],
     risks: [
       ...previousArtifacts.flatMap((artifact) => artifact.risks),
       ...failedChecks.map((check) => `${check.name} failed: ${check.summary}`)
