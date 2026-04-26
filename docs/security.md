@@ -13,7 +13,7 @@ Current status:
 Operational mitigation:
 
 - Keep Temporal packages current.
-- Re-run `npm audit --audit-level=moderate` before release.
+- CI and the release template block high-or-worse advisories and run a non-blocking moderate audit report so this accepted exception remains visible.
 - Replace or override the dependency only after Temporal publishes a compatible fix or after validating an override against the worker runtime.
 
 ## Code Scanning

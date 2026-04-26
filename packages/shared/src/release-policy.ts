@@ -4,21 +4,24 @@ export function evaluateReleasePolicy(config: TargetRepoConfig, signal: Verifica
   const requiredFixes: string[] = [];
   const reasons: string[] = [];
 
+  const riskMode = config.release.allowedRisk[signal.riskLevel];
+  const requireEveryAutomatedGate = riskMode === "autonomous_with_all_gates";
+
   if (signal.emergencyStopActive) requiredFixes.push("Emergency stop is active.");
   if (!signal.localChecksPassed) requiredFixes.push("Local checks have not passed.");
-  if (config.release.githubActionsRequired && !signal.githubActionsPassed) {
+  if ((config.release.githubActionsRequired || requireEveryAutomatedGate) && !signal.githubActionsPassed) {
     requiredFixes.push("Required GitHub Actions checks have not passed.");
   }
-  if (config.release.requireCleanWorktree && !signal.cleanWorktree) {
+  if ((config.release.requireCleanWorktree || requireEveryAutomatedGate) && !signal.cleanWorktree) {
     requiredFixes.push("Target repository worktree is not clean.");
   }
-  if (config.release.requireLocalRemoteSync && !signal.localRemoteSynced) {
+  if ((config.release.requireLocalRemoteSync || requireEveryAutomatedGate) && !signal.localRemoteSynced) {
     requiredFixes.push("Local and remote branches are not synchronized.");
   }
   if (!signal.secretScanPassed) requiredFixes.push("Secret scan failed.");
   if (!signal.rollbackPlanPresent) requiredFixes.push("Rollback plan is missing.");
+  if (!signal.releaseProofPresent) requiredFixes.push("Release proof is missing.");
 
-  const riskMode = config.release.allowedRisk[signal.riskLevel];
   if (riskMode === "manual") {
     requiredFixes.push(`Risk level ${signal.riskLevel} is configured for manual release only.`);
   }
@@ -38,4 +41,3 @@ export function evaluateReleasePolicy(config: TargetRepoConfig, signal: Verifica
     requiredFixes
   };
 }
-

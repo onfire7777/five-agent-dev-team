@@ -3,7 +3,7 @@ import cors from "cors";
 import express from "express";
 import { z } from "zod";
 import { createStore } from "./store";
-import { startAutonomousWorkflow } from "./temporal";
+import { checkTemporalConnection, startAutonomousWorkflow } from "./temporal";
 import { startSmartScheduler } from "./scheduler";
 
 const CreateWorkItemRequest = z.object({
@@ -21,11 +21,32 @@ const app = express();
 const store = createStore();
 const port = Number(process.env.PORT || 4310);
 
+class HttpError extends Error {
+  constructor(message: string, public statusCode: number) {
+    super(message);
+  }
+}
+
 app.use(cors());
 app.use(express.json());
 
-app.get("/health", (_req, res) => {
-  res.json({ ok: true, service: "agent-team-controller" });
+app.get("/health", async (_req, res) => {
+  try {
+    await store.getStatus();
+    await checkTemporalConnection();
+    res.json({
+      ok: true,
+      service: "agent-team-controller",
+      postgres: "ok",
+      temporal: process.env.TEMPORAL_ADDRESS ? "ok" : "not_configured"
+    });
+  } catch (error) {
+    res.status(503).json({
+      ok: false,
+      service: "agent-team-controller",
+      error: error instanceof Error ? error.message : "health check failed"
+    });
+  }
 });
 
 app.get("/api/status", async (_req, res, next) => {
@@ -44,12 +65,42 @@ app.get("/api/work-items", async (_req, res, next) => {
   }
 });
 
+app.get("/api/memories", async (req, res, next) => {
+  try {
+    const workItemId = typeof req.query.workItemId === "string" ? req.query.workItemId : undefined;
+    res.json(await store.listMemories(workItemId));
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/work-items", async (req, res, next) => {
   try {
     const input = CreateWorkItemRequest.parse(req.body);
     const workItem = await store.createWorkItem(input);
-    const workflowId = await startAutonomousWorkflow(workItem);
-    res.status(201).json({ workItem, workflowId });
+    const currentStatus = await store.getStatus();
+    if (currentStatus.system.emergencyStop) {
+      res.status(202).json({
+        workItem,
+        workflowId: null,
+        blocked: true,
+        reason: currentStatus.system.emergencyReason || "Emergency stop is active"
+      });
+      return;
+    }
+
+    const claimed = await store.claimWorkItemForWorkflow(workItem.id);
+    if (!claimed) throw new HttpError(`Work item ${workItem.id} is already claimed by an active workflow.`, 409);
+    const workflowId = claimed ? await startAutonomousWorkflow(workItem) : null;
+    if (workflowId) {
+      await store.updateWorkItemState(workItem.id, "INTAKE");
+    } else {
+      await store.releaseWorkItemWorkflowClaim(workItem.id);
+    }
+    const responseWorkItem = workflowId
+      ? { ...workItem, state: "INTAKE" as const, updatedAt: new Date().toISOString() }
+      : workItem;
+    res.status(201).json({ workItem: responseWorkItem, workflowId });
   } catch (error) {
     next(error);
   }
@@ -75,7 +126,12 @@ app.post("/api/emergency-resume", async (_req, res, next) => {
 
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   const message = error instanceof Error ? error.message : "Unknown error";
-  res.status(400).json({ error: message });
+  if (error instanceof z.ZodError) {
+    res.status(400).json({ error: message });
+    return;
+  }
+  const statusCode = error instanceof HttpError ? error.statusCode : 500;
+  res.status(statusCode).json({ error: message });
 });
 
 store.init().then(() => {

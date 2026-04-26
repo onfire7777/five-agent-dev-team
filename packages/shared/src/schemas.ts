@@ -202,6 +202,7 @@ export const VerificationSignalSchema = z.object({
   localRemoteSynced: z.boolean(),
   secretScanPassed: z.boolean(),
   rollbackPlanPresent: z.boolean(),
+  releaseProofPresent: z.boolean().default(false),
   emergencyStopActive: z.boolean(),
   riskLevel: RiskLevelSchema
 });

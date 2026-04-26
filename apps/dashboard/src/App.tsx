@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -26,12 +26,29 @@ import {
   type LucideIcon
 } from "lucide-react";
 import { createSampleStatus } from "../../../packages/shared/src/sample-data";
+import type { AgentRole, MemoryRecord, StageArtifact } from "../../../packages/shared/src";
 
 type Status = ReturnType<typeof createSampleStatus>;
+type ApiState = {
+  connected: boolean;
+  usingFallback: boolean;
+  lastError: string;
+};
+
+type AgentLane = {
+  icon: LucideIcon;
+  name: string;
+  role: string;
+  status: string;
+  work: string;
+  task: string;
+  progress: number;
+  tone: string;
+};
 
 const API_BASE = "http://localhost:4310";
 
-const agentRows = [
+const fallbackAgentRows: AgentLane[] = [
   {
     icon: SquareKanban,
     name: "Product",
@@ -84,27 +101,201 @@ const agentRows = [
   }
 ];
 
+const roleLanes: Array<Omit<AgentLane, "status" | "work" | "task" | "progress"> & { agentRole: AgentRole }> = [
+  {
+    icon: SquareKanban,
+    name: "Product",
+    role: "Product & Delivery Orchestrator",
+    tone: "blue",
+    agentRole: "product-delivery-orchestrator"
+  },
+  {
+    icon: SearchCheck,
+    name: "R&D",
+    role: "Architecture & Innovation",
+    tone: "teal",
+    agentRole: "rnd-architecture-innovation"
+  },
+  {
+    icon: LayoutDashboard,
+    name: "Frontend",
+    role: "UX & Client Engineering",
+    tone: "indigo",
+    agentRole: "frontend-ux-engineering"
+  },
+  {
+    icon: TerminalSquare,
+    name: "Backend",
+    role: "Systems Engineering",
+    tone: "slate",
+    agentRole: "backend-systems-engineering"
+  },
+  {
+    icon: ShieldCheck,
+    name: "Quality",
+    role: "Security, Privacy & Release",
+    tone: "amber",
+    agentRole: "quality-security-privacy-release"
+  }
+];
+
 const pipelineOrder = [
+  ["NEW", "New"],
   ["INTAKE", "Intake"],
   ["RND", "R&D"],
+  ["CONTRACT", "Contract"],
   ["FRONTEND_BUILD", "Frontend"],
   ["BACKEND_BUILD", "Backend"],
+  ["INTEGRATION", "Integration"],
   ["VERIFY", "Verify"],
-  ["RELEASE", "Release"]
+  ["RELEASE", "Release"],
+  ["CLOSED", "Closed"],
+  ["BLOCKED", "Blocked"]
 ] as const;
 
 export function App() {
   const [status, setStatus] = useState<Status>(() => createSampleStatus());
+  const [apiState, setApiState] = useState<ApiState>({
+    connected: false,
+    usingFallback: true,
+    lastError: "Connecting to controller"
+  });
   const [loading, setLoading] = useState(false);
   const [selectedWorkItem, setSelectedWorkItem] = useState("WI-1290");
+  const [memories, setMemories] = useState<MemoryRecord[]>([]);
+  const [createError, setCreateError] = useState("");
+  const [workDraft, setWorkDraft] = useState({
+    title: "",
+    acceptanceCriteria: "",
+    requestType: "feature",
+    priority: "medium",
+    riskLevel: "medium",
+    frontendNeeded: true,
+    backendNeeded: true,
+    rndNeeded: true
+  });
 
-  async function loadStatus() {
+  async function loadStatus(): Promise<boolean> {
     try {
       const response = await fetch(`${API_BASE}/api/status`);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       setStatus(await response.json());
+      setApiState({ connected: true, usingFallback: false, lastError: "" });
+      try {
+        await loadMemories();
+      } catch {
+        setMemories([]);
+      }
+      return true;
+    } catch (error) {
+      setApiState({
+        connected: false,
+        usingFallback: true,
+        lastError: error instanceof Error ? error.message : "Controller unavailable"
+      });
+      return false;
+    }
+  }
+
+  async function loadMemories(workItemId?: string) {
+    const url = new URL(`${API_BASE}/api/memories`);
+    if (workItemId) url.searchParams.set("workItemId", workItemId);
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    setMemories(await response.json());
+  }
+
+  async function postControl(path: string, body?: unknown) {
+    const response = await fetch(`${API_BASE}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return response.json();
+  }
+
+  async function createWorkItem(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setCreateError("");
+    if (!workDraft.title.trim()) {
+      setCreateError("Title is required.");
+      return;
+    }
+    setLoading(true);
+    try {
+      const response = await postControl("/api/work-items", {
+        title: workDraft.title.trim(),
+        requestType: workDraft.requestType,
+        priority: workDraft.priority,
+        riskLevel: workDraft.riskLevel,
+        frontendNeeded: workDraft.frontendNeeded,
+        backendNeeded: workDraft.backendNeeded,
+        rndNeeded: workDraft.rndNeeded,
+        acceptanceCriteria: workDraft.acceptanceCriteria
+          .split(/\r?\n|;/)
+          .map((item) => item.trim())
+          .filter(Boolean)
+      });
+      setSelectedWorkItem(response.workItem.id);
+      setWorkDraft((draft) => ({ ...draft, title: "", acceptanceCriteria: "" }));
+      await loadStatus();
+      if (response.blocked) setCreateError(response.reason || "Work item queued while emergency stop is active.");
+    } catch (error) {
+      setCreateError(error instanceof Error ? error.message : "Work item creation failed.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function refreshFromButton() {
+    await loadStatus();
+  }
+
+  function systemPresentation() {
+    if (!apiState.connected) {
+      return {
+        label: apiState.usingFallback ? "Demo Data" : "Offline",
+        className: "warning",
+        dot: "amber"
+      };
+    }
+    if (status.system.emergencyStop) {
+      return { label: "Stopped", className: "warning", dot: "amber" };
+    }
+    if (!status.system.operational) {
+      return { label: "Degraded", className: "warning", dot: "amber" };
+    }
+    return { label: "Operational", className: "ok", dot: "green" };
+  }
+
+  const systemState = systemPresentation();
+  const agentRows = useMemo(() => deriveAgentRows(status, apiState.connected), [status, apiState.connected]);
+  const releaseReady = apiState.connected && status.releaseReadiness.status === "ready";
+  const visibleMemories = memories.slice(0, 6);
+  const latestSyncCheck = status.releaseReadiness.checks.find(([label]) => label === "Local/Remote Sync")?.[1] || "Pending release gate";
+
+  function apiNotice() {
+    if (apiState.connected) return "";
+    return apiState.usingFallback
+      ? `Controller connection failed: ${apiState.lastError}. Showing demo or last-known state.`
+      : apiState.lastError;
+  }
+
+  async function toggleEmergencyStop() {
+    setLoading(true);
+    try {
+      const path = status.system.emergencyStop ? "/api/emergency-resume" : "/api/emergency-stop";
+      await postControl(path, { reason: "Operator dashboard stop" });
+      await loadStatus();
     } catch {
-      setStatus(createSampleStatus());
+      setApiState({
+        connected: false,
+        usingFallback: true,
+        lastError: "Emergency control request failed"
+      });
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -113,21 +304,6 @@ export function App() {
     const timer = window.setInterval(loadStatus, 10000);
     return () => window.clearInterval(timer);
   }, []);
-
-  async function toggleEmergencyStop() {
-    setLoading(true);
-    try {
-      const path = status.system.emergencyStop ? "/api/emergency-resume" : "/api/emergency-stop";
-      await fetch(`${API_BASE}${path}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reason: "Operator dashboard stop" })
-      });
-      await loadStatus();
-    } finally {
-      setLoading(false);
-    }
-  }
 
   const selected = useMemo(
     () => status.workItems.find((item) => item.id === selectedWorkItem) || status.workItems[0],
@@ -176,8 +352,8 @@ export function App() {
 
         <div className="environment">
           <span>Environment</span>
-          <strong><span className="dot green" /> Production</strong>
-          <small>Controller v0.1.0</small>
+          <strong><span className={`dot ${apiState.connected ? "green" : "amber"}`} /> {apiState.connected ? "Local Runtime" : "Disconnected"}</strong>
+          <small>{apiState.usingFallback ? "Demo or last-known state" : "Controller v0.1.0"}</small>
         </div>
       </aside>
 
@@ -192,20 +368,88 @@ export function App() {
             <Metric icon={Cloud} label="Queue" value={String(status.system.queueDepth)} />
             <Metric icon={Bot} label="Agents" value={`${status.system.agentsOnline}/${status.system.agentsTotal}`} />
             <Metric icon={PauseCircle} label="Mode" value={status.system.executionMode} />
-            <Metric icon={GitBranch} label="GitHub" value={status.system.githubSync} ok />
+            <Metric icon={GitBranch} label="GitHub" value={apiState.connected ? status.system.githubSync : "unknown"} ok={apiState.connected} />
           </div>
         </header>
 
         <section className="hero-band">
           <div>
-            <span className="status-chip"><span className="dot green" /> Operational</span>
+            <span className={`status-chip ${systemState.className}`}><span className={`dot ${systemState.dot}`} /> {systemState.label}</span>
             <h2>Fully autonomous team, parallel where it is safe.</h2>
             <p>Designed for ChatGPT Pro plus Codex-style usage: event-triggered stages, controlled parallelism, cooldowns, and release autonomy when local checks, GitHub Actions, security, privacy, rollback, and sync gates are provably clean.</p>
+            {status.system.emergencyReason && <p className="api-notice">{status.system.emergencyReason}</p>}
+            {apiNotice() && <p className="api-notice">{apiNotice()}</p>}
           </div>
-          <button className="primary-action" onClick={loadStatus}>
+          <button className="primary-action" onClick={refreshFromButton}>
             <RefreshCw size={16} />
             Refresh State
           </button>
+        </section>
+
+        <section className="intake-band" aria-labelledby="intake-title">
+          <div className="section-head">
+            <h3 id="intake-title">New Work Item</h3>
+            <span className="subtle-label">Continuous queue intake</span>
+          </div>
+          <form className="intake-form" onSubmit={createWorkItem}>
+            <label className="field wide">
+              <span>Title</span>
+              <input
+                value={workDraft.title}
+                onChange={(event) => setWorkDraft((draft) => ({ ...draft, title: event.target.value }))}
+                placeholder="Add billing retry safeguards"
+              />
+            </label>
+            <label className="field wide">
+              <span>Acceptance Criteria</span>
+              <textarea
+                value={workDraft.acceptanceCriteria}
+                onChange={(event) => setWorkDraft((draft) => ({ ...draft, acceptanceCriteria: event.target.value }))}
+                placeholder="One criterion per line"
+              />
+            </label>
+            <div className="intake-controls">
+              <label className="field">
+                <span>Type</span>
+                <select value={workDraft.requestType} onChange={(event) => setWorkDraft((draft) => ({ ...draft, requestType: event.target.value }))}>
+                  {["feature", "bug", "performance", "security", "privacy", "refactor", "research"].map((option) => <option key={option}>{option}</option>)}
+                </select>
+              </label>
+              <label className="field">
+                <span>Priority</span>
+                <select value={workDraft.priority} onChange={(event) => setWorkDraft((draft) => ({ ...draft, priority: event.target.value }))}>
+                  {["low", "medium", "high", "urgent"].map((option) => <option key={option}>{option}</option>)}
+                </select>
+              </label>
+              <label className="field">
+                <span>Risk</span>
+                <select value={workDraft.riskLevel} onChange={(event) => setWorkDraft((draft) => ({ ...draft, riskLevel: event.target.value }))}>
+                  {["low", "medium", "high"].map((option) => <option key={option}>{option}</option>)}
+                </select>
+              </label>
+              <div className="toggle-group" aria-label="Routing">
+                {[
+                  ["frontendNeeded", "Frontend"],
+                  ["backendNeeded", "Backend"],
+                  ["rndNeeded", "R&D"]
+                ].map(([key, label]) => (
+                  <label className="toggle" key={key}>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(workDraft[key as "frontendNeeded" | "backendNeeded" | "rndNeeded"])}
+                      onChange={(event) => setWorkDraft((draft) => ({ ...draft, [key]: event.target.checked }))}
+                    />
+                    <span>{label}</span>
+                  </label>
+                ))}
+              </div>
+              <button className="primary-action" type="submit" disabled={loading || !apiState.connected}>
+                <PlayCircle size={16} />
+                Start Loop
+              </button>
+            </div>
+          </form>
+          {createError && <p className="api-notice">{createError}</p>}
         </section>
 
         <section className="pipeline" aria-labelledby="pipeline-title">
@@ -247,8 +491,8 @@ export function App() {
                     <strong>{agent.work}</strong>
                     <small>{agent.task}</small>
                   </span>
-                  <span className={agent.status === "Blocked" ? "status warn" : "status ok"}>
-                    <span className={`dot ${agent.status === "Blocked" ? "amber" : "green"}`} />
+                  <span className={agent.status === "Blocked" ? "status warn" : agent.status === "Idle" ? "status muted" : "status ok"}>
+                    <span className={`dot ${agent.status === "Blocked" ? "amber" : agent.status === "Idle" ? "slate" : "green"}`} />
                     {agent.status}
                   </span>
                   <span className="progress-cell">
@@ -277,10 +521,26 @@ export function App() {
               </div>
             </section>
 
+            <section className="sync-card">
+              <div className="section-head compact">
+                <h3>Permanent Memory</h3>
+                <Activity size={18} />
+              </div>
+              <div className="memory-list">
+                {visibleMemories.length ? visibleMemories.map((memory) => (
+                  <div key={memory.id}>
+                    <strong>{memory.title}</strong>
+                    <span>{memory.kind} · {memory.permanence}</span>
+                    <p>{memory.content}</p>
+                  </div>
+                )) : <p className="empty-note">No persisted memories yet.</p>}
+              </div>
+            </section>
+
             <section className="readiness">
               <div className="release-icon"><Check size={22} /></div>
-              <h3>Ready for Release</h3>
-              <p>All configured autonomous gates are currently passing.</p>
+              <h3>{releaseReady ? "Ready for Release" : "Release Gate"}</h3>
+              <p>{releaseReady ? "All configured autonomous gates are currently passing." : `${status.releaseReadiness.target} is ${status.releaseReadiness.status}.`}</p>
               <div className="check-list">
                 {status.releaseReadiness.checks.map(([label, value]) => (
                   <div key={label}>
@@ -298,9 +558,9 @@ export function App() {
               </div>
               <dl>
                 <div><dt>Repository</dt><dd>configured target</dd></div>
-                <div><dt>Default Branch</dt><dd>main</dd></div>
-                <div><dt>Sync Status</dt><dd><span className="dot green" /> Synced</dd></div>
-                <div><dt>Behind / Ahead</dt><dd>0 / 0</dd></div>
+                <div><dt>Default Branch</dt><dd>from policy file</dd></div>
+                <div><dt>Sync Status</dt><dd>{status.system.githubSync}</dd></div>
+                <div><dt>Latest Proof</dt><dd>{latestSyncCheck}</dd></div>
               </dl>
             </section>
 
@@ -325,7 +585,8 @@ export function App() {
           <section className="work-detail">
             <div className="section-head">
               <h3>Selected Work Item</h3>
-              <select value={selected?.id} onChange={(event) => setSelectedWorkItem(event.target.value)}>
+              <select value={selected?.id || ""} onChange={(event) => setSelectedWorkItem(event.target.value)} disabled={!status.workItems.length}>
+                {!status.workItems.length && <option>No work items</option>}
                 {status.workItems.map((item) => <option key={item.id}>{item.id}</option>)}
               </select>
             </div>
@@ -377,14 +638,50 @@ function Metric({ icon: Icon, label, value, ok }: { icon: LucideIcon; label: str
   );
 }
 
+function deriveAgentRows(status: Status, connected: boolean): AgentLane[] {
+  if (!connected) return fallbackAgentRows;
+  return roleLanes.map((lane) => {
+    const latestArtifact = status.artifacts.find((artifact) => artifact.ownerAgent === lane.agentRole);
+    const workItem = latestArtifact ? status.workItems.find((item) => item.id === latestArtifact.workItemId) : undefined;
+    const agentStatus = statusForAgent(latestArtifact, workItem?.state);
+    return {
+      icon: lane.icon,
+      name: lane.name,
+      role: lane.role,
+      tone: lane.tone,
+      status: agentStatus,
+      work: latestArtifact?.workItemId || "-",
+      task: latestArtifact?.summary || "Waiting for routed work",
+      progress: latestArtifact ? progressForStage(latestArtifact.stage) : 0
+    };
+  });
+}
+
+function statusForAgent(artifact: StageArtifact | undefined, state?: string): string {
+  if (!artifact) return "Idle";
+  if (artifact.status === "blocked" || artifact.status === "failed" || state === "BLOCKED") return "Blocked";
+  if (state === "CLOSED") return "Complete";
+  return "Active";
+}
+
+function progressForStage(stage: string): number {
+  const index = pipelineOrder.findIndex(([key]) => key === stage);
+  return index === -1 ? 0 : Math.round(((index + 1) / pipelineOrder.length) * 100);
+}
+
 function describeStage(stage: string) {
   const descriptions: Record<string, string> = {
+    NEW: "queued request",
     INTAKE: "scope and route",
     RND: "research and contract",
+    CONTRACT: "interface lock",
     FRONTEND_BUILD: "client work",
     BACKEND_BUILD: "system work",
+    INTEGRATION: "branch merge",
     VERIFY: "quality gates",
-    RELEASE: "merge and publish"
+    RELEASE: "merge and publish",
+    CLOSED: "loop complete",
+    BLOCKED: "needs fix"
   };
   return descriptions[stage] || "workflow";
 }

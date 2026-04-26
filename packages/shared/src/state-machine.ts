@@ -13,6 +13,11 @@ export const WORKFLOW_SEQUENCE: WorkItemState[] = [
   "CLOSED"
 ];
 
+export const ALL_WORK_ITEM_STATES: WorkItemState[] = [
+  ...WORKFLOW_SEQUENCE,
+  "BLOCKED"
+];
+
 const transitions: Record<WorkItemState, WorkItemState[]> = {
   NEW: ["INTAKE", "BLOCKED"],
   INTAKE: ["RND", "CONTRACT", "VERIFY", "BLOCKED"],
@@ -40,4 +45,3 @@ export function assertTransition(from: WorkItemState, to: WorkItemState): void {
     throw new Error(`Invalid work-item transition from ${from} to ${to}`);
   }
 }
-

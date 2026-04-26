@@ -17,6 +17,10 @@ export function createSchedulerPolicy(): SchedulerPolicy {
 export function startSmartScheduler(store: ControllerStore): NodeJS.Timeout | null {
   const policy = createSchedulerPolicy();
   if (!policy.continuous) return null;
+  if (!process.env.TEMPORAL_ADDRESS) {
+    console.log("Smart scheduler idle: TEMPORAL_ADDRESS is not configured.");
+    return null;
+  }
 
   const activeIds = new Set<string>();
 
@@ -24,11 +28,22 @@ export function startSmartScheduler(store: ControllerStore): NodeJS.Timeout | nu
     const status = await store.getStatus();
     if (status.system.emergencyStop) return;
 
-    const nextItems = selectParallelWorkItems(status.workItems, policy, activeIds);
+    const queuedItems = status.workItems.filter((item) => item.state === "NEW");
+    const nextItems = selectParallelWorkItems(queuedItems, policy, activeIds);
     await Promise.all(nextItems.map(async (next) => {
+      const claimed = await store.claimWorkItemForWorkflow(next.id);
+      if (!claimed) return;
       activeIds.add(next.id);
       try {
-        await startAutonomousWorkflow(next);
+        const workflowId = await startAutonomousWorkflow(next);
+        if (workflowId) {
+          await store.updateWorkItemState(next.id, "INTAKE");
+        } else {
+          await store.releaseWorkItemWorkflowClaim(next.id);
+        }
+      } catch (error) {
+        await store.releaseWorkItemWorkflowClaim(next.id);
+        throw error;
       } finally {
         activeIds.delete(next.id);
       }

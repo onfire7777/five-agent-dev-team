@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: agent_team
       POSTGRES_USER: agent_team
@@ -17,66 +18,98 @@ services:
 
   temporal:
     image: temporalio/auto-setup:1.25
+    restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
     environment:
-      DB: postgresql
+      DB: postgres12
       DB_PORT: 5432
       POSTGRES_USER: agent_team
       POSTGRES_PWD: agent_team
       POSTGRES_SEEDS: postgres
-      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/docker.yaml
     ports:
       - "7233:7233"
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "temporal:7233"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
   controller:
     build: .
+    restart: unless-stopped
     command: npm run dev:controller
     depends_on:
       postgres:
         condition: service_healthy
       temporal:
-        condition: service_started
-    env_file: .env
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
     environment:
       DATABASE_URL: postgres://agent_team:agent_team@postgres:5432/agent_team
       TEMPORAL_ADDRESS: temporal:7233
     ports:
-      - "4310:4310"
+      - "${CONTROLLER_PORT:-4310}:4310"
     volumes:
       - .:/app
-      - /app/node_modules
+      - node-modules:/app/node_modules
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:4310/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
   worker:
     build: .
+    restart: unless-stopped
     command: npm run dev:worker
     depends_on:
       controller:
-        condition: service_started
+        condition: service_healthy
       temporal:
-        condition: service_started
-    env_file: .env
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
     environment:
       DATABASE_URL: postgres://agent_team:agent_team@postgres:5432/agent_team
       TEMPORAL_ADDRESS: temporal:7233
     volumes:
       - .:/app
-      - /app/node_modules
+      - node-modules:/app/node_modules
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/agent-team-worker-ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
   dashboard:
     build: .
+    restart: unless-stopped
     command: npm run dev:dashboard
     depends_on:
       controller:
-        condition: service_started
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
     environment:
       VITE_API_BASE_URL: http://localhost:4310
     ports:
-      - "5173:5173"
+      - "${DASHBOARD_PORT:-5173}:5173"
     volumes:
       - .:/app
-      - /app/node_modules
+      - node-modules:/app/node_modules
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:5173').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
 volumes:
   postgres-data:
+  node-modules:

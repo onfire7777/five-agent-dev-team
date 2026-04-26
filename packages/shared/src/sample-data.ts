@@ -96,6 +96,7 @@ export function createSampleStatus() {
       githubSync: "synced",
       systemLoad: 32,
       executionMode: "ChatGPT Pro assisted",
+      emergencyReason: "",
       scheduler: {
         continuous: true,
         pollIntervalSeconds: 60,
@@ -108,10 +109,13 @@ export function createSampleStatus() {
       }
     },
     pipeline: {
+      NEW: 1,
       INTAKE: 3,
       RND: 2,
+      CONTRACT: 1,
       FRONTEND_BUILD: 2,
       BACKEND_BUILD: 2,
+      INTEGRATION: 1,
       VERIFY: 2,
       RELEASE: 1,
       CLOSED: 8,

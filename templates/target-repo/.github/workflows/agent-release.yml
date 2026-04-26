@@ -1,7 +1,6 @@
 name: Agent Release
 
 on:
-  workflow_dispatch:
   push:
     tags:
       - "v*"
@@ -26,6 +25,8 @@ jobs:
       - run: npm test --if-present
       - run: npm run build --if-present
       - run: npm audit --audit-level=high
+      - name: Moderate dependency audit report
+        run: npm audit --audit-level=moderate || echo "::warning::Review any accepted moderate advisory before autonomous release."
 
   release:
     needs: verify

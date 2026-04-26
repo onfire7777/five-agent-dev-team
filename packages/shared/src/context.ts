@@ -19,7 +19,7 @@ export function buildSharedContext(workItem: WorkItem, artifacts: StageArtifact[
     updatedAt: artifact.createdAt
   }));
 
-  const researchFindings: ResearchFinding[] = relevant
+  const artifactResearch: ResearchFinding[] = relevant
     .filter((artifact) => artifact.ownerAgent === "rnd-architecture-innovation")
     .map((artifact) => ({
       topic: artifact.title,
@@ -27,6 +27,15 @@ export function buildSharedContext(workItem: WorkItem, artifacts: StageArtifact[
       summary: artifact.summary,
       confidence: artifact.status === "passed" ? "high" : "medium",
       capturedAt: artifact.createdAt
+    }));
+  const memoryResearch: ResearchFinding[] = memories
+    .filter((memory) => memory.kind === "research" || memory.kind === "architecture")
+    .map((memory) => ({
+      topic: memory.title,
+      source: memory.source,
+      summary: memory.content,
+      confidence: memory.confidence,
+      capturedAt: memory.updatedAt
     }));
 
   return SharedContextSchema.parse({
@@ -37,7 +46,7 @@ export function buildSharedContext(workItem: WorkItem, artifacts: StageArtifact[
       .filter((artifact) => artifact.stage === "CONTRACT")
       .flatMap((artifact) => artifact.decisions),
     teammateActivity,
-    researchFindings,
+    researchFindings: [...artifactResearch, ...memoryResearch],
     openQuestions: [],
     decisions: [
       ...relevant.flatMap((artifact) => artifact.decisions),
@@ -74,6 +83,50 @@ export function formatSharedContext(context: SharedContext): string {
 export function memoryFromArtifact(artifact: StageArtifact): MemoryRecord[] {
   const now = new Date().toISOString();
   const records: MemoryRecord[] = [];
+
+  if (artifact.stage === "RND") {
+    records.push(createMemoryRecord(artifact, {
+      id: `${artifact.workItemId}-${artifact.stage}-research`,
+      kind: "research",
+      title: `${artifact.stage} research`,
+      content: artifact.summary,
+      importance: 5,
+      permanence: "permanent"
+    }, now));
+  }
+
+  if (artifact.stage === "RELEASE") {
+    records.push(createMemoryRecord(artifact, {
+      id: `${artifact.workItemId}-${artifact.stage}-release`,
+      kind: "release",
+      title: `${artifact.stage} release decision`,
+      content: artifact.summary,
+      importance: 5,
+      permanence: "permanent"
+    }, now));
+  }
+
+  if (artifact.status === "blocked" || artifact.status === "failed" || artifact.stage === "BLOCKED") {
+    records.push(createMemoryRecord(artifact, {
+      id: `${artifact.workItemId}-${artifact.stage}-failure`,
+      kind: "failure",
+      title: `${artifact.stage} failure or blocker`,
+      content: artifact.summary,
+      importance: 5,
+      permanence: "permanent"
+    }, now));
+  }
+
+  if (artifact.nextStage) {
+    records.push(createMemoryRecord(artifact, {
+      id: `${artifact.workItemId}-${artifact.stage}-handoff`,
+      kind: "handoff",
+      title: `${artifact.stage} handoff`,
+      content: artifact.summary,
+      importance: artifact.stage === "CONTRACT" ? 5 : 3,
+      permanence: "durable"
+    }, now));
+  }
 
   for (const [index, decision] of artifact.decisions.entries()) {
     records.push({
@@ -116,12 +169,36 @@ export function memoryFromArtifact(artifact: StageArtifact): MemoryRecord[] {
   return records;
 }
 
+function createMemoryRecord(
+  artifact: StageArtifact,
+  input: Pick<MemoryRecord, "id" | "kind" | "title" | "content" | "importance" | "permanence">,
+  now: string
+): MemoryRecord {
+  return {
+    id: input.id,
+    scope: "work_item",
+    workItemId: artifact.workItemId,
+    agent: artifact.ownerAgent,
+    kind: input.kind,
+    title: input.title,
+    content: input.content,
+    tags: [artifact.stage, artifact.ownerAgent, input.kind],
+    confidence: artifact.status === "passed" ? "high" : "medium",
+    importance: input.importance,
+    permanence: input.permanence,
+    source: `${artifact.ownerAgent}:${artifact.stage}`,
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
 export function selectRelevantMemories(memories: MemoryRecord[], workItem: WorkItem, limit = 12): MemoryRecord[] {
   const now = Date.now();
   return memories
     .filter((memory) => !memory.expiresAt || Date.parse(memory.expiresAt) > now)
     .filter((memory) =>
       memory.scope === "global" ||
+      memory.scope === "repo" ||
       memory.workItemId === workItem.id ||
       memory.tags.some((tag) => workItem.title.toLowerCase().includes(tag.toLowerCase()))
     )

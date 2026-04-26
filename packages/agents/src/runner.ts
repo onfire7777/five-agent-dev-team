@@ -41,7 +41,7 @@ async function runLiveOpenAIAgent(definition: AgentDefinition, context: AgentRun
 
   const result = await run(agent, buildAgentPrompt(definition, context));
   const rawOutput = String(result?.finalOutput ?? result?.output ?? result ?? "");
-  const artifact = createTemplateArtifact(definition, context, rawOutput);
+  const artifact = parseLiveArtifact(definition, context, rawOutput) || createTemplateArtifact(definition, context, rawOutput);
   return { artifact, rawOutput, live: true };
 }
 
@@ -57,8 +57,46 @@ function buildAgentPrompt(definition: AgentDefinition, context: AgentRunContext)
     "",
     `Acceptance criteria: ${context.workItem.acceptanceCriteria.join("; ") || "Not provided"}`,
     `Previous artifacts: ${context.previousArtifacts.map((artifact) => `${artifact.stage}: ${artifact.summary}`).join(" | ") || "None"}`,
-    "Cooperate with the team: reference teammate activity, preserve prior decisions, update shared risks, and return a concise stage artifact covering decisions, risks, tests, release readiness, and next stage."
+    "Cooperate with the team: reference teammate activity, preserve prior decisions, update shared risks, and return only JSON for one stage artifact.",
+    "The JSON must include title, summary, status, decisions, risks, filesChanged, testsRun, releaseReadiness, and nextStage."
   ].join("\n");
+}
+
+function parseLiveArtifact(
+  definition: AgentDefinition,
+  context: AgentRunContext,
+  rawOutput: string
+): StageArtifact | null {
+  const parsed = parseJsonObject(rawOutput);
+  if (!parsed || typeof parsed !== "object") return null;
+
+  const candidate = {
+    ...(parsed as Record<string, unknown>),
+    workItemId: context.workItem.id,
+    stage: context.stage,
+    ownerAgent: definition.role,
+    createdAt: String((parsed as any).createdAt || new Date().toISOString())
+  };
+
+  const result = StageArtifactSchema.safeParse(candidate);
+  return result.success ? result.data : null;
+}
+
+function parseJsonObject(rawOutput: string): unknown {
+  const fenced = rawOutput.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = fenced?.[1] || rawOutput;
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    const start = candidate.indexOf("{");
+    const end = candidate.lastIndexOf("}");
+    if (start === -1 || end <= start) return null;
+    try {
+      return JSON.parse(candidate.slice(start, end + 1));
+    } catch {
+      return null;
+    }
+  }
 }
 
 function createTemplateArtifact(
@@ -92,7 +130,7 @@ function inferNextStage(stage: WorkItemState, workItem: WorkItem): WorkItemState
   if (stage === "CONTRACT") {
     if (workItem.frontendNeeded) return "FRONTEND_BUILD";
     if (workItem.backendNeeded) return "BACKEND_BUILD";
-    return "VERIFY";
+    return "INTEGRATION";
   }
   if (stage === "FRONTEND_BUILD" && workItem.backendNeeded) return "BACKEND_BUILD";
   if (stage === "BACKEND_BUILD" || stage === "FRONTEND_BUILD") return "INTEGRATION";
@@ -100,15 +138,17 @@ function inferNextStage(stage: WorkItemState, workItem: WorkItem): WorkItemState
   if (stage === "VERIFY") return "RELEASE";
   if (stage === "RELEASE") return "CLOSED";
   if (stage === "CLOSED") return null;
+  if (stage === "BLOCKED") return null;
   return "INTAKE";
 }
 
 function templateSummary(definition: AgentDefinition, context: AgentRunContext): string {
   const teammateCount = context.previousArtifacts.length;
+  const memoryCount = context.memories?.length || 0;
   const criteria = context.workItem.acceptanceCriteria.length
     ? ` Acceptance criteria covered: ${context.workItem.acceptanceCriteria.join("; ")}.`
     : "";
-  return `${definition.displayName} completed ${context.stage} for ${context.workItem.title} with awareness of ${teammateCount} teammate artifact(s).${criteria}`;
+  return `${definition.displayName} completed ${context.stage} for ${context.workItem.title} with awareness of ${teammateCount} teammate artifact(s) and ${memoryCount} durable memory record(s).${criteria}`;
 }
 
 function templateDecisions(definition: AgentDefinition, context: AgentRunContext): string[] {

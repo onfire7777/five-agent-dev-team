@@ -53,6 +53,7 @@ const goodSignal: VerificationSignal = {
   localRemoteSynced: true,
   secretScanPassed: true,
   rollbackPlanPresent: true,
+  releaseProofPresent: true,
   emergencyStopActive: false,
   riskLevel: "high"
 };
@@ -75,5 +76,38 @@ describe("release policy", () => {
     expect(decision.allowed).toBe(false);
     expect(decision.requiredFixes.join(" ")).toContain("GitHub Actions");
     expect(decision.requiredFixes.join(" ")).toContain("synchronized");
+  });
+
+  it("forces every automated gate for all-gates risk mode even if config flags are weakened", () => {
+    const weakenedConfig: TargetRepoConfig = {
+      ...config,
+      release: {
+        ...config.release,
+        githubActionsRequired: false,
+        requireCleanWorktree: false,
+        requireLocalRemoteSync: false
+      }
+    };
+    const decision = evaluateReleasePolicy(weakenedConfig, {
+      ...goodSignal,
+      githubActionsPassed: false,
+      cleanWorktree: false,
+      localRemoteSynced: false
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.requiredFixes.join(" ")).toContain("GitHub Actions");
+    expect(decision.requiredFixes.join(" ")).toContain("worktree");
+    expect(decision.requiredFixes.join(" ")).toContain("synchronized");
+  });
+
+  it("blocks release when release proof is missing", () => {
+    const decision = evaluateReleasePolicy(config, {
+      ...goodSignal,
+      releaseProofPresent: false
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.requiredFixes.join(" ")).toContain("Release proof");
   });
 });

@@ -4,7 +4,7 @@ repo:
   defaultBranch: main
   localPath: C:\path\to\your\repo
 commands:
-  install: npm install
+  install: npm ci
   lint: npm run lint
   typecheck: npm run typecheck
   test: npm test

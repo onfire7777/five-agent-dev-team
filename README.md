@@ -66,6 +66,7 @@ Agents are context-aware through shared artifacts plus permanent memory. R&D dec
 - `GET /health`
 - `GET /api/status`
 - `GET /api/work-items`
+- `GET /api/memories`
 - `POST /api/work-items`
 - `POST /api/emergency-stop`
 - `POST /api/emergency-resume`

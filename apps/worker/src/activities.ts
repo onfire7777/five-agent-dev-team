@@ -1,18 +1,24 @@
 import childProcess from "node:child_process";
+import fs from "node:fs/promises";
 import path from "node:path";
 import util from "node:util";
 import {
   evaluateGitSync,
   evaluateReleasePolicy,
+  loadTargetRepoConfig,
+  selectRelevantMemories,
   StageArtifactSchema,
   type StageArtifact,
   type TargetRepoConfig,
+  type VerificationSignal,
   type WorkItem,
   type WorkItemState
 } from "../../../packages/shared/src";
 import { getAgentDefinition, roleForStage, runRoleAgent } from "../../../packages/agents/src";
+import { createStore, type ControllerStore } from "../../controller/src/store";
 
 const exec = util.promisify(childProcess.exec);
+let storePromise: Promise<ControllerStore> | null = null;
 
 export interface StageInput {
   workItem: WorkItem;
@@ -21,6 +27,12 @@ export interface StageInput {
 }
 
 export async function ensureNotStopped(workItemId: string): Promise<void> {
+  const store = await getActivityStore();
+  const status = await store.getStatus();
+  if (status.system.emergencyStop) {
+    throw new Error(`Emergency stop is active. Work item ${workItemId} cannot continue.`);
+  }
+
   const emergencyStopFile = process.env.EMERGENCY_STOP_FILE || path.resolve(".agent-team", "emergency-stop");
   try {
     await exec(`node -e "require('fs').accessSync(${JSON.stringify(emergencyStopFile)})"`);
@@ -33,16 +45,21 @@ export async function ensureNotStopped(workItemId: string): Promise<void> {
 export async function runAgentStage(input: StageInput): Promise<StageArtifact> {
   const role = roleForStage(input.stage);
   const definition = getAgentDefinition(role);
-  const result = await runRoleAgent(definition, input);
+  const store = await getActivityStore();
+  const memories = selectRelevantMemories(await store.listMemories(input.workItem.id), input.workItem);
+  const result = await runRoleAgent(definition, { ...input, memories });
+  await persistArtifact(result.artifact);
   return result.artifact;
 }
 
 export async function prepareBuildBranches(workItem: WorkItem): Promise<{ branchPrefix: string }> {
-  return { branchPrefix: `agent/${workItem.id.toLowerCase()}` };
+  await ensureNotStopped(workItem.id);
+  return { branchPrefix: automationBranchPrefix(workItem) };
 }
 
 export async function integrateBranches(workItem: WorkItem, previousArtifacts: StageArtifact[]): Promise<StageArtifact> {
-  return StageArtifactSchema.parse({
+  await ensureNotStopped(workItem.id);
+  const artifact = StageArtifactSchema.parse({
     workItemId: workItem.id,
     stage: "INTEGRATION",
     ownerAgent: "backend-systems-engineering",
@@ -57,58 +74,217 @@ export async function integrateBranches(workItem: WorkItem, previousArtifacts: S
     nextStage: "VERIFY",
     createdAt: new Date().toISOString()
   });
+  await persistArtifact(artifact);
+  return artifact;
 }
 
 export async function runVerification(workItem: WorkItem, previousArtifacts: StageArtifact[]): Promise<StageArtifact> {
-  const checks = ["install", "lint", "typecheck", "test", "build", "security"];
+  await ensureNotStopped(workItem.id);
+  const config = loadReleaseConfig();
+  const checks = await runConfiguredChecks(config, ["install", "lint", "typecheck", "test", "build", "security"]);
+  const failedChecks = checks.filter((check) => !check.ok);
+  const artifact = StageArtifactSchema.parse({
+    workItemId: workItem.id,
+    stage: "VERIFY",
+    ownerAgent: "quality-security-privacy-release",
+    status: failedChecks.length ? "failed" : "passed",
+    title: "Verification complete",
+    summary: failedChecks.length
+      ? `Verification failed: ${failedChecks.map((check) => check.name).join(", ")}.`
+      : "Acceptance, regression, security, privacy, performance, teammate handoffs, and release gates are ready for autonomous release evaluation.",
+    decisions: failedChecks.length
+      ? ["Route required fixes back to the owning implementation agent before release."]
+      : ["Proceed to autonomous release only if local and GitHub gates remain synchronized.", "Use shared context to verify every builder claim against actual release candidate state."],
+    risks: [
+      ...previousArtifacts.flatMap((artifact) => artifact.risks),
+      ...failedChecks.map((check) => `${check.name} failed: ${check.summary}`)
+    ],
+    filesChanged: previousArtifacts.flatMap((artifact) => artifact.filesChanged),
+    testsRun: checks.map((check) => `${check.name}:${check.ok ? "passed" : "failed"}`),
+    releaseReadiness: failedChecks.length ? "not_ready" : "ready",
+    nextStage: failedChecks.length ? "BLOCKED" : "RELEASE",
+    createdAt: new Date().toISOString()
+  });
+  await persistArtifact(artifact);
+  return artifact;
+}
+
+export async function planVerification(workItem: WorkItem, previousArtifacts: StageArtifact[]): Promise<StageArtifact> {
+  await ensureNotStopped(workItem.id);
   return StageArtifactSchema.parse({
     workItemId: workItem.id,
     stage: "VERIFY",
     ownerAgent: "quality-security-privacy-release",
-    status: "passed",
-    title: "Verification complete",
-    summary: "Acceptance, regression, security, privacy, performance, teammate handoffs, and release gates are ready for autonomous release evaluation.",
-    decisions: ["Proceed to autonomous release only if local and GitHub gates remain synchronized.", "Use shared context to verify every builder claim against actual release candidate state."],
+    status: "pending",
+    title: "Verification plan",
+    summary: "Quality prepared acceptance, regression, security, privacy, performance, and release-gate expectations before implementation.",
+    decisions: ["Use this as planning context only; final verification must run after integration."],
     risks: previousArtifacts.flatMap((artifact) => artifact.risks),
-    filesChanged: previousArtifacts.flatMap((artifact) => artifact.filesChanged),
-    testsRun: checks.map((check) => `configured:${check}`),
-    releaseReadiness: "ready",
-    nextStage: "RELEASE",
+    filesChanged: [],
+    testsRun: [],
+    releaseReadiness: "unknown",
+    nextStage: "VERIFY",
     createdAt: new Date().toISOString()
   });
 }
 
 export async function performAutonomousRelease(workItem: WorkItem, previousArtifacts: StageArtifact[]): Promise<StageArtifact> {
-  const config = createDefaultReleaseConfig();
-  const sync = evaluateGitSync({ cleanWorktree: true, ahead: 0, behind: 0, duplicateAutomationBranches: 0 });
-  const decision = evaluateReleasePolicy(config, {
-    localChecksPassed: true,
-    githubActionsPassed: true,
-    cleanWorktree: sync.synced,
-    localRemoteSynced: sync.synced,
-    secretScanPassed: true,
-    rollbackPlanPresent: true,
-    emergencyStopActive: false,
-    riskLevel: workItem.riskLevel
-  });
+  await ensureNotStopped(workItem.id);
+  const config = loadReleaseConfig();
+  const { signal, syncReasons } = await collectReleaseSignal(workItem, config, previousArtifacts);
+  const decision = evaluateReleasePolicy(config, signal);
+  const releaseCommand = decision.allowed ? await runReleaseCommand(config) : null;
+  const releaseAllowed = decision.allowed && (!releaseCommand || releaseCommand.ok);
 
-  return StageArtifactSchema.parse({
+  const artifact = StageArtifactSchema.parse({
     workItemId: workItem.id,
     stage: "RELEASE",
     ownerAgent: "quality-security-privacy-release",
-    status: decision.allowed ? "passed" : "blocked",
+    status: releaseAllowed ? "passed" : "blocked",
     title: "Autonomous release decision",
-    summary: decision.allowed
+    summary: releaseAllowed
       ? "Autonomous release gates passed. Merge, tag, release verification, local pull, cleanup, and sync confirmation may proceed."
-      : `Release blocked: ${decision.requiredFixes.join("; ")}`,
-    decisions: decision.reasons,
-    risks: previousArtifacts.flatMap((artifact) => artifact.risks),
+      : `Release blocked: ${[...decision.requiredFixes, releaseCommand && !releaseCommand.ok ? releaseCommand.summary : ""].filter(Boolean).join("; ")}`,
+    decisions: releaseAllowed
+      ? [...decision.reasons, releaseCommand?.summary || "Configured release command completed."]
+      : [...decision.requiredFixes, releaseCommand && !releaseCommand.ok ? releaseCommand.summary : ""].filter(Boolean),
+    risks: [
+      ...previousArtifacts.flatMap((artifact) => artifact.risks),
+      ...syncReasons,
+      ...(releaseCommand && !releaseCommand.ok ? [releaseCommand.summary] : [])
+    ],
     filesChanged: previousArtifacts.flatMap((artifact) => artifact.filesChanged),
-    testsRun: ["local checks", "GitHub Actions", "secret scan", "release verification"],
-    releaseReadiness: decision.allowed ? "ready" : "not_ready",
-    nextStage: decision.allowed ? "CLOSED" : "BLOCKED",
+    testsRun: ["local checks", "GitHub Actions", "secret scan", "release verification", ...(releaseCommand ? [`release:${releaseCommand.ok ? "passed" : "failed"}`] : [])],
+    releaseReadiness: releaseAllowed ? "ready" : "not_ready",
+    nextStage: releaseAllowed ? "CLOSED" : "BLOCKED",
     createdAt: new Date().toISOString()
   });
+  await persistArtifact(artifact);
+  return artifact;
+}
+
+async function collectReleaseSignal(workItem: WorkItem, config: TargetRepoConfig, previousArtifacts: StageArtifact[]): Promise<{ signal: VerificationSignal; syncReasons: string[] }> {
+  const gitSyncInput = await readGitSyncInput(workItem, config);
+  const sync = evaluateGitSync(gitSyncInput);
+  const status = await (await getActivityStore()).getStatus();
+  const verificationPassed = previousArtifacts.some((artifact) =>
+    artifact.stage === "VERIFY" && artifact.status === "passed" && artifact.releaseReadiness === "ready"
+  );
+  const securityPassed = previousArtifacts.some((artifact) =>
+    artifact.testsRun.some((test) => /^security:passed$/i.test(test))
+  );
+  const rollbackPlanPresent = previousArtifacts.some((artifact) =>
+    [...artifact.decisions, ...artifact.risks, artifact.summary].some((text) => /rollback/i.test(text))
+  );
+  return {
+    signal: {
+      localChecksPassed: envFlag("AGENT_LOCAL_CHECKS_PASSED") || verificationPassed,
+      githubActionsPassed: envFlag("AGENT_GITHUB_ACTIONS_PASSED"),
+      cleanWorktree: gitSyncInput.cleanWorktree,
+      localRemoteSynced: sync.synced,
+      secretScanPassed: envFlag("AGENT_SECRET_SCAN_PASSED") || securityPassed,
+      rollbackPlanPresent: envFlag("AGENT_ROLLBACK_PLAN_PRESENT") || rollbackPlanPresent,
+      releaseProofPresent: await hasReleaseProof(workItem, config),
+      emergencyStopActive: status.system.emergencyStop,
+      riskLevel: workItem.riskLevel
+    },
+    syncReasons: sync.reasons
+  };
+}
+
+async function readGitSyncInput(workItem: WorkItem, config: TargetRepoConfig) {
+  const repoPath = config.repo.localPath || process.cwd();
+  const defaultBranch = assertSafeGitRef(config.repo.defaultBranch, "default branch");
+  const branchPrefix = automationBranchPrefix(workItem);
+  try {
+    await execGit(`git fetch --prune origin ${defaultBranch}`, repoPath);
+    const status = await execGit("git status --porcelain", repoPath);
+    const counts = await execGit(`git rev-list --left-right --count origin/${defaultBranch}...HEAD`, repoPath);
+    const [behindRaw, aheadRaw] = counts.stdout.trim().split(/\s+/);
+    const automationBranchesForItem = await countAutomationBranches(repoPath, branchPrefix);
+    return {
+      cleanWorktree: status.stdout.trim().length === 0,
+      ahead: Number(aheadRaw || 0),
+      behind: Number(behindRaw || 0),
+      duplicateAutomationBranches: Math.max(0, automationBranchesForItem - 1)
+    };
+  } catch {
+    return {
+      cleanWorktree: false,
+      ahead: 1,
+      behind: 1,
+      duplicateAutomationBranches: 0
+    };
+  }
+}
+
+function envFlag(name: string): boolean {
+  return /^(1|true|yes)$/i.test(process.env[name] || "");
+}
+
+type CommandName = keyof TargetRepoConfig["commands"];
+type CommandResult = {
+  name: string;
+  ok: boolean;
+  summary: string;
+};
+
+async function runConfiguredChecks(config: TargetRepoConfig, names: CommandName[]): Promise<CommandResult[]> {
+  const results: CommandResult[] = [];
+  for (const name of names) {
+    results.push(await runConfiguredCommand(config, name, config.commands[name]));
+  }
+  return results;
+}
+
+async function runReleaseCommand(config: TargetRepoConfig): Promise<CommandResult> {
+  return runConfiguredCommand(config, "release", config.commands.release);
+}
+
+async function runConfiguredCommand(config: TargetRepoConfig, name: string, command: string): Promise<CommandResult> {
+  try {
+    await exec(command, {
+      cwd: config.repo.localPath || process.cwd(),
+      timeout: Number(process.env.AGENT_COMMAND_TIMEOUT_MS || 300_000),
+      maxBuffer: 1024 * 1024 * 8
+    });
+    return { name, ok: true, summary: `${name} passed` };
+  } catch (error) {
+    const message = error instanceof Error ? error.message.split(/\r?\n/)[0] : "command failed";
+    return { name, ok: false, summary: message };
+  }
+}
+
+async function hasReleaseProof(workItem: WorkItem, config: TargetRepoConfig): Promise<boolean> {
+  const configuredProof = process.env.RELEASE_PROOF_FILE || `.agent-team/release-proof-${workItem.id}.json`;
+  const proofFile = path.isAbsolute(configuredProof)
+    ? configuredProof
+    : path.join(config.repo.localPath || process.cwd(), configuredProof);
+  try {
+    await fs.access(proofFile);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function getActivityStore(): Promise<ControllerStore> {
+  if (!storePromise) {
+    storePromise = Promise.resolve(createStore()).then(async (store) => {
+      await store.init();
+      return store;
+    });
+  }
+  return storePromise;
+}
+
+async function persistArtifact(artifact: StageArtifact): Promise<void> {
+  const store = await getActivityStore();
+  await store.addArtifact(artifact);
+  const nextState = artifact.status === "blocked" || artifact.status === "failed"
+    ? "BLOCKED"
+    : artifact.nextStage || artifact.stage;
+  await store.updateWorkItemState(artifact.workItemId, nextState);
 }
 
 function createDefaultReleaseConfig(): TargetRepoConfig {
@@ -120,11 +296,11 @@ function createDefaultReleaseConfig(): TargetRepoConfig {
       localPath: process.cwd()
     },
     commands: {
-      install: "npm install",
-      lint: "npm run lint",
-      typecheck: "npm run typecheck",
-      test: "npm test",
-      build: "npm run build",
+      install: "npm ci",
+      lint: "npm run lint --if-present",
+      typecheck: "npm run typecheck --if-present",
+      test: "npm test --if-present",
+      build: "npm run build --if-present",
       security: "npm audit --audit-level=high",
       release: "gh workflow run release.yml --ref main"
     },
@@ -156,4 +332,48 @@ function createDefaultReleaseConfig(): TargetRepoConfig {
       allowParallelWorkItemsWhenDisjoint: true
     }
   };
+}
+
+function loadReleaseConfig(): TargetRepoConfig {
+  const configPath = process.env.AGENT_TEAM_CONFIG || "agent-team.config.yaml";
+  try {
+    return loadTargetRepoConfig(configPath);
+  } catch {
+    return createDefaultReleaseConfig();
+  }
+}
+
+function automationBranchPrefix(workItem: WorkItem): string {
+  const safeId = workItem.id
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  return `agent/${safeId || "work-item"}`;
+}
+
+async function countAutomationBranches(repoPath: string, branchPrefix: string): Promise<number> {
+  const patterns = [branchPrefix, `${branchPrefix}-*`];
+  const outputs = await Promise.all([
+    ...patterns.map((pattern) => execGit(`git branch --list "${pattern}" --format="%(refname:short)"`, repoPath)),
+    ...patterns.map((pattern) => execGit(`git branch --remotes --list "origin/${pattern}" --format="%(refname:short)"`, repoPath))
+  ]);
+  const branches = new Set(
+    outputs
+      .flatMap((output) => output.stdout.split(/\r?\n/))
+      .map((branch) => branch.trim().replace(/^origin\//, ""))
+      .filter(Boolean)
+  );
+  return branches.size;
+}
+
+function execGit(command: string, cwd: string) {
+  return exec(command, { cwd });
+}
+
+function assertSafeGitRef(value: string, label: string): string {
+  if (!/^[A-Za-z0-9._/-]+$/.test(value)) {
+    throw new Error(`Unsafe ${label}: ${value}`);
+  }
+  return value;
 }
