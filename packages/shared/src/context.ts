@@ -28,7 +28,11 @@ export function buildSharedContext(
   memories: MemoryRecord[] = [],
   options: SharedContextOptions = {}
 ): SharedContext {
-  const relevant = artifacts.filter((artifact) => artifact.workItemId === workItem.id);
+  const relevant = artifacts.filter((artifact) =>
+    artifact.workItemId === workItem.id &&
+    (!artifact.projectId || !workItem.projectId || artifact.projectId === workItem.projectId) &&
+    (!artifact.repo || !workItem.repo || artifact.repo === workItem.repo)
+  );
   const teammateActivity: TeammateActivity[] = relevant.map((artifact) => ({
     agent: artifact.ownerAgent,
     stage: artifact.stage,
@@ -453,8 +457,8 @@ export function projectIdForConfig(config: TargetRepoConfig): string {
 export function scopeWorkItemToProject(workItem: WorkItem, config: TargetRepoConfig): WorkItem {
   return {
     ...workItem,
-    projectId: projectIdForConfig(config),
-    repo: repoKeyForConfig(config)
+    projectId: workItem.projectId || projectIdForConfig(config),
+    repo: workItem.repo || repoKeyForConfig(config)
   };
 }
 
@@ -463,7 +467,7 @@ function isMemoryInProjectScope(memory: MemoryRecord, scope: { projectId?: strin
   if (memory.workItemId) return memory.workItemId === scope.workItemId;
   if (memory.projectId && scope.projectId) return memory.projectId === scope.projectId;
   if (memory.repo && scope.repo) return memory.repo === scope.repo;
-  return memory.scope !== "repo";
+  return false;
 }
 
 type ContextFileCandidate = {

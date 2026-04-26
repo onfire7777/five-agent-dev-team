@@ -160,6 +160,44 @@ export const WorkItemSchema = z.object({
 
 export type WorkItem = z.infer<typeof WorkItemSchema>;
 
+export const ProjectConnectionInputSchema = z.object({
+  projectId: z.string().min(1).optional(),
+  name: z.string().min(1).optional(),
+  repoOwner: z.string().min(1),
+  repoName: z.string().min(1),
+  defaultBranch: z.string().min(1).default("main"),
+  localPath: z.string().min(1),
+  githubUrl: z.string().url().optional(),
+  webResearchEnabled: z.boolean().default(true),
+  githubMcpEnabled: z.boolean().default(true),
+  githubWriteEnabled: z.boolean().default(false),
+  active: z.boolean().default(true)
+});
+
+export type ProjectConnectionInput = z.input<typeof ProjectConnectionInputSchema>;
+
+export const ProjectConnectionSchema = ProjectConnectionInputSchema.extend({
+  id: z.string().min(1),
+  projectId: z.string().min(1),
+  name: z.string().min(1),
+  repo: z.string().min(1),
+  memoryNamespace: z.string().min(1),
+  contextDir: z.string().default(".agent-team/context"),
+  status: z.enum(["connected", "inactive", "missing_local_path", "not_git_repo", "remote_mismatch", "needs_github_auth", "config_written"]).default("connected"),
+  remoteUrl: z.string().optional(),
+  ghAvailable: z.boolean().default(false),
+  ghAuthed: z.boolean().default(false),
+  githubConnected: z.boolean().default(false),
+  remoteMatches: z.boolean().default(false),
+  defaultBranchVerified: z.boolean().default(false),
+  validationErrors: z.array(z.string()).default([]),
+  lastValidatedAt: z.string().datetime().optional(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+});
+
+export type ProjectConnection = z.infer<typeof ProjectConnectionSchema>;
+
 export const RepoCommandSchema = z.object({
   install: z.string().min(1),
   lint: z.string().min(1),
@@ -188,7 +226,7 @@ export type CapabilityActivation = z.infer<typeof CapabilityActivationSchema>;
 
 const McpServerBaseSchema = z.object({
   name: z.string().min(1),
-  category: z.enum(["browser", "debugging", "github", "filesystem", "database", "documentation", "security", "electron", "custom"]).default("custom"),
+  category: z.enum(["browser", "debugging", "github", "filesystem", "database", "documentation", "security", "electron", "web_search", "custom"]).default("custom"),
   description: z.string().optional(),
   enabled: z.boolean().default(false),
   activation: CapabilityActivationSchema.default({

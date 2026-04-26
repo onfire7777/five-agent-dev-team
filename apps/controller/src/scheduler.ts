@@ -38,7 +38,7 @@ export function startSmartScheduler(store: ControllerStore): NodeJS.Timeout | nu
     }
 
     const queuedItems = status.workItems.filter((item) => item.state === "NEW");
-    const nextItems = selectParallelWorkItems(queuedItems, policy, activeIds);
+    const nextItems = selectParallelWorkItems(queuedItems, policy, activeIds, activeWork);
     await Promise.all(nextItems.map(async (next) => {
       const claimed = await store.claimWorkItemForWorkflow(next.id);
       if (!claimed) return;

@@ -1,4 +1,5 @@
 import pg from "pg";
+import crypto from "node:crypto";
 import {
   canTransition,
   AgentEventSchema,
@@ -8,6 +9,8 @@ import {
   dependenciesSatisfied,
   loadTargetRepoConfig,
   projectIdForConfig,
+  ProjectConnectionInputSchema,
+  ProjectConnectionSchema,
   repoKeyForConfig,
   StageArtifactSchema,
   MemoryRecordSchema,
@@ -16,24 +19,32 @@ import {
   WorkItemSchema,
   type AgentEvent,
   type MemoryRecord,
+  type ProjectConnection,
+  type ProjectConnectionInput,
   type StageArtifact,
   type WorkItem,
   type WorkItemState
 } from "../../../packages/shared/src";
 
 type ControllerStatus = ReturnType<typeof createSampleStatus>;
+type WorkItemCreateInput = Pick<WorkItem, "title" | "priority" | "requestType" | "dependencies" | "acceptanceCriteria" | "riskLevel" | "frontendNeeded" | "backendNeeded" | "rndNeeded"> & Partial<Pick<WorkItem, "projectId" | "repo">>;
+type ProjectScope = { projectId?: string; repo?: string };
+type ProjectConnectionPersistInput = ProjectConnectionInput & Partial<Pick<ProjectConnection, "remoteUrl" | "ghAvailable" | "ghAuthed" | "githubConnected" | "remoteMatches" | "defaultBranchVerified" | "validationErrors" | "lastValidatedAt" | "status">>;
 
 export interface ControllerStore {
   init(): Promise<void>;
   getStatus(): Promise<ControllerStatus>;
   listWorkItems(): Promise<WorkItem[]>;
-  createWorkItem(input: Pick<WorkItem, "title" | "priority" | "requestType" | "dependencies" | "acceptanceCriteria" | "riskLevel" | "frontendNeeded" | "backendNeeded" | "rndNeeded"> & Partial<Pick<WorkItem, "projectId" | "repo">>): Promise<WorkItem>;
+  createWorkItem(input: WorkItemCreateInput): Promise<WorkItem>;
   updateWorkItemState(id: string, state: WorkItemState): Promise<void>;
   addArtifact(artifact: StageArtifact): Promise<void>;
   addEvent(event: Omit<AgentEvent, "sequence" | "createdAt"> & Partial<Pick<AgentEvent, "sequence" | "createdAt">>): Promise<AgentEvent>;
   listEvents(afterSequence?: number, limit?: number): Promise<AgentEvent[]>;
   listMemories(workItemId?: string): Promise<MemoryRecord[]>;
   addMemories(memories: MemoryRecord[]): Promise<void>;
+  listProjectConnections(): Promise<ProjectConnection[]>;
+  upsertProjectConnection(input: ProjectConnectionPersistInput): Promise<ProjectConnection>;
+  activateProjectConnection(id: string): Promise<ProjectConnection>;
   claimWorkItemForWorkflow(id: string): Promise<boolean>;
   listWorkflowClaims(): Promise<string[]>;
   releaseWorkItemWorkflowClaim(id: string): Promise<void>;
@@ -44,6 +55,7 @@ export class MemoryStore implements ControllerStore {
   private workItems = createSampleWorkItems();
   private artifacts = createSampleArtifacts();
   private memories: MemoryRecord[] = [];
+  private projectConnections: ProjectConnection[] = [];
   private events: AgentEvent[] = [];
   private nextEventSequence = 1;
   private workflowClaims = new Set<string>();
@@ -51,6 +63,7 @@ export class MemoryStore implements ControllerStore {
   private emergencyReason = "";
 
   async init(): Promise<void> {
+    await this.seedConfiguredProjectConnection();
     return;
   }
 
@@ -74,11 +87,11 @@ export class MemoryStore implements ControllerStore {
     return this.workItems;
   }
 
-  async createWorkItem(input: Pick<WorkItem, "title" | "priority" | "requestType" | "dependencies" | "acceptanceCriteria" | "riskLevel" | "frontendNeeded" | "backendNeeded" | "rndNeeded"> & Partial<Pick<WorkItem, "projectId" | "repo">>): Promise<WorkItem> {
+  async createWorkItem(input: WorkItemCreateInput): Promise<WorkItem> {
     const createdAt = new Date().toISOString();
-    const project = resolveConfiguredProject();
+    const project = await this.resolveProjectScope(input);
     const workItem = WorkItemSchema.parse({
-      id: `WI-${Math.floor(1000 + Math.random() * 9000)}`,
+      id: createWorkItemId(),
       state: "NEW",
       createdAt,
       updatedAt: createdAt,
@@ -143,6 +156,63 @@ export class MemoryStore implements ControllerStore {
     this.memories = [...byId.values()];
   }
 
+  async listProjectConnections(): Promise<ProjectConnection[]> {
+    await this.seedConfiguredProjectConnection();
+    return sortProjectConnections(this.projectConnections);
+  }
+
+  async upsertProjectConnection(input: ProjectConnectionPersistInput): Promise<ProjectConnection> {
+    const parsed = ProjectConnectionInputSchema.parse(input);
+    const now = new Date().toISOString();
+    const projectId = parsed.projectId || slugId(`${parsed.repoOwner}-${parsed.repoName}`);
+    const repo = `${parsed.repoOwner}/${parsed.repoName}`;
+    const diagnostics = input as ProjectConnectionPersistInput;
+    const connection = ProjectConnectionSchema.parse({
+      ...parsed,
+      id: projectId,
+      projectId,
+      name: parsed.name || repo,
+      repo,
+      memoryNamespace: projectId,
+      contextDir: ".agent-team/context",
+      status: diagnostics.status || (parsed.active ? "connected" : "inactive"),
+      remoteUrl: diagnostics.remoteUrl,
+      ghAvailable: diagnostics.ghAvailable ?? false,
+      ghAuthed: diagnostics.ghAuthed ?? false,
+      githubConnected: diagnostics.githubConnected ?? false,
+      remoteMatches: diagnostics.remoteMatches ?? false,
+      defaultBranchVerified: diagnostics.defaultBranchVerified ?? false,
+      validationErrors: diagnostics.validationErrors || [],
+      lastValidatedAt: diagnostics.lastValidatedAt,
+      createdAt: this.projectConnections.find((item) => item.id === projectId)?.createdAt || now,
+      updatedAt: now
+    });
+
+    this.projectConnections = [
+      ...this.projectConnections
+        .filter((item) => item.id !== connection.id)
+        .map((item) => parsed.active ? { ...item, active: false, status: "inactive" as const, updatedAt: now } : item),
+      connection
+    ];
+    return connection;
+  }
+
+  async activateProjectConnection(id: string): Promise<ProjectConnection> {
+    const now = new Date().toISOString();
+    const current = this.projectConnections.find((item) => item.id === id);
+    if (!current) throw new Error(`Project connection ${id} was not found.`);
+    const activated = ProjectConnectionSchema.parse({
+      ...current,
+      active: true,
+      status: "connected",
+      updatedAt: now
+    });
+    this.projectConnections = this.projectConnections.map((item) =>
+      item.id === id ? activated : { ...item, active: false, status: "inactive", updatedAt: now }
+    );
+    return activated;
+  }
+
   async claimWorkItemForWorkflow(id: string): Promise<boolean> {
     if (this.workflowClaims.has(id)) return false;
     this.workflowClaims.add(id);
@@ -160,6 +230,18 @@ export class MemoryStore implements ControllerStore {
   async setEmergencyStop(active: boolean, reason = ""): Promise<void> {
     this.emergencyStop = active;
     this.emergencyReason = active ? reason : "";
+  }
+
+  private async seedConfiguredProjectConnection(): Promise<void> {
+    if (this.projectConnections.length) return;
+    const connection = readConfiguredProjectConnection();
+    if (connection) this.projectConnections = [connection];
+  }
+
+  protected async resolveProjectScope(input: ProjectScope): Promise<ProjectScope> {
+    const connections = await this.listProjectConnections();
+    const resolved = resolveProjectScopeFromConnections(input, connections);
+    return resolved || resolveConfiguredProject();
   }
 }
 
@@ -216,11 +298,18 @@ export class PostgresStore extends MemoryStore {
         work_item_id text primary key,
         claimed_at timestamptz not null default now()
       );
+      create table if not exists project_connections (
+        id text primary key,
+        payload jsonb not null,
+        active boolean not null default false,
+        updated_at timestamptz not null default now()
+      );
       create table if not exists controller_flags (
         key text primary key,
         value jsonb not null
       );
     `);
+    await this.seedProjectConnectionsFromConfig();
   }
 
   override async listWorkItems(): Promise<WorkItem[]> {
@@ -278,7 +367,7 @@ export class PostgresStore extends MemoryStore {
     };
   }
 
-  override async createWorkItem(input: Pick<WorkItem, "title" | "priority" | "requestType" | "dependencies" | "acceptanceCriteria" | "riskLevel" | "frontendNeeded" | "backendNeeded" | "rndNeeded"> & Partial<Pick<WorkItem, "projectId" | "repo">>): Promise<WorkItem> {
+  override async createWorkItem(input: WorkItemCreateInput): Promise<WorkItem> {
     const workItem = await super.createWorkItem(input);
     await this.pool.query(
       "insert into work_items (id, payload, state) values ($1, $2, $3)",
@@ -400,6 +489,61 @@ export class PostgresStore extends MemoryStore {
     await super.addMemories(memories);
   }
 
+  override async listProjectConnections(): Promise<ProjectConnection[]> {
+    const result = await this.pool.query("select payload from project_connections order by active desc, updated_at desc");
+    const stored = result.rows.map((row) => ProjectConnectionSchema.parse(row.payload));
+    return stored.length ? stored : super.listProjectConnections();
+  }
+
+  override async upsertProjectConnection(input: ProjectConnectionPersistInput): Promise<ProjectConnection> {
+    const connection = await super.upsertProjectConnection(input);
+    if (connection.active) {
+      await this.pool.query(`
+        update project_connections
+        set active = false,
+            payload = jsonb_set(jsonb_set(payload, '{active}', 'false'::jsonb, true), '{status}', '"inactive"'::jsonb, true)
+      `);
+    }
+    await this.pool.query(
+      `insert into project_connections (id, payload, active)
+       values ($1, $2, $3)
+       on conflict (id) do update set payload = excluded.payload, active = excluded.active, updated_at = now()`,
+      [connection.id, connection, connection.active]
+    );
+    return connection;
+  }
+
+  override async activateProjectConnection(id: string): Promise<ProjectConnection> {
+    const connections = await this.listProjectConnections();
+    const current = connections.find((item) => item.id === id);
+    if (!current) throw new Error(`Project connection ${id} was not found.`);
+    const now = new Date().toISOString();
+    const activated = ProjectConnectionSchema.parse({
+      ...current,
+      active: true,
+      status: "connected",
+      updatedAt: now
+    });
+    await this.pool.query(`
+      update project_connections
+      set active = false,
+          payload = jsonb_set(jsonb_set(payload, '{active}', 'false'::jsonb, true), '{status}', '"inactive"'::jsonb, true)
+    `);
+    await this.pool.query(
+      `insert into project_connections (id, payload, active)
+       values ($1, $2, true)
+       on conflict (id) do update set payload = excluded.payload, active = true, updated_at = now()`,
+      [activated.id, activated]
+    );
+    await super.upsertProjectConnection(activated);
+    return activated;
+  }
+
+  protected override async resolveProjectScope(input: ProjectScope): Promise<ProjectScope> {
+    const connections = await this.listProjectConnections();
+    return resolveProjectScopeFromConnections(input, connections) || resolveConfiguredProject();
+  }
+
   override async setEmergencyStop(active: boolean, reason = ""): Promise<void> {
     await this.pool.query(
       "insert into controller_flags (key, value) values ('emergency_stop', $1) on conflict (key) do update set value = excluded.value",
@@ -420,6 +564,19 @@ export class PostgresStore extends MemoryStore {
       active: Boolean(result.rows[0].value?.active),
       reason: String(result.rows[0].value?.reason || "")
     };
+  }
+
+  private async seedProjectConnectionsFromConfig(): Promise<void> {
+    const existing = await this.pool.query("select id from project_connections limit 1");
+    if (existing.rows.length) return;
+    const connection = readConfiguredProjectConnection();
+    if (!connection) return;
+    await this.pool.query(
+      `insert into project_connections (id, payload, active)
+       values ($1, $2, true)
+       on conflict (id) do nothing`,
+      [connection.id, connection]
+    );
   }
 }
 
@@ -478,4 +635,71 @@ function buildActiveThreads(workItems: WorkItem[], artifacts: StageArtifact[]): 
         latestArtifact?.summary || item.title
       ];
     });
+}
+
+function readConfiguredProjectConnection(): ProjectConnection | null {
+  const configPath = process.env.AGENT_TEAM_CONFIG || "agent-team.config.yaml";
+  try {
+    const config = loadTargetRepoConfig(configPath);
+    const now = new Date().toISOString();
+    const projectId = projectIdForConfig(config);
+    const repo = repoKeyForConfig(config);
+    return ProjectConnectionSchema.parse({
+      id: projectId,
+      projectId,
+      name: config.project.name || repo,
+      repoOwner: config.repo.owner,
+      repoName: config.repo.name,
+      repo,
+      defaultBranch: config.repo.defaultBranch,
+      localPath: config.repo.localPath,
+      githubUrl: `https://github.com/${repo}`,
+      webResearchEnabled: config.integrations.capabilityPacks.some((pack) => pack.name === "deep-web-research" && pack.enabled) ||
+        config.integrations.mcpServers.some((server) => server.category === "web_search" && server.enabled),
+      githubMcpEnabled: config.integrations.mcpServers.some((server) => server.category === "github" && server.enabled),
+      githubWriteEnabled: false,
+      active: true,
+      memoryNamespace: config.project.isolation.memoryNamespace || projectId,
+      contextDir: config.context.defaultContextDir,
+      status: "connected",
+      createdAt: now,
+      updatedAt: now
+    });
+  } catch {
+    return null;
+  }
+}
+
+function slugId(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "") || "project";
+}
+
+function resolveProjectScopeFromConnections(input: ProjectScope, connections: ProjectConnection[]): ProjectScope | null {
+  if (!connections.length) return null;
+  if (input.projectId || input.repo) {
+    const match = connections.find((connection) => {
+      if (input.projectId && input.repo) {
+        return connection.projectId === input.projectId && connection.repo === input.repo;
+      }
+      return connection.projectId === input.projectId || connection.repo === input.repo;
+    });
+    if (!match) {
+      throw new Error(`Connected project was not found for ${input.projectId || input.repo}.`);
+    }
+    return { projectId: match.projectId, repo: match.repo };
+  }
+  const active = connections.find((connection) => connection.active) || connections[0];
+  return active ? { projectId: active.projectId, repo: active.repo } : null;
+}
+
+function createWorkItemId(): string {
+  return `WI-${Date.now().toString(36).toUpperCase()}-${crypto.randomUUID().slice(0, 6).toUpperCase()}`;
+}
+
+function sortProjectConnections(connections: ProjectConnection[]): ProjectConnection[] {
+  return [...connections].sort((a, b) => Number(b.active) - Number(a.active) || Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
 }

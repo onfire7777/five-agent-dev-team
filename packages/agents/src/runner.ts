@@ -67,6 +67,7 @@ async function runLiveOpenAIAgentWithModel(
   const AgentCtor = (sdk as any).Agent;
   const run = (sdk as any).run;
   const mcpServers = createConfiguredMcpServers(sdk, definition, context);
+  const tools = createHostedTools(sdk, definition, context);
   const mcpSession = mcpServers.length
     ? await sdk.MCPServers.open(mcpServers, {
         connectTimeoutMs: Number(process.env.AGENT_MCP_CONNECT_TIMEOUT_MS || 10_000),
@@ -82,7 +83,8 @@ async function runLiveOpenAIAgentWithModel(
       name: definition.displayName,
       instructions: definition.instructions,
       model,
-      mcpServers: mcpSession?.active || []
+      mcpServers: mcpSession?.active || [],
+      tools
     });
 
     const result = await run(agent, buildAgentPrompt(definition, context, model));
@@ -114,6 +116,7 @@ function buildAgentPrompt(definition: AgentDefinition, context: AgentRunContext,
     `Acceptance criteria: ${context.workItem.acceptanceCriteria.join("; ") || "Not provided"}`,
     `Previous artifacts: ${context.previousArtifacts.map((artifact) => `${artifact.stage}: ${artifact.summary}`).join(" | ") || "None"}`,
     "Capability rule: proactively use active MCP tools, skills, plugins, and knowledge packs when they materially improve this stage; do not call inactive or irrelevant tools.",
+    "Research rule: use hosted web search or web-search MCP only for current external facts that local repo context cannot prove; summarize sources into decisions, risks, tests, or follow-ups.",
     "When a tool uncovers a durable lesson, convert it into an artifact decision, risk, test, or follow-up rather than relying on transient tool output.",
     "Cooperate with the team: reference teammate activity, preserve prior decisions, update shared risks, and return only JSON for one stage artifact.",
     "The JSON must include title, summary, status, decisions, risks, filesChanged, testsRun, releaseReadiness, and nextStage."
@@ -142,6 +145,29 @@ function createConfiguredMcpServers(sdk: any, definition: AgentDefinition, conte
       agent: definition.role
     }))
     .map((server) => createMcpServer(sdk, server));
+}
+
+function createHostedTools(sdk: any, definition: AgentDefinition, context: AgentRunContext): any[] {
+  if (!shouldUseHostedWebSearch(definition, context) || typeof sdk.webSearchTool !== "function") return [];
+  return [
+    sdk.webSearchTool({
+      searchContextSize: "medium"
+    })
+  ];
+}
+
+function shouldUseHostedWebSearch(definition: AgentDefinition, context: AgentRunContext): boolean {
+  if (!context.targetRepoConfig) return false;
+  const input = {
+    workItem: context.workItem,
+    stage: context.stage,
+    agent: definition.role
+  };
+  return context.targetRepoConfig.integrations.capabilityPacks.some((pack) =>
+    pack.name === "deep-web-research" && shouldActivateCapability(pack.enabled, pack.activation, input)
+  ) || context.targetRepoConfig.integrations.mcpServers.some((server) =>
+    server.category === "web_search" && shouldActivateCapability(server.enabled, server.activation, input)
+  );
 }
 
 function createMcpServer(sdk: any, server: McpServerConfig): any {

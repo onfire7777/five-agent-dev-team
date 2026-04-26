@@ -2,6 +2,9 @@ repo:
   owner: your-org
   name: your-repo
   defaultBranch: main
+  # Explicit host path to the checked-out project. In Docker, mount this exact
+  # path into the controller/worker container and keep all project-relative
+  # filesystem MCP roots inside it.
   localPath: C:\path\to\your\repo
 project:
   # Each connected repository is its own isolated project. Memory and tool state
@@ -14,6 +17,8 @@ project:
     allowGlobalMemory: false
     memoryNamespace: your-org-your-repo
 commands:
+  # GitHub CLI is a first-class local/release path. Provide credentials with
+  # GH_TOKEN/GITHUB_TOKEN or mount the gh config directory into the runtime.
   install: npm ci
   lint: npm run lint
   typecheck: npm run typecheck
@@ -88,13 +93,15 @@ integrations:
         - Use slim mode by default; enable trace tools only for performance work.
     - name: github-read
       category: github
-      description: Official GitHub MCP server for issue, PR, Actions, and release context.
+      description: Lean GitHub CLI MCP server for issue, PR, Actions, and release context.
       enabled: false
       transport: stdio
-      command: docker
-      args: ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server"]
+      command: node
+      args: ["scripts/github-cli-mcp.mjs"]
       env:
+        GH_TOKEN: ${GH_TOKEN}
         GITHUB_PERSONAL_ACCESS_TOKEN: ${GITHUB_PERSONAL_ACCESS_TOKEN}
+        GITHUB_TOKEN: ${GITHUB_TOKEN}
       activation:
         mode: on_demand
         stages: [INTAKE, VERIFY, RELEASE]
@@ -102,9 +109,32 @@ integrations:
         keywords: [github, issue, pr, actions, release, ci]
       timeoutSeconds: 45
       cacheToolsList: true
-      toolAllowlist: []
+      toolAllowlist: [github_repo_status, github_issue_list, github_pr_list, github_actions_latest]
       notes:
         - Prefer read-only token scopes unless the current work item explicitly needs GitHub writes.
+        - This local MCP wraps gh with narrow read tools so Docker-in-Docker is not required.
+        - Use on demand with the GitHub CLI; do not keep GitHub MCP always loaded.
+    - name: deep-web-research
+      category: web_search
+      description: Deep web research for current docs, ecosystem changes, and source-backed investigation.
+      enabled: false
+      transport: stdio
+      command: npx
+      args: ["-y", "tavily-mcp@latest"]
+      env:
+        TAVILY_API_KEY: ${TAVILY_API_KEY}
+        DEFAULT_PARAMETERS: '{"search_depth":"advanced","max_results":8,"include_raw_content":false}'
+      activation:
+        mode: on_demand
+        stages: [RND, VERIFY]
+        agents: [rnd-architecture-innovation, quality-security-privacy-release]
+        keywords: [research, current, latest, docs, source, citation]
+      timeoutSeconds: 60
+      cacheToolsList: true
+      toolAllowlist: [tavily-search, tavily-extract]
+      notes:
+        - Use only when local repo context or checked-in docs are not enough.
+        - Capture source links and convert durable findings into repo context or tests.
   capabilityPacks:
     - name: frontend-performance
       kind: skill

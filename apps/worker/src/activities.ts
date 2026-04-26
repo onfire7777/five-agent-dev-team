@@ -10,6 +10,8 @@ import {
   scopeWorkItemToProject,
   selectRelevantMemories,
   StageArtifactSchema,
+  targetConfigMatchesWorkItem,
+  targetRepoConfigFromProjectConnection,
   type StageArtifact,
   type TargetRepoConfig,
   type VerificationSignal,
@@ -61,7 +63,7 @@ export async function ensureNotStopped(workItemId: string, config?: TargetRepoCo
 }
 
 export async function recordLoopStart(workItem: WorkItem): Promise<StageArtifact> {
-  const config = loadReleaseConfig();
+  const config = await loadReleaseConfig(workItem);
   const scopedWorkItem = scopeWorkItemToProject(workItem, config);
   await ensureNotStopped(scopedWorkItem.id, config);
   const store = await getActivityStore();
@@ -121,7 +123,7 @@ export async function runAgentStage(input: StageInput): Promise<StageArtifact> {
   const role = roleForStage(input.stage);
   const definition = getAgentDefinition(role);
   const store = await getActivityStore();
-  const config = loadReleaseConfig();
+  const config = await loadReleaseConfig(input.workItem);
   const scopedWorkItem = scopeWorkItemToProject(input.workItem, config);
   await ensureNotStopped(scopedWorkItem.id, config);
   await store.addEvent({
@@ -143,7 +145,7 @@ export async function runAgentStage(input: StageInput): Promise<StageArtifact> {
 }
 
 export async function closeWorkLoop(workItem: WorkItem, previousArtifacts: StageArtifact[]): Promise<StageArtifact> {
-  const config = loadReleaseConfig();
+  const config = await loadReleaseConfig(workItem);
   const scopedWorkItem = scopeWorkItemToProject(workItem, config);
   const evidence = await collectLoopEvidence(scopedWorkItem, config);
   const release = [...previousArtifacts].reverse().find((artifact) => artifact.stage === "RELEASE");
@@ -222,14 +224,14 @@ export async function releaseWorkflowClaim(workItemId: string): Promise<void> {
 }
 
 export async function prepareBuildBranches(workItem: WorkItem): Promise<{ branchPrefix: string }> {
-  const config = loadReleaseConfig();
+  const config = await loadReleaseConfig(workItem);
   const scopedWorkItem = scopeWorkItemToProject(workItem, config);
   await ensureNotStopped(scopedWorkItem.id, config);
   return { branchPrefix: automationBranchPrefix(scopedWorkItem) };
 }
 
 export async function integrateBranches(workItem: WorkItem, previousArtifacts: StageArtifact[]): Promise<StageArtifact> {
-  const config = loadReleaseConfig();
+  const config = await loadReleaseConfig(workItem);
   const scopedWorkItem = scopeWorkItemToProject(workItem, config);
   await ensureNotStopped(scopedWorkItem.id, config);
   const artifact = StageArtifactSchema.parse({
@@ -254,7 +256,7 @@ export async function integrateBranches(workItem: WorkItem, previousArtifacts: S
 }
 
 export async function runVerification(workItem: WorkItem, previousArtifacts: StageArtifact[]): Promise<StageArtifact> {
-  const config = loadReleaseConfig();
+  const config = await loadReleaseConfig(workItem);
   const scopedWorkItem = scopeWorkItemToProject(workItem, config);
   await ensureNotStopped(scopedWorkItem.id, config);
   const checks = await runConfiguredChecks(config, ["install", "lint", "typecheck", "test", "build", "security"]);
@@ -288,7 +290,7 @@ export async function runVerification(workItem: WorkItem, previousArtifacts: Sta
 }
 
 export async function planVerification(workItem: WorkItem, previousArtifacts: StageArtifact[]): Promise<StageArtifact> {
-  const config = loadReleaseConfig();
+  const config = await loadReleaseConfig(workItem);
   const scopedWorkItem = scopeWorkItemToProject(workItem, config);
   await ensureNotStopped(scopedWorkItem.id, config);
   return StageArtifactSchema.parse({
@@ -311,7 +313,7 @@ export async function planVerification(workItem: WorkItem, previousArtifacts: St
 }
 
 export async function performAutonomousRelease(workItem: WorkItem, previousArtifacts: StageArtifact[]): Promise<StageArtifact> {
-  const config = loadReleaseConfig();
+  const config = await loadReleaseConfig(workItem);
   const scopedWorkItem = scopeWorkItemToProject(workItem, config);
   await ensureNotStopped(scopedWorkItem.id, config);
   const { signal, syncReasons } = await collectReleaseSignal(scopedWorkItem, config, previousArtifacts);
@@ -700,11 +702,21 @@ function createDefaultReleaseConfig(): TargetRepoConfig {
   };
 }
 
-function loadReleaseConfig(): TargetRepoConfig {
+async function loadReleaseConfig(workItem?: WorkItem): Promise<TargetRepoConfig> {
   const configPath = process.env.AGENT_TEAM_CONFIG || "agent-team.config.yaml";
   try {
-    return loadTargetRepoConfig(configPath);
+    const config = loadTargetRepoConfig(configPath);
+    if (!workItem || targetConfigMatchesWorkItem(config, workItem) || (!workItem.projectId && !workItem.repo)) {
+      return config;
+    }
+    const projectConfig = await loadConfigFromProjectConnection(workItem);
+    if (projectConfig) return projectConfig;
+    throw new Error(`Work item ${workItem.id} is scoped to ${workItem.projectId || workItem.repo}, but ${configPath} points to a different project.`);
   } catch (error) {
+    if (workItem?.projectId || workItem?.repo) {
+      const projectConfig = await loadConfigFromProjectConnection(workItem);
+      if (projectConfig) return projectConfig;
+    }
     if (/^(1|true|yes)$/i.test(process.env.AGENT_TEAM_ALLOW_DEFAULT_CONFIG || "")) {
       return createDefaultReleaseConfig();
     }
@@ -715,6 +727,16 @@ function loadReleaseConfig(): TargetRepoConfig {
       error instanceof Error ? `Original error: ${error.message}` : ""
     ].filter(Boolean).join(" "));
   }
+}
+
+async function loadConfigFromProjectConnection(workItem: WorkItem): Promise<TargetRepoConfig | null> {
+  const store = await getActivityStore();
+  const connections = await store.listProjectConnections();
+  const match = connections.find((connection) => {
+    if (workItem.projectId && workItem.repo) return connection.projectId === workItem.projectId && connection.repo === workItem.repo;
+    return connection.projectId === workItem.projectId || connection.repo === workItem.repo;
+  });
+  return match ? targetRepoConfigFromProjectConnection(match) : null;
 }
 
 function resolveEmergencyStopFile(config?: TargetRepoConfig): string {

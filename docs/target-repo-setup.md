@@ -8,6 +8,18 @@ Set `project.id` and `repo` for every repository you connect. The autonomous tea
 
 The default isolation policy requires an explicit repo connection and does not allow cross-project memory.
 
+## Project Paths And Mounts
+
+Set `repo.localPath` to the exact local checkout the agents may inspect and modify. For containerized controller/worker runs, mount that same project path into the container at a stable path and use it for command execution, context loading, artifacts, and any filesystem MCP roots.
+
+Keep mounts lean:
+
+- target repo checkout
+- project `.agent-team` context/artifacts when stored outside the repo
+- GitHub CLI config only when you choose mounted `gh` credentials instead of token env vars
+
+Avoid broad home-directory or desktop mounts. Each project connection should make the allowed path obvious.
+
 ## Required Commands
 
 The target repo config must define:
@@ -46,7 +58,11 @@ The controller loads these into agent prompts as repo-scoped permanent memory. K
 
 Use `integrations.mcpServers` and `integrations.capabilityPacks` in `agent-team.config.yaml` to give agents extra tools and knowledge only when useful. Configure browser, GitHub, security, database, documentation, and Electron diagnostics as separate on-demand bundles instead of one always-on tool list.
 
-For GitHub, prefer the official GitHub MCP server as a lazy project capability plus the existing GitHub CLI/API fallback. Use read-only scopes by default and enable write-capable GitHub tools only for delivery/release stages that need them.
+For GitHub, prefer the built-in `scripts/github-cli-mcp.mjs` server as a lazy project capability plus the existing GitHub CLI/API fallback. It wraps `gh` with narrow read tools for repo status, issues, PRs, and Actions so Docker-in-Docker is not required. Use read-only scopes by default and enable write-capable GitHub tools only for delivery/release stages that need them. GitHub CLI should authenticate through `GH_TOKEN`/`GITHUB_TOKEN` or a deliberate mount of the user's `gh` config directory, not hardcoded credentials.
+
+If you choose GitHub's official MCP server instead, swap the MCP command in `agent-team.config.yaml` and make sure the official binary or Docker transport is available inside the controller/worker runtime.
+
+Deep web research should also stay on demand. Use it for current official docs, release notes, security advisories, and source-backed investigation that the local repo cannot answer. Keep the returned context small and promote durable findings into `.agent-team/context` or tests.
 
 Recommended defaults:
 

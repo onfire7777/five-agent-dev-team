@@ -56,17 +56,27 @@ export function selectNextWorkItem(workItems: WorkItem[], policy: SchedulerPolic
   return [...candidates].sort((a, b) => getPriorityScore(b) - getPriorityScore(a))[0] ?? null;
 }
 
-export function selectParallelWorkItems(workItems: WorkItem[], policy: SchedulerPolicy, activeIds: Set<string>): WorkItem[] {
+export function selectParallelWorkItems(workItems: WorkItem[], policy: SchedulerPolicy, activeIds: Set<string>, activeWorkItems: WorkItem[] = []): WorkItem[] {
   if (!policy.continuous) return [];
   const capacity = Math.max(0, policy.maxConcurrentWorkflows - activeIds.size);
   if (capacity === 0) return [];
   const sliceCount = policy.completeLoopBeforeNextWorkItem ? 1 : policy.allowParallelWorkItemsWhenDisjoint ? capacity : 1;
-  return workItems
+  const activeScopes = new Set(activeWorkItems.map(projectScopeKey).filter(Boolean));
+  const selectedScopes = new Set<string>();
+  const candidates = workItems
     .filter((item) => !activeIds.has(item.id))
     .filter((item) => !["CLOSED", "BLOCKED"].includes(item.state))
     .filter((item) => getBlockingWorkItemIds(item, workItems).length === 0)
-    .sort((a, b) => getPriorityScore(b) - getPriorityScore(a))
-    .slice(0, sliceCount);
+    .sort((a, b) => getPriorityScore(b) - getPriorityScore(a));
+  const selected: WorkItem[] = [];
+  for (const item of candidates) {
+    const scope = projectScopeKey(item);
+    if (scope && (activeScopes.has(scope) || selectedScopes.has(scope))) continue;
+    selected.push(item);
+    if (scope) selectedScopes.add(scope);
+    if (selected.length >= sliceCount) break;
+  }
+  return selected;
 }
 
 export function getBlockingWorkItemIds(workItem: WorkItem, allWorkItems: WorkItem[]): string[] {
@@ -96,4 +106,8 @@ export function getSafeParallelStages(workItem: WorkItem): string[] {
 
 export function shouldUseLiveApi(policy: SchedulerPolicy): boolean {
   return policy.mode === "api_live";
+}
+
+function projectScopeKey(workItem: WorkItem): string {
+  return workItem.projectId || workItem.repo || "";
 }

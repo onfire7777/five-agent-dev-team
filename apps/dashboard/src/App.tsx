@@ -19,7 +19,7 @@ import {
   type LucideIcon
 } from "lucide-react";
 import { createSampleStatus } from "../../../packages/shared/src/sample-data";
-import type { AgentRole, MemoryRecord, StageArtifact } from "../../../packages/shared/src";
+import type { AgentRole, MemoryRecord, ProjectConnection, StageArtifact } from "../../../packages/shared/src";
 
 declare const __DASHBOARD_API_BASE__: string | undefined;
 
@@ -39,6 +39,16 @@ type WorkDraft = {
   frontendNeeded: boolean;
   backendNeeded: boolean;
   rndNeeded: boolean;
+};
+
+type ProjectDraft = {
+  name: string;
+  repoOwner: string;
+  repoName: string;
+  defaultBranch: string;
+  localPath: string;
+  webResearchEnabled: boolean;
+  githubMcpEnabled: boolean;
 };
 
 type ApiState = {
@@ -217,7 +227,9 @@ export function App() {
   const [selectedWorkItem, setSelectedWorkItem] = useState("WI-1290");
   const [activeInsight, setActiveInsight] = useState<InsightView>("release");
   const [memories, setMemories] = useState<MemoryRecord[]>([]);
+  const [projects, setProjects] = useState<ProjectConnection[]>([]);
   const [createError, setCreateError] = useState("");
+  const [projectError, setProjectError] = useState("");
   const [workDraft, setWorkDraft] = useState<WorkDraft>({
     title: "",
     acceptanceCriteria: "",
@@ -227,6 +239,15 @@ export function App() {
     frontendNeeded: true,
     backendNeeded: true,
     rndNeeded: true
+  });
+  const [projectDraft, setProjectDraft] = useState<ProjectDraft>({
+    name: "",
+    repoOwner: "",
+    repoName: "",
+    defaultBranch: "main",
+    localPath: "",
+    webResearchEnabled: true,
+    githubMcpEnabled: true
   });
 
   async function loadStatus(): Promise<boolean> {
@@ -240,10 +261,16 @@ export function App() {
       } catch {
         setMemories([]);
       }
+      try {
+        await loadProjects();
+      } catch {
+        setProjects([]);
+      }
       return true;
     } catch (error) {
       setStatus(createOfflineStatus());
       setMemories([]);
+      setProjects([]);
       setApiState({
         connected: false,
         usingFallback: true,
@@ -261,6 +288,25 @@ export function App() {
     setMemories(await response.json());
   }
 
+  async function loadProjects() {
+    const response = await fetch(`${API_BASE}/api/projects`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const nextProjects = await response.json() as ProjectConnection[];
+    setProjects(nextProjects);
+    const active = nextProjects.find((project) => project.active) || nextProjects[0];
+    if (active) {
+      setProjectDraft((draft) => ({
+        ...draft,
+        repoOwner: draft.repoOwner || active.repoOwner,
+        repoName: draft.repoName || active.repoName,
+        defaultBranch: draft.defaultBranch || active.defaultBranch,
+        localPath: draft.localPath || active.localPath,
+        webResearchEnabled: active.webResearchEnabled,
+        githubMcpEnabled: active.githubMcpEnabled
+      }));
+    }
+  }
+
   async function postControl(path: string, body?: unknown) {
     const response = await fetch(`${API_BASE}${path}`, {
       method: "POST",
@@ -274,6 +320,11 @@ export function App() {
   async function createWorkItem(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setCreateError("");
+    const activeProject = projects.find((project) => project.active);
+    if (!activeProject) {
+      setCreateError("Connect a GitHub repo before starting autonomous work.");
+      return;
+    }
     if (!workDraft.title.trim()) {
       setCreateError("Title is required.");
       return;
@@ -288,6 +339,8 @@ export function App() {
         frontendNeeded: workDraft.frontendNeeded,
         backendNeeded: workDraft.backendNeeded,
         rndNeeded: workDraft.rndNeeded,
+        projectId: activeProject.projectId,
+        repo: activeProject.repo,
         acceptanceCriteria: workDraft.acceptanceCriteria
           .split(/\r?\n|;/)
           .map((item) => item.trim())
@@ -299,6 +352,51 @@ export function App() {
       if (response.blocked) setCreateError(response.reason || "Queued while emergency stop is active.");
     } catch (error) {
       setCreateError(error instanceof Error ? error.message : "Work item creation failed.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function connectProject() {
+    setProjectError("");
+    if (!projectDraft.repoOwner.trim() || !projectDraft.repoName.trim() || !projectDraft.localPath.trim()) {
+      setProjectError("Repo owner, repo name, and local path are required.");
+      return;
+    }
+    setLoading(true);
+    try {
+      const project = await postControl("/api/projects", {
+        name: projectDraft.name.trim() || `${projectDraft.repoOwner.trim()}/${projectDraft.repoName.trim()}`,
+        repoOwner: projectDraft.repoOwner.trim(),
+        repoName: projectDraft.repoName.trim(),
+        defaultBranch: projectDraft.defaultBranch.trim() || "main",
+        localPath: projectDraft.localPath.trim(),
+        webResearchEnabled: projectDraft.webResearchEnabled,
+        githubMcpEnabled: projectDraft.githubMcpEnabled,
+        active: true
+      }) as ProjectConnection;
+      await loadProjects();
+      await loadStatus();
+      if (project.validationErrors.length) {
+        setProjectError(project.validationErrors[0]);
+      }
+    } catch (error) {
+      setProjectError(error instanceof Error ? error.message : "Project connection failed.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function activateProject(projectId: string) {
+    setProjectError("");
+    setLoading(true);
+    try {
+      const project = await postControl(`/api/projects/${encodeURIComponent(projectId)}/activate`) as ProjectConnection;
+      await loadProjects();
+      await loadStatus();
+      if (project.validationErrors.length) setProjectError(project.validationErrors[0]);
+    } catch (error) {
+      setProjectError(error instanceof Error ? error.message : "Project activation failed.");
     } finally {
       setLoading(false);
     }
@@ -342,6 +440,7 @@ export function App() {
   const visibleEvents = status.logs.slice(0, 4);
   const pipeline = status.pipeline as Record<string, number>;
   const activeWorkItems = useMemo(() => status.workItems.filter((item) => item.state !== "CLOSED").slice(0, 5), [status.workItems]);
+  const activeProject = useMemo(() => projects.find((project) => project.active), [projects]);
   const selected = useMemo(
     () => activeWorkItems.find((item) => item.id === selectedWorkItem) || activeWorkItems[0],
     [selectedWorkItem, activeWorkItems]
@@ -403,7 +502,7 @@ export function App() {
           <h2 className="sr-only" id="create-work-title">Create work</h2>
           <div className="section-label">
             <span>Command</span>
-            <strong>New autonomous work</strong>
+            <strong>{activeProject ? activeProject.repo : "Connect project first"}</strong>
           </div>
 
           <form className="command-form" onSubmit={createWorkItem}>
@@ -418,63 +517,115 @@ export function App() {
                 aria-describedby={createError ? "work-title-error" : undefined}
               />
             </label>
-            <button className="primary-button" type="submit" disabled={loading || !apiState.connected} data-testid="start-loop">
+            <button className="primary-button" type="submit" disabled={loading || !apiState.connected || !activeProject} data-testid="start-loop">
               <PlayCircle size={16} />
               Start
             </button>
 
             <details className="options-menu">
-              <summary>Options</summary>
-              <div className="options-grid">
-                <label className="field criteria-field">
-                  <span>Acceptance</span>
-                  <textarea
-                    value={workDraft.acceptanceCriteria}
-                    onChange={(event) => setWorkDraft((draft) => ({ ...draft, acceptanceCriteria: event.target.value }))}
-                    placeholder="One criterion per line"
-                    data-testid="work-criteria"
+              <summary>Project</summary>
+              <div className="project-grid" data-testid="project-connection">
+                <div className="project-current">
+                  <span className={`project-status ${activeProject?.status === "connected" ? "ready" : "attention"}`}>
+                    <Github size={15} />
+                    {activeProject ? activeProject.status.replace(/_/g, " ") : "No repo connected"}
+                  </span>
+                  <strong>{activeProject?.name || "Connect an isolated GitHub repo"}</strong>
+                  <small>{activeProject ? `${activeProject.repo} · ${activeProject.localPath}` : "Each repo gets separate memory, context, MCP tools, and work queue scope."}</small>
+                  {activeProject && (
+                    <div className="project-badges" aria-label="Project capabilities">
+                      <span>{activeProject.ghAuthed ? "gh ready" : "gh auth needed"}</span>
+                      <span>{activeProject.githubMcpEnabled ? "GitHub MCP" : "MCP off"}</span>
+                      <span>{activeProject.webResearchEnabled ? "Deep research" : "Research off"}</span>
+                    </div>
+                  )}
+                </div>
+
+                <label className="field">
+                  <span>Project name</span>
+                  <input
+                    value={projectDraft.name}
+                    onChange={(event) => setProjectDraft((draft) => ({ ...draft, name: event.target.value }))}
+                    placeholder="Optional display name"
                   />
                 </label>
                 <label className="field">
-                  <span>Type</span>
-                  <select value={workDraft.requestType} onChange={(event) => setWorkDraft((draft) => ({ ...draft, requestType: event.target.value as RequestType }))}>
-                    {requestTypeOptions.map((option) => (
-                      <option key={option}>{option}</option>
-                    ))}
-                  </select>
+                  <span>Owner</span>
+                  <input
+                    value={projectDraft.repoOwner}
+                    onChange={(event) => setProjectDraft((draft) => ({ ...draft, repoOwner: event.target.value }))}
+                    placeholder="GitHub owner"
+                  />
                 </label>
                 <label className="field">
-                  <span>Priority</span>
-                  <select value={workDraft.priority} onChange={(event) => setWorkDraft((draft) => ({ ...draft, priority: event.target.value as Priority }))}>
-                    {priorityOptions.map((option) => (
-                      <option key={option}>{option}</option>
-                    ))}
-                  </select>
+                  <span>Repo</span>
+                  <input
+                    value={projectDraft.repoName}
+                    onChange={(event) => setProjectDraft((draft) => ({ ...draft, repoName: event.target.value }))}
+                    placeholder="Repository name"
+                  />
                 </label>
                 <label className="field">
-                  <span>Risk</span>
-                  <select value={workDraft.riskLevel} onChange={(event) => setWorkDraft((draft) => ({ ...draft, riskLevel: event.target.value as RiskLevel }))}>
-                    {riskLevelOptions.map((option) => (
-                      <option key={option}>{option}</option>
-                    ))}
-                  </select>
+                  <span>Branch</span>
+                  <input
+                    value={projectDraft.defaultBranch}
+                    onChange={(event) => setProjectDraft((draft) => ({ ...draft, defaultBranch: event.target.value }))}
+                    placeholder="main"
+                  />
                 </label>
-                <div className="route-toggles" aria-label="Routing">
-                  {routeToggles.map(([key, label]) => (
-                    <label className="route-toggle" key={key}>
-                      <input
-                        type="checkbox"
-                        checked={workDraft[key]}
-                        onChange={(event) => setWorkDraft((draft) => ({ ...draft, [key]: event.target.checked }))}
-                      />
-                      <span>{label}</span>
-                    </label>
-                  ))}
+                <label className="field project-path">
+                  <span>Local repo path</span>
+                  <input
+                    value={projectDraft.localPath}
+                    onChange={(event) => setProjectDraft((draft) => ({ ...draft, localPath: event.target.value }))}
+                    placeholder="C:\\Users\\you\\Desktop\\repo"
+                  />
+                </label>
+
+                <div className="project-switches">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={projectDraft.githubMcpEnabled}
+                      onChange={(event) => setProjectDraft((draft) => ({ ...draft, githubMcpEnabled: event.target.checked }))}
+                    />
+                    <span>GitHub MCP</span>
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={projectDraft.webResearchEnabled}
+                      onChange={(event) => setProjectDraft((draft) => ({ ...draft, webResearchEnabled: event.target.checked }))}
+                    />
+                    <span>Deep research</span>
+                  </label>
+                  <button className="secondary-button" type="button" onClick={connectProject} disabled={loading || !apiState.connected}>
+                    <GitBranch size={15} />
+                    Connect
+                  </button>
                 </div>
+
+                {projects.length > 1 && (
+                  <div className="project-list">
+                    {projects.map((project) => (
+                      <button
+                        type="button"
+                        key={project.id}
+                        className={project.active ? "is-active" : ""}
+                        onClick={() => activateProject(project.id)}
+                        disabled={loading || project.active}
+                      >
+                        <span>{project.name}</span>
+                        <small>{project.repo}</small>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             </details>
           </form>
           {createError && <p className="form-error" id="work-title-error" role="alert">{createError}</p>}
+          {projectError && <p className="form-error" role="alert">{projectError}</p>}
         </section>
 
         <div className="workspace-grid">
