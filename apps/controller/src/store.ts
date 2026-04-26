@@ -35,6 +35,7 @@ export interface ControllerStore {
   listMemories(workItemId?: string): Promise<MemoryRecord[]>;
   addMemories(memories: MemoryRecord[]): Promise<void>;
   claimWorkItemForWorkflow(id: string): Promise<boolean>;
+  listWorkflowClaims(): Promise<string[]>;
   releaseWorkItemWorkflowClaim(id: string): Promise<void>;
   setEmergencyStop(active: boolean, reason?: string): Promise<void>;
 }
@@ -146,6 +147,10 @@ export class MemoryStore implements ControllerStore {
     if (this.workflowClaims.has(id)) return false;
     this.workflowClaims.add(id);
     return true;
+  }
+
+  async listWorkflowClaims(): Promise<string[]> {
+    return [...this.workflowClaims];
   }
 
   async releaseWorkItemWorkflowClaim(id: string): Promise<void> {
@@ -359,6 +364,11 @@ export class PostgresStore extends MemoryStore {
       [id]
     );
     return result.rowCount === 1;
+  }
+
+  override async listWorkflowClaims(): Promise<string[]> {
+    const result = await this.pool.query("select work_item_id from workflow_claims order by claimed_at asc");
+    return result.rows.map((row) => String(row.work_item_id));
   }
 
   override async releaseWorkItemWorkflowClaim(id: string): Promise<void> {

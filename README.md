@@ -47,6 +47,8 @@ A completed autonomous loop must leave:
 - rollback plan present
 - secret scan passing
 - release created through the configured GitHub path
+- `CLOSED` loop summary promoted into repo-scoped latest-state memory
+- durable workflow claim released only after all parallel agent branches have settled
 
 Emergency stop is available in the dashboard and through `POST /api/emergency-stop`.
 
@@ -56,14 +58,18 @@ The default `chatgpt_pro_assisted` mode is designed around ChatGPT Pro/Codex-sty
 
 Default parallelism:
 
-- up to 3 active work-item workflows
+- one complete work-item loop at a time by default, so the next loop starts only after the current loop reaches `CLOSED` or `BLOCKED`
 - up to 5 active agent runs
 - 1 serialized repo-write/release lane
 - frontend and backend build stages run in parallel after contract lock
 
+Set `completeLoopBeforeNextWorkItem: false` only when cross-work-item parallelism is intentional and the work is disjoint. Internal stage parallelism remains enabled by default.
+
 ## Shared Memory
 
 Agents are context-aware through shared artifacts plus permanent memory. R&D decisions, contracts, release decisions, recurring risks, failures, and stable preferences are stored as typed memory records and injected into future agent runs when relevant.
+
+Every successful loop closure also upserts one repo-scoped `latest-loop` memory record. The next loop reads that memory before intake, so it starts from the latest completed codebase state rather than stale or cross-project context.
 
 The lean AutoMaker-inspired context pack lives in the target repo at `.agent-team/context/`. Put only durable rules, architecture notes, and gotchas there; the controller loads them into every relevant agent run without adding dashboard complexity.
 

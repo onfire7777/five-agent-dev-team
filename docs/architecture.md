@@ -24,20 +24,19 @@ NEW
 → CLOSED
 ```
 
-Frontend and backend build stages run in parallel after the contract stage. Release is autonomous only when configured local, remote, quality, security, privacy, rollback, and sync gates pass.
+Before `INTAKE`, the worker records a loop-start snapshot with latest repo memory, local Git sync, controller runtime health, and GitHub Actions evidence. After `RELEASE`, the worker records a closure artifact with completed stages, files, tests, runtime evidence, and release readiness. Frontend and backend build stages run in parallel after the contract stage. Release is autonomous only when configured local, remote, quality, security, privacy, rollback, and sync gates pass.
 
 ## Smart Continuous Autonomy
 
 The system is a full autonomous team, but it is not designed as five infinite model loops. The controller runs continuously, watches events, chooses the next logical work, and wakes agents only when their stage is unblocked.
 
-Safe parallelism is enabled in four places:
+Safe parallelism is enabled inside each loop:
 
 - Product/R&D discovery can run while Quality drafts the verification strategy.
 - Frontend and Backend build in parallel after the contract is locked.
 - Quality can prepare regression/security plans while implementation runs.
-- Multiple work items can run at once when the scheduler has capacity and the repo-write lane remains serialized.
 
-Repo mutations are intentionally constrained by `maxConcurrentRepoWrites: 1` in v1 so autonomous branches, PR updates, merges, and releases do not conflict.
+By default, `completeLoopBeforeNextWorkItem: true` keeps cross-work-item execution serialized: the scheduler will not start the next `NEW` item while a workflow claim exists or any item is in an active stage. Once the loop reaches `CLOSED` or `BLOCKED` and the workflow claim is released, the next loop can start on the next scheduler tick. Operators can turn this off only for intentionally disjoint work. Repo mutations are intentionally constrained by `maxConcurrentRepoWrites: 1` in v1 so autonomous branches, PR updates, merges, and releases do not conflict.
 
 ## GitHub Contract
 
@@ -74,7 +73,7 @@ Memory scopes:
 - `work_item`: decisions, research, risks, failures, and release notes tied to a specific item
 - `agent`: role-specific observations
 
-The context builder retrieves relevant non-expired memories and injects them into every agent prompt alongside teammate activity and current artifacts. R&D, contract, and release decisions default to permanent memory; transient build observations stay durable or session-scoped.
+The context builder retrieves relevant non-expired memories and injects them into every agent prompt alongside teammate activity and current artifacts. R&D, contract, and release decisions default to permanent memory; transient build observations stay durable or session-scoped. A successful `CLOSED` artifact also upserts one repo-scoped `latest-loop` memory, giving the next work item a concise record of the latest completed codebase state.
 
 Memory is project-isolated by default. Every connected repository gets a project id and repo key, and repo-scoped memory is selected only when it matches that project/repo. Global memory is disabled by default because autonomous teams should not silently transfer one repository's assumptions into another repository.
 

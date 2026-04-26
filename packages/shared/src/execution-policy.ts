@@ -7,10 +7,11 @@ export type AgentExecutionMode = z.infer<typeof AgentExecutionModeSchema>;
 export const SchedulerPolicySchema = z.object({
   mode: AgentExecutionModeSchema.default("chatgpt_pro_assisted"),
   continuous: z.boolean().default(true),
-  pollIntervalSeconds: z.number().int().positive().default(60),
+  pollIntervalSeconds: z.number().int().positive().default(15),
   maxConcurrentWorkflows: z.number().int().positive().default(3),
   maxConcurrentAgentRuns: z.number().int().positive().default(5),
   maxConcurrentRepoWrites: z.number().int().positive().default(1),
+  completeLoopBeforeNextWorkItem: z.boolean().default(true),
   cooldownSecondsAfterFailure: z.number().int().positive().default(300),
   preferCodexForCodingWork: z.boolean().default(true),
   requireEventTrigger: z.boolean().default(true),
@@ -25,10 +26,11 @@ export type SchedulerPolicy = z.infer<typeof SchedulerPolicySchema>;
 export const DEFAULT_SCHEDULER_POLICY: SchedulerPolicy = {
   mode: "chatgpt_pro_assisted",
   continuous: true,
-  pollIntervalSeconds: 60,
+  pollIntervalSeconds: 15,
   maxConcurrentWorkflows: 3,
   maxConcurrentAgentRuns: 5,
   maxConcurrentRepoWrites: 1,
+  completeLoopBeforeNextWorkItem: true,
   cooldownSecondsAfterFailure: 300,
   preferCodexForCodingWork: true,
   requireEventTrigger: true,
@@ -58,12 +60,13 @@ export function selectParallelWorkItems(workItems: WorkItem[], policy: Scheduler
   if (!policy.continuous) return [];
   const capacity = Math.max(0, policy.maxConcurrentWorkflows - activeIds.size);
   if (capacity === 0) return [];
+  const sliceCount = policy.completeLoopBeforeNextWorkItem ? 1 : policy.allowParallelWorkItemsWhenDisjoint ? capacity : 1;
   return workItems
     .filter((item) => !activeIds.has(item.id))
     .filter((item) => !["CLOSED", "BLOCKED"].includes(item.state))
     .filter((item) => getBlockingWorkItemIds(item, workItems).length === 0)
     .sort((a, b) => getPriorityScore(b) - getPriorityScore(a))
-    .slice(0, policy.allowParallelWorkItemsWhenDisjoint ? capacity : 1);
+    .slice(0, sliceCount);
 }
 
 export function getBlockingWorkItemIds(workItem: WorkItem, allWorkItems: WorkItem[]): string[] {

@@ -80,6 +80,7 @@ function configFor(repoPath: string): TargetRepoConfig {
       maxConcurrentWorkflows: 3,
       maxConcurrentAgentRuns: 5,
       maxConcurrentRepoWrites: 1,
+      completeLoopBeforeNextWorkItem: true,
       cooldownSecondsAfterFailure: 300,
       preferCodexForCodingWork: true,
       requireEventTrigger: true,

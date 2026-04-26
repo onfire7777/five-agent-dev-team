@@ -112,10 +112,11 @@ export function createSampleStatus() {
       emergencyReason: "",
       scheduler: {
         continuous: true,
-        pollIntervalSeconds: 60,
+        pollIntervalSeconds: 15,
         maxConcurrentWorkflows: 3,
         maxConcurrentAgentRuns: 5,
         maxConcurrentRepoWrites: 1,
+        completeLoopBeforeNextWorkItem: true,
         parallelDiscovery: true,
         parallelFrontendBackend: true,
         parallelVerificationPlanning: true

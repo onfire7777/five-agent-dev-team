@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MemoryStore } from "../apps/controller/src/store";
-import type { MemoryRecord } from "../packages/shared/src";
+import type { MemoryRecord, StageArtifact } from "../packages/shared/src";
 
 describe("controller store workflow claims", () => {
   it("prevents duplicate workflow claims for the same item", async () => {
@@ -10,6 +10,7 @@ describe("controller store workflow claims", () => {
     await expect(store.claimWorkItemForWorkflow("WI-1")).resolves.toBe(false);
     await store.releaseWorkItemWorkflowClaim("WI-1");
     await expect(store.claimWorkItemForWorkflow("WI-1")).resolves.toBe(true);
+    await expect(store.listWorkflowClaims()).resolves.toEqual(["WI-1"]);
   });
 
   it("stores stage events with increasing sequence numbers", async () => {
@@ -74,5 +75,57 @@ describe("controller store workflow claims", () => {
 
     const memories = await store.listMemories(workItem.id);
     expect(memories.map((memory) => memory.id).sort()).toEqual(["same-repo", "same-work"]);
+  });
+
+  it("makes the latest closed loop memory available to the next work item in the same repo", async () => {
+    const store = new MemoryStore();
+    const first = await store.createWorkItem({
+      title: "First loop",
+      requestType: "feature",
+      priority: "medium",
+      dependencies: [],
+      acceptanceCriteria: [],
+      riskLevel: "medium",
+      frontendNeeded: true,
+      backendNeeded: true,
+      rndNeeded: true,
+      projectId: "project-a",
+      repo: "owner/repo-a"
+    });
+    const now = new Date().toISOString();
+    const closure: StageArtifact = {
+      workItemId: first.id,
+      projectId: "project-a",
+      repo: "owner/repo-a",
+      stage: "CLOSED",
+      ownerAgent: "product-delivery-orchestrator",
+      status: "passed",
+      title: "Loop closure summary",
+      summary: "Loop complete and cleanly synced.",
+      decisions: ["Persist this closure as the repo latest-loop memory."],
+      risks: [],
+      filesChanged: [],
+      testsRun: ["git-sync:passed"],
+      releaseReadiness: "ready",
+      nextStage: null,
+      createdAt: now
+    };
+    await store.addArtifact(closure);
+    const second = await store.createWorkItem({
+      title: "Second loop",
+      requestType: "feature",
+      priority: "medium",
+      dependencies: [],
+      acceptanceCriteria: [],
+      riskLevel: "medium",
+      frontendNeeded: true,
+      backendNeeded: true,
+      rndNeeded: true,
+      projectId: "project-a",
+      repo: "owner/repo-a"
+    });
+
+    const memories = await store.listMemories(second.id);
+    expect(memories.some((memory) => memory.tags.includes("latest-loop") && memory.content.includes("Loop complete"))).toBe(true);
   });
 });

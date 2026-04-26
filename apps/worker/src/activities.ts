@@ -28,6 +28,21 @@ export interface StageInput {
   previousArtifacts: StageArtifact[];
 }
 
+type EvidenceItem = {
+  name: string;
+  ok: boolean;
+  required: boolean;
+  summary: string;
+  tests: string[];
+  risks: string[];
+};
+
+type LoopEvidence = {
+  git: EvidenceItem;
+  runtime: EvidenceItem;
+  github: EvidenceItem;
+};
+
 export async function ensureNotStopped(workItemId: string, config?: TargetRepoConfig): Promise<void> {
   const store = await getActivityStore();
   const status = await store.getStatus();
@@ -43,6 +58,63 @@ export async function ensureNotStopped(workItemId: string, config?: TargetRepoCo
     if (error instanceof Error && error.message.includes("Emergency stop is active")) throw error;
     if ((error as NodeJS.ErrnoException).code && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
+}
+
+export async function recordLoopStart(workItem: WorkItem): Promise<StageArtifact> {
+  const config = loadReleaseConfig();
+  const scopedWorkItem = scopeWorkItemToProject(workItem, config);
+  await ensureNotStopped(scopedWorkItem.id, config);
+  const store = await getActivityStore();
+  const memories = selectRelevantMemories([
+    ...(await store.listMemories(scopedWorkItem.id)),
+    ...(await loadRepoContextMemories(config, scopedWorkItem))
+  ], scopedWorkItem, 20);
+  const latestLoopMemory = memories.find((memory) => memory.tags.includes("latest-loop"));
+  const evidence = await collectLoopEvidence(scopedWorkItem, config);
+  const blockingRisks = [
+    ...(config.release.requireCleanWorktree || config.release.requireLocalRemoteSync ? evidence.git.risks : []),
+    ...(evidence.runtime.required ? evidence.runtime.risks : [])
+  ];
+
+  const artifact = StageArtifactSchema.parse({
+    workItemId: scopedWorkItem.id,
+    projectId: scopedWorkItem.projectId,
+    repo: scopedWorkItem.repo,
+    stage: "NEW",
+    ownerAgent: "product-delivery-orchestrator",
+    status: blockingRisks.length ? "blocked" : "passed",
+    title: "Loop start snapshot",
+    summary: blockingRisks.length
+      ? `Loop start blocked before intake: ${blockingRisks.join("; ")}.`
+      : "Loop start captured the latest completed repo memory, local sync evidence, runtime health evidence, and GitHub gate evidence before intake.",
+    decisions: [
+      `Connected project: ${scopedWorkItem.projectId || "unscoped"}.`,
+      `Connected repo: ${scopedWorkItem.repo || "unscoped"}.`,
+      latestLoopMemory
+        ? `Starting from latest completed loop memory: ${latestLoopMemory.title} (${latestLoopMemory.updatedAt}).`
+        : "No previous completed loop memory exists for this connected repo.",
+      evidence.git.summary,
+      evidence.runtime.summary,
+      evidence.github.summary,
+      "Do not start implementation until this loop owns the workflow claim and every previous loop has reached CLOSED or BLOCKED."
+    ],
+    risks: uniqueStrings([
+      ...evidence.git.risks,
+      ...evidence.runtime.risks,
+      ...evidence.github.risks
+    ]),
+    filesChanged: [],
+    testsRun: uniqueStrings([
+      ...evidence.git.tests,
+      ...evidence.runtime.tests,
+      ...evidence.github.tests
+    ]),
+    releaseReadiness: "unknown",
+    nextStage: blockingRisks.length ? "BLOCKED" : "INTAKE",
+    createdAt: new Date().toISOString()
+  });
+  await persistArtifact(artifact);
+  return artifact;
 }
 
 export async function runAgentStage(input: StageInput): Promise<StageArtifact> {
@@ -68,6 +140,85 @@ export async function runAgentStage(input: StageInput): Promise<StageArtifact> {
   const result = await runRoleAgent(definition, { ...input, workItem: scopedWorkItem, memories, targetRepoConfig: config });
   await persistArtifact(result.artifact);
   return result.artifact;
+}
+
+export async function closeWorkLoop(workItem: WorkItem, previousArtifacts: StageArtifact[]): Promise<StageArtifact> {
+  const config = loadReleaseConfig();
+  const scopedWorkItem = scopeWorkItemToProject(workItem, config);
+  const evidence = await collectLoopEvidence(scopedWorkItem, config);
+  const release = [...previousArtifacts].reverse().find((artifact) => artifact.stage === "RELEASE");
+  const priorBlocked = previousArtifacts.some((artifact) =>
+    artifact.stage === "BLOCKED" || artifact.status === "blocked" || artifact.status === "failed"
+  );
+  const releasePassed = release?.status === "passed" && release.releaseReadiness === "ready";
+  const gitRequired = config.release.requireCleanWorktree || config.release.requireLocalRemoteSync;
+  const gitReady = !gitRequired || evidence.git.ok;
+  const runtimeReady = !evidence.runtime.required || evidence.runtime.ok;
+  const githubReady = !config.release.githubActionsRequired || releasePassed || evidence.github.ok;
+  const passed = releasePassed && !priorBlocked && gitReady && runtimeReady && githubReady;
+  const blockingRisks = uniqueStrings([
+    ...(releasePassed ? [] : ["release gate did not produce a ready passed release artifact"]),
+    ...(priorBlocked ? ["one or more prior stages ended blocked or failed"] : []),
+    ...(gitReady ? [] : evidence.git.risks),
+    ...(runtimeReady ? [] : evidence.runtime.risks),
+    ...(githubReady ? [] : evidence.github.risks)
+  ]);
+  const completedStages = uniqueStrings(previousArtifacts.map((artifact) => artifact.stage));
+  const filesChanged = uniqueStrings(previousArtifacts.flatMap((artifact) => artifact.filesChanged));
+  const testsRun = uniqueStrings([
+    ...previousArtifacts.flatMap((artifact) => artifact.testsRun),
+    ...evidence.git.tests,
+    ...evidence.runtime.tests,
+    ...evidence.github.tests
+  ]);
+
+  const artifact = StageArtifactSchema.parse({
+    workItemId: scopedWorkItem.id,
+    projectId: scopedWorkItem.projectId,
+    repo: scopedWorkItem.repo,
+    stage: "CLOSED",
+    ownerAgent: "product-delivery-orchestrator",
+    status: passed ? "passed" : "blocked",
+    title: passed ? "Loop closure summary" : "Loop closure blocked",
+    summary: passed
+      ? `Loop complete for ${scopedWorkItem.title}. Completed stages: ${completedStages.join(" -> ")}. Latest repo state is remembered for the next loop.`
+      : `Loop cannot close cleanly for ${scopedWorkItem.title}: ${blockingRisks.join("; ")}.`,
+    decisions: [
+      `Completed stages: ${completedStages.join(" -> ") || "none"}.`,
+      `Files changed: ${filesChanged.length ? filesChanged.join(", ") : "none recorded"}.`,
+      `Tests and gates recorded: ${testsRun.length ? testsRun.join(", ") : "none recorded"}.`,
+      evidence.git.summary,
+      evidence.runtime.summary,
+      evidence.github.summary,
+      "Persist this closure as the repo latest-loop memory before any new work item starts.",
+      "Release the durable workflow claim only after every stage and parallel agent branch has settled."
+    ],
+    risks: uniqueStrings([
+      ...previousArtifacts.flatMap((artifact) => artifact.risks),
+      ...blockingRisks,
+      ...evidence.git.risks,
+      ...evidence.runtime.risks,
+      ...evidence.github.risks
+    ]),
+    filesChanged,
+    testsRun,
+    releaseReadiness: passed ? "ready" : "not_ready",
+    nextStage: passed ? null : "BLOCKED",
+    createdAt: new Date().toISOString()
+  });
+  await persistArtifact(artifact);
+  return artifact;
+}
+
+export async function releaseWorkflowClaim(workItemId: string): Promise<void> {
+  const store = await getActivityStore();
+  await store.releaseWorkItemWorkflowClaim(workItemId);
+  await store.addEvent({
+    workItemId,
+    level: "info",
+    type: "system",
+    message: `Workflow claim released for ${workItemId}; scheduler may start the next loop when no active work remains.`
+  });
 }
 
 export async function prepareBuildBranches(workItem: WorkItem): Promise<{ branchPrefix: string }> {
@@ -195,6 +346,145 @@ export async function performAutonomousRelease(workItem: WorkItem, previousArtif
   });
   await persistArtifact(artifact);
   return artifact;
+}
+
+async function collectLoopEvidence(workItem: WorkItem, config: TargetRepoConfig): Promise<LoopEvidence> {
+  const [git, runtime, github] = await Promise.all([
+    readGitEvidence(workItem, config),
+    readRuntimeHealthEvidence(),
+    readGitHubActionsEvidence(config)
+  ]);
+  return { git, runtime, github };
+}
+
+async function readGitEvidence(workItem: WorkItem, config: TargetRepoConfig): Promise<EvidenceItem> {
+  const repoPath = config.repo.localPath || process.cwd();
+  const syncInput = await readGitSyncInput(workItem, config);
+  const sync = evaluateGitSync(syncInput);
+  const branch = await execGit("git rev-parse --abbrev-ref HEAD", repoPath)
+    .then((result) => result.stdout.trim())
+    .catch(() => "unknown");
+  const sha = await execGit("git rev-parse --short HEAD", repoPath)
+    .then((result) => result.stdout.trim())
+    .catch(() => "unknown");
+  return {
+    name: "local-git-sync",
+    ok: sync.synced,
+    required: config.release.requireCleanWorktree || config.release.requireLocalRemoteSync,
+    summary: sync.synced
+      ? `Local Git is clean and synced on ${branch}@${sha}.`
+      : `Local Git is not clean/synced on ${branch}@${sha}: ${sync.reasons.join("; ")}.`,
+    tests: [
+      `git-sync:${sync.synced ? "passed" : "failed"}`,
+      `git-branch:${branch}`,
+      `git-sha:${sha}`,
+      `git-ahead:${syncInput.ahead}`,
+      `git-behind:${syncInput.behind}`,
+      `git-duplicate-automation-branches:${syncInput.duplicateAutomationBranches}`
+    ],
+    risks: sync.reasons
+  };
+}
+
+async function readRuntimeHealthEvidence(): Promise<EvidenceItem> {
+  const required = envFlag("AGENT_REQUIRE_RUNTIME_HEALTH");
+  const configuredUrl = process.env.CONTROLLER_HEALTH_URL;
+  const urls = configuredUrl
+    ? [configuredUrl]
+    : ["http://controller:4310/health", "http://localhost:4310/health"];
+  const failures: string[] = [];
+
+  for (const url of urls) {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(2500) });
+      const body = await response.json().catch(() => ({})) as Record<string, unknown>;
+      if (response.ok && body.ok !== false) {
+        return {
+          name: "docker-runtime-health",
+          ok: true,
+          required,
+          summary: `Controller runtime health is reachable at ${url}; service=${String(body.service || "unknown")}, temporal=${String(body.temporal || "unknown")}.`,
+          tests: ["runtime-health:passed"],
+          risks: []
+        };
+      }
+      failures.push(`${url} returned HTTP ${response.status}`);
+    } catch (error) {
+      failures.push(`${url} unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  const summary = `Controller/Docker runtime health was not confirmed: ${failures.join("; ")}.`;
+  return {
+    name: "docker-runtime-health",
+    ok: !required,
+    required,
+    summary: required ? summary : `${summary} Recorded as non-blocking evidence because AGENT_REQUIRE_RUNTIME_HEALTH is not enabled.`,
+    tests: [`runtime-health:${required ? "failed" : "unconfirmed"}`],
+    risks: required ? [summary] : []
+  };
+}
+
+async function readGitHubActionsEvidence(config: TargetRepoConfig): Promise<EvidenceItem> {
+  const repoPath = config.repo.localPath || process.cwd();
+  const repo = `${assertSafeGitRef(config.repo.owner, "repo owner")}/${assertSafeGitRef(config.repo.name, "repo name")}`;
+  const branch = assertSafeGitRef(config.repo.defaultBranch, "default branch");
+
+  if (envFlag("AGENT_GITHUB_ACTIONS_PASSED")) {
+    return {
+      name: "github-actions",
+      ok: true,
+      required: config.release.githubActionsRequired,
+      summary: "GitHub Actions gate is marked passed by AGENT_GITHUB_ACTIONS_PASSED.",
+      tests: ["github-actions:passed"],
+      risks: []
+    };
+  }
+
+  try {
+    const result = await exec(`gh run list --repo ${repo} --branch ${branch} --limit 1 --json status,conclusion,url,workflowName,headSha`, {
+      cwd: repoPath,
+      timeout: 30_000,
+      maxBuffer: 1024 * 1024
+    });
+    const runs = JSON.parse(result.stdout || "[]") as Array<Record<string, unknown>>;
+    const latest = runs[0];
+    if (!latest) {
+      const summary = `No GitHub Actions runs were found for ${repo}@${branch}.`;
+      return {
+        name: "github-actions",
+        ok: !config.release.githubActionsRequired,
+        required: config.release.githubActionsRequired,
+        summary,
+        tests: ["github-actions:none"],
+        risks: config.release.githubActionsRequired ? [summary] : []
+      };
+    }
+    const status = String(latest.status || "unknown");
+    const conclusion = String(latest.conclusion || "unknown");
+    const ok = status === "completed" && conclusion === "success";
+    const summary = ok
+      ? `Latest GitHub Actions run passed for ${repo}@${branch}: ${String(latest.workflowName || "workflow")} ${String(latest.headSha || "")}.`
+      : `Latest GitHub Actions run is not passing for ${repo}@${branch}: status=${status}, conclusion=${conclusion}, url=${String(latest.url || "unavailable")}.`;
+    return {
+      name: "github-actions",
+      ok: ok || !config.release.githubActionsRequired,
+      required: config.release.githubActionsRequired,
+      summary,
+      tests: [`github-actions:${ok ? "passed" : conclusion === "unknown" ? status : conclusion}`],
+      risks: ok ? [] : [summary]
+    };
+  } catch (error) {
+    const summary = `GitHub Actions evidence could not be read with gh: ${error instanceof Error ? error.message.split(/\r?\n/)[0] : String(error)}.`;
+    return {
+      name: "github-actions",
+      ok: !config.release.githubActionsRequired,
+      required: config.release.githubActionsRequired,
+      summary,
+      tests: [`github-actions:${config.release.githubActionsRequired ? "failed" : "unconfirmed"}`],
+      risks: config.release.githubActionsRequired ? [summary] : []
+    };
+  }
 }
 
 async function collectReleaseSignal(workItem: WorkItem, config: TargetRepoConfig, previousArtifacts: StageArtifact[]): Promise<{ signal: VerificationSignal; syncReasons: string[] }> {
@@ -394,10 +684,11 @@ function createDefaultReleaseConfig(): TargetRepoConfig {
     scheduler: {
       mode: (process.env.AGENT_EXECUTION_MODE as any) || "chatgpt_pro_assisted",
       continuous: true,
-      pollIntervalSeconds: Number(process.env.SCHEDULER_POLL_SECONDS || 60),
+      pollIntervalSeconds: Number(process.env.SCHEDULER_POLL_SECONDS || 15),
       maxConcurrentWorkflows: Number(process.env.MAX_CONCURRENT_WORKFLOWS || 3),
       maxConcurrentAgentRuns: Number(process.env.MAX_CONCURRENT_AGENT_RUNS || 5),
       maxConcurrentRepoWrites: Number(process.env.MAX_CONCURRENT_REPO_WRITES || 1),
+      completeLoopBeforeNextWorkItem: true,
       cooldownSecondsAfterFailure: 300,
       preferCodexForCodingWork: true,
       requireEventTrigger: true,
@@ -465,4 +756,8 @@ function assertSafeGitRef(value: string, label: string): string {
     throw new Error(`Unsafe ${label}: ${value}`);
   }
   return value;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }

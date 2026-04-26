@@ -24,6 +24,33 @@ describe("permanent smart memory", () => {
     expect(memories.some((memory) => memory.kind === "handoff")).toBe(true);
   });
 
+  it("promotes successful closure into permanent repo latest-state memory", () => {
+    const closureArtifact = {
+      ...createSampleArtifacts()[0],
+      stage: "CLOSED" as const,
+      ownerAgent: "product-delivery-orchestrator" as const,
+      status: "passed" as const,
+      title: "Loop closure summary",
+      summary: "Loop complete. Latest repo state is remembered for the next loop.",
+      decisions: ["Persist this closure as the repo latest-loop memory."],
+      testsRun: ["git-sync:passed", "github-actions:passed"],
+      releaseReadiness: "ready" as const,
+      nextStage: null
+    };
+    const latest = memoryFromArtifact(closureArtifact).find((memory) => memory.tags.includes("latest-loop"));
+
+    expect(latest).toMatchObject({
+      scope: "repo",
+      projectId: closureArtifact.projectId,
+      repo: closureArtifact.repo,
+      kind: "handoff",
+      permanence: "permanent",
+      importance: 5,
+      workItemId: undefined
+    });
+    expect(latest?.content).toContain("Loop complete");
+  });
+
   it("retrieves relevant non-expired memories by importance", () => {
     const workItem = createSampleWorkItems()[1];
     const memories = memoryFromArtifact(createSampleArtifacts()[0]);

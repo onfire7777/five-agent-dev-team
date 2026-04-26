@@ -71,7 +71,12 @@ export function buildSharedContext(
     }),
     contextNotes: [
       ...memories
-        .filter((memory) => memory.kind === "preference" || memory.source.startsWith("context-file:"))
+        .filter((memory) =>
+          memory.kind === "preference" ||
+          memory.kind === "handoff" ||
+          memory.kind === "release" ||
+          memory.source.startsWith("context-file:")
+        )
         .map((memory) => `${memory.title}: ${memory.content}`),
       ...capabilityPackNotes(options.targetRepoConfig, {
         workItem,
@@ -267,6 +272,33 @@ export function memoryFromArtifact(artifact: StageArtifact): MemoryRecord[] {
       importance: 5,
       permanence: "permanent"
     }, now));
+  }
+
+  if (artifact.stage === "CLOSED" && artifact.status === "passed") {
+    const scopeKey = artifact.projectId || artifact.repo || artifact.workItemId;
+    records.push({
+      id: `latest-loop-${hashId(scopeKey)}`,
+      scope: artifact.projectId || artifact.repo ? "repo" : "work_item",
+      workItemId: artifact.projectId || artifact.repo ? undefined : artifact.workItemId,
+      projectId: artifact.projectId,
+      repo: artifact.repo,
+      agent: artifact.ownerAgent,
+      kind: "handoff",
+      title: "Latest completed loop state",
+      content: [
+        artifact.summary,
+        artifact.decisions.length ? `Decisions: ${artifact.decisions.join("; ")}` : "",
+        artifact.testsRun.length ? `Tests and gates: ${artifact.testsRun.join("; ")}` : "",
+        artifact.filesChanged.length ? `Files changed: ${artifact.filesChanged.join("; ")}` : "Files changed: none recorded"
+      ].filter(Boolean).join("\n"),
+      tags: ["latest-loop", "loop-closure", artifact.stage, artifact.ownerAgent],
+      confidence: "high",
+      importance: 5,
+      permanence: "permanent",
+      source: `${artifact.ownerAgent}:${artifact.stage}`,
+      createdAt: now,
+      updatedAt: now
+    });
   }
 
   if (artifact.status === "blocked" || artifact.status === "failed" || artifact.stage === "BLOCKED") {

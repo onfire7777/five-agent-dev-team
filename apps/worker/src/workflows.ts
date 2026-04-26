@@ -12,64 +12,87 @@ const activity = proxyActivities<typeof activities>({
 });
 
 export async function autonomousDevelopmentWorkflow(workItem: WorkItem) {
-  await activity.ensureNotStopped(workItem.id);
+  try {
+    await activity.ensureNotStopped(workItem.id);
 
-  const intake = await activity.runAgentStage({ workItem, stage: "INTAKE", previousArtifacts: [] });
-  await activity.ensureNotStopped(workItem.id);
+    const loopStart = await activity.recordLoopStart(workItem);
+    if (loopStart.status !== "passed" || loopStart.nextStage === "BLOCKED") {
+      const closure = await activity.closeWorkLoop(workItem, [loopStart]);
+      return {
+        workItemId: workItem.id,
+        status: "blocked",
+        artifacts: [loopStart, closure]
+      };
+    }
 
-  const [rnd, earlyVerificationPlan] = await Promise.all([
-    workItem.rndNeeded
-      ? activity.runAgentStage({ workItem, stage: "RND", previousArtifacts: [intake] })
-      : Promise.resolve(null),
-    activity.planVerification(workItem, [intake])
-  ]);
-  await activity.ensureNotStopped(workItem.id);
+    const intake = await activity.runAgentStage({ workItem, stage: "INTAKE", previousArtifacts: [loopStart] });
+    await activity.ensureNotStopped(workItem.id);
 
-  const contract = await activity.runAgentStage({
-    workItem,
-    stage: "CONTRACT",
-    previousArtifacts: [intake, rnd, earlyVerificationPlan].filter(Boolean) as any
-  });
+    const [rnd, earlyVerificationPlan] = await Promise.all([
+      workItem.rndNeeded
+        ? activity.runAgentStage({ workItem, stage: "RND", previousArtifacts: [loopStart, intake] })
+        : Promise.resolve(null),
+      activity.planVerification(workItem, [loopStart, intake])
+    ]);
+    await activity.ensureNotStopped(workItem.id);
 
-  await activity.prepareBuildBranches(workItem);
-  await activity.ensureNotStopped(workItem.id);
+    const contract = await activity.runAgentStage({
+      workItem,
+      stage: "CONTRACT",
+      previousArtifacts: [loopStart, intake, rnd, earlyVerificationPlan].filter(Boolean) as any
+    });
 
-  const builders = await Promise.all([
-    workItem.frontendNeeded
-      ? activity.runAgentStage({ workItem, stage: "FRONTEND_BUILD", previousArtifacts: [intake, contract] })
-      : Promise.resolve(null),
-    workItem.backendNeeded
-      ? activity.runAgentStage({ workItem, stage: "BACKEND_BUILD", previousArtifacts: [intake, contract] })
-      : Promise.resolve(null)
-  ]);
+    await activity.prepareBuildBranches(workItem);
+    await activity.ensureNotStopped(workItem.id);
 
-  const buildArtifacts = builders.filter(Boolean) as any;
-  const integration = await activity.integrateBranches(workItem, [contract, ...buildArtifacts]);
-  const verify = await activity.runVerification(workItem, [integration, ...buildArtifacts]);
-  if (verify.status !== "passed" || verify.nextStage === "BLOCKED") {
-    const blocked = await activity.runAgentStage({ workItem, stage: "BLOCKED", previousArtifacts: [verify] });
+    const builders = await Promise.all([
+      workItem.frontendNeeded
+        ? activity.runAgentStage({ workItem, stage: "FRONTEND_BUILD", previousArtifacts: [intake, contract] })
+        : Promise.resolve(null),
+      workItem.backendNeeded
+        ? activity.runAgentStage({ workItem, stage: "BACKEND_BUILD", previousArtifacts: [intake, contract] })
+        : Promise.resolve(null)
+    ]);
+
+    const buildArtifacts = builders.filter(Boolean) as any;
+    const integration = await activity.integrateBranches(workItem, [contract, ...buildArtifacts]);
+    const verify = await activity.runVerification(workItem, [integration, ...buildArtifacts]);
+    if (verify.status !== "passed" || verify.nextStage === "BLOCKED") {
+      const blocked = await activity.runAgentStage({ workItem, stage: "BLOCKED", previousArtifacts: [verify] });
+      const closure = await activity.closeWorkLoop(workItem, [loopStart, intake, rnd, contract, ...buildArtifacts, integration, verify, blocked].filter(Boolean) as any);
+      return {
+        workItemId: workItem.id,
+        status: "blocked",
+        artifacts: [loopStart, intake, rnd, contract, ...buildArtifacts, integration, verify, blocked, closure].filter(Boolean)
+      };
+    }
+
+    const release = await activity.performAutonomousRelease(workItem, [verify]);
+    if (release.status !== "passed" || release.nextStage === "BLOCKED") {
+      const blocked = await activity.runAgentStage({ workItem, stage: "BLOCKED", previousArtifacts: [release] });
+      const closure = await activity.closeWorkLoop(workItem, [loopStart, intake, rnd, contract, ...buildArtifacts, integration, verify, release, blocked].filter(Boolean) as any);
+      return {
+        workItemId: workItem.id,
+        status: "blocked",
+        artifacts: [loopStart, intake, rnd, contract, ...buildArtifacts, integration, verify, release, blocked, closure].filter(Boolean)
+      };
+    }
+
+    const closed = await activity.closeWorkLoop(workItem, [loopStart, intake, rnd, contract, ...buildArtifacts, integration, verify, release].filter(Boolean) as any);
+    if (closed.status !== "passed" || closed.nextStage === "BLOCKED") {
+      return {
+        workItemId: workItem.id,
+        status: "blocked",
+        artifacts: [loopStart, intake, rnd, contract, ...buildArtifacts, integration, verify, release, closed].filter(Boolean)
+      };
+    }
+
     return {
       workItemId: workItem.id,
-      status: "blocked",
-      artifacts: [intake, rnd, contract, ...buildArtifacts, integration, verify, blocked].filter(Boolean)
+      status: "closed",
+      artifacts: [loopStart, intake, rnd, contract, ...buildArtifacts, integration, verify, release, closed].filter(Boolean)
     };
+  } finally {
+    await activity.releaseWorkflowClaim(workItem.id);
   }
-
-  const release = await activity.performAutonomousRelease(workItem, [verify]);
-  if (release.status !== "passed" || release.nextStage === "BLOCKED") {
-    const blocked = await activity.runAgentStage({ workItem, stage: "BLOCKED", previousArtifacts: [release] });
-    return {
-      workItemId: workItem.id,
-      status: "blocked",
-      artifacts: [intake, rnd, contract, ...buildArtifacts, integration, verify, release, blocked].filter(Boolean)
-    };
-  }
-
-  const closed = await activity.runAgentStage({ workItem, stage: "CLOSED", previousArtifacts: [release] });
-
-  return {
-    workItemId: workItem.id,
-    status: "closed",
-    artifacts: [intake, rnd, contract, ...buildArtifacts, integration, verify, release, closed].filter(Boolean)
-  };
 }

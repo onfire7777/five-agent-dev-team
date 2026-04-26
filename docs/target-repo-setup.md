@@ -24,6 +24,8 @@ The controller runs configured commands exactly as provided.
 
 Work items can declare `dependencies` as work-item IDs. The scheduler will not start a dependent item until every dependency is `CLOSED`, which keeps parallel execution efficient without unsafe ordering.
 
+The default scheduler policy also uses `completeLoopBeforeNextWorkItem: true`. That means a new work item does not start until the current loop has reached `CLOSED` or `BLOCKED`, every parallel agent stage has settled, and the workflow claim has been released. Keep this default for one-repo v1 operation; disable it only for intentionally disjoint cross-work-item runs.
+
 ## Lean Context Packs
 
 For permanent repo context without UI bloat, add focused markdown or text files under:

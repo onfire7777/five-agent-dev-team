@@ -33,12 +33,21 @@ describe("smart scheduler policy", () => {
     expect(shouldUseLiveApi({ ...DEFAULT_SCHEDULER_POLICY, mode: "api_live" })).toBe(true);
   });
 
-  it("selects multiple active work items when parallelism is safe", () => {
+  it("selects one work item by default so the current loop finishes before the next starts", () => {
+    const selected = selectParallelWorkItems([
+      { ...base, id: "WI-1", priority: "high" },
+      { ...base, id: "WI-2", priority: "medium" }
+    ], { ...DEFAULT_SCHEDULER_POLICY, maxConcurrentWorkflows: 2 }, new Set());
+
+    expect(selected.map((item) => item.id)).toEqual(["WI-1"]);
+  });
+
+  it("selects multiple active work items when cross-work-item parallelism is explicitly enabled", () => {
     const selected = selectParallelWorkItems([
       { ...base, id: "WI-1", priority: "high" },
       { ...base, id: "WI-2", priority: "medium" },
       { ...base, id: "WI-3", priority: "low" }
-    ], { ...DEFAULT_SCHEDULER_POLICY, maxConcurrentWorkflows: 2 }, new Set());
+    ], { ...DEFAULT_SCHEDULER_POLICY, completeLoopBeforeNextWorkItem: false, maxConcurrentWorkflows: 2 }, new Set());
 
     expect(selected.map((item) => item.id)).toEqual(["WI-1", "WI-2"]);
   });
@@ -48,7 +57,7 @@ describe("smart scheduler policy", () => {
       { ...base, id: "WI-prereq", priority: "medium", state: "VERIFY" },
       { ...base, id: "WI-blocked", priority: "urgent", dependencies: ["WI-prereq"] },
       { ...base, id: "WI-free", priority: "high" }
-    ], { ...DEFAULT_SCHEDULER_POLICY, maxConcurrentWorkflows: 3 }, new Set());
+    ], { ...DEFAULT_SCHEDULER_POLICY, completeLoopBeforeNextWorkItem: false, maxConcurrentWorkflows: 3 }, new Set());
 
     expect(selected.map((item) => item.id)).toEqual(["WI-free", "WI-prereq"]);
     expect(getBlockingWorkItemIds({ ...base, id: "WI-blocked", dependencies: ["WI-prereq"] }, [

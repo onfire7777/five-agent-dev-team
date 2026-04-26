@@ -154,10 +154,11 @@ scheduler:
   # Use api_live only when you have separate OpenAI API billing configured.
   mode: chatgpt_pro_assisted
   continuous: true
-  pollIntervalSeconds: 60
+  pollIntervalSeconds: 15
   maxConcurrentWorkflows: 3
   maxConcurrentAgentRuns: 5
   maxConcurrentRepoWrites: 1
+  completeLoopBeforeNextWorkItem: true
   cooldownSecondsAfterFailure: 300
   preferCodexForCodingWork: true
   requireEventTrigger: true

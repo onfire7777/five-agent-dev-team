@@ -10,7 +10,10 @@ export function createSchedulerPolicy(): SchedulerPolicy {
     pollIntervalSeconds: Number(process.env.SCHEDULER_POLL_SECONDS || DEFAULT_SCHEDULER_POLICY.pollIntervalSeconds),
     maxConcurrentWorkflows: Number(process.env.MAX_CONCURRENT_WORKFLOWS || DEFAULT_SCHEDULER_POLICY.maxConcurrentWorkflows),
     maxConcurrentAgentRuns: Number(process.env.MAX_CONCURRENT_AGENT_RUNS || DEFAULT_SCHEDULER_POLICY.maxConcurrentAgentRuns),
-    maxConcurrentRepoWrites: Number(process.env.MAX_CONCURRENT_REPO_WRITES || DEFAULT_SCHEDULER_POLICY.maxConcurrentRepoWrites)
+    maxConcurrentRepoWrites: Number(process.env.MAX_CONCURRENT_REPO_WRITES || DEFAULT_SCHEDULER_POLICY.maxConcurrentRepoWrites),
+    completeLoopBeforeNextWorkItem: process.env.COMPLETE_LOOP_BEFORE_NEXT_WORK_ITEM === undefined
+      ? DEFAULT_SCHEDULER_POLICY.completeLoopBeforeNextWorkItem
+      : /^(1|true|yes)$/i.test(process.env.COMPLETE_LOOP_BEFORE_NEXT_WORK_ITEM)
   };
 }
 
@@ -27,6 +30,12 @@ export function startSmartScheduler(store: ControllerStore): NodeJS.Timeout | nu
   const tick = async () => {
     const status = await store.getStatus();
     if (status.system.emergencyStop) return;
+
+    const activeClaims = await store.listWorkflowClaims();
+    const activeWork = status.workItems.filter((item) => !["NEW", "CLOSED", "BLOCKED"].includes(item.state));
+    if (policy.completeLoopBeforeNextWorkItem && (activeIds.size > 0 || activeClaims.length > 0 || activeWork.length > 0)) {
+      return;
+    }
 
     const queuedItems = status.workItems.filter((item) => item.state === "NEW");
     const nextItems = selectParallelWorkItems(queuedItems, policy, activeIds);
