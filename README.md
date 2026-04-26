@@ -76,4 +76,4 @@ If `AGENT_LIVE_MODE=false`, agents use deterministic local templates so the work
 
 See `docs/architecture.md` and `docs/target-repo-setup.md` for operational details.
 
-Security note: `npm audit` currently reports a Temporal transitive `uuid` advisory that cannot be fixed safely with non-breaking npm resolution. See `docs/security.md`.
+Security note: `npm audit` currently reports a Temporal transitive `uuid` advisory that cannot be fixed safely with non-breaking npm resolution. CodeQL is provided as an opt-in template because GitHub code scanning must be enabled first for this private repo. See `docs/security.md`.

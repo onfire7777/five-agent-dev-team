@@ -15,3 +15,9 @@ Operational mitigation:
 - Keep Temporal packages current.
 - Re-run `npm audit --audit-level=moderate` before release.
 - Replace or override the dependency only after Temporal publishes a compatible fix or after validating an override against the worker runtime.
+
+## Code Scanning
+
+The repository includes a CodeQL workflow template at `templates/github/codeql.yml`, but it is not enabled in `.github/workflows` by default because GitHub rejected CodeQL uploads for this private repo with: `Code scanning is not enabled for this repository`.
+
+Enable code scanning/GitHub Advanced Security in repository settings first, then copy the template into `.github/workflows/codeql.yml`.
