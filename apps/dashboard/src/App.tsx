@@ -8,7 +8,6 @@ import {
   GitBranch,
   Github,
   LayoutDashboard,
-  Lock,
   PlayCircle,
   RefreshCw,
   Rocket,
@@ -26,6 +25,21 @@ declare const __DASHBOARD_API_BASE__: string | undefined;
 
 type Status = ReturnType<typeof createSampleStatus>;
 type RoutingKey = "frontendNeeded" | "backendNeeded" | "rndNeeded";
+type InsightView = "release" | "team" | "memory" | "events";
+type RequestType = "feature" | "bug" | "performance" | "security" | "privacy" | "refactor" | "research";
+type Priority = "low" | "medium" | "high" | "urgent";
+type RiskLevel = "low" | "medium" | "high";
+
+type WorkDraft = {
+  title: string;
+  acceptanceCriteria: string;
+  requestType: RequestType;
+  priority: Priority;
+  riskLevel: RiskLevel;
+  frontendNeeded: boolean;
+  backendNeeded: boolean;
+  rndNeeded: boolean;
+};
 
 type ApiState = {
   connected: boolean;
@@ -151,6 +165,17 @@ const flowGroups = [
   { label: "Release", states: ["RELEASE", "CLOSED"], icon: Rocket }
 ] as const;
 
+const insightOptions: Array<[InsightView, string]> = [
+  ["release", "Release gate"],
+  ["team", "Team lanes"],
+  ["memory", "Memory"],
+  ["events", "Events"]
+];
+
+const requestTypeOptions: RequestType[] = ["feature", "bug", "performance", "security", "privacy", "refactor", "research"];
+const priorityOptions: Priority[] = ["low", "medium", "high", "urgent"];
+const riskLevelOptions: RiskLevel[] = ["low", "medium", "high"];
+
 export function App() {
   const [status, setStatus] = useState<Status>(() => createSampleStatus());
   const [apiState, setApiState] = useState<ApiState>({
@@ -160,9 +185,10 @@ export function App() {
   });
   const [loading, setLoading] = useState(false);
   const [selectedWorkItem, setSelectedWorkItem] = useState("WI-1290");
+  const [activeInsight, setActiveInsight] = useState<InsightView>("release");
   const [memories, setMemories] = useState<MemoryRecord[]>([]);
   const [createError, setCreateError] = useState("");
-  const [workDraft, setWorkDraft] = useState({
+  const [workDraft, setWorkDraft] = useState<WorkDraft>({
     title: "",
     acceptanceCriteria: "",
     requestType: "feature",
@@ -269,16 +295,16 @@ export function App() {
     return () => window.clearInterval(timer);
   }, []);
 
-  const selected = useMemo(
-    () => status.workItems.find((item) => item.id === selectedWorkItem) || status.workItems[0],
-    [selectedWorkItem, status.workItems]
-  );
   const agentRows = useMemo(() => deriveAgentRows(status, apiState.connected), [status, apiState.connected]);
   const releaseReady = apiState.connected && status.releaseReadiness.status === "ready";
   const visibleMemories = memories.slice(0, 3);
   const visibleEvents = status.logs.slice(0, 4);
   const pipeline = status.pipeline as Record<string, number>;
-  const activeWorkItems = status.workItems.filter((item) => item.state !== "CLOSED").slice(0, 5);
+  const activeWorkItems = useMemo(() => status.workItems.filter((item) => item.state !== "CLOSED").slice(0, 5), [status.workItems]);
+  const selected = useMemo(
+    () => activeWorkItems.find((item) => item.id === selectedWorkItem) || activeWorkItems[0],
+    [selectedWorkItem, activeWorkItems]
+  );
   const systemState = systemPresentation(status, apiState);
   const apiMessage = apiNotice(apiState);
 
@@ -286,28 +312,37 @@ export function App() {
     <div className="app-shell">
       <header className="top-header">
         <div className="brand-lockup">
-          <div className="brand-mark">
-            <Bot size={20} />
-          </div>
+          <span className="brand-mark">
+            <Bot size={18} />
+          </span>
           <div>
             <span>AI Dev Team</span>
-            <strong>Autonomous Control</strong>
+            <h1>Autonomous Control</h1>
           </div>
         </div>
-        <div className="header-actions">
+
+        <div className="system-line" aria-label="Runtime state">
           <span className={`status-pill ${systemState.className}`}>
             <span className={`dot ${systemState.dot}`} />
             {systemState.label}
           </span>
-          <button className="ghost-button" onClick={loadStatus} disabled={loading} data-testid="refresh-state">
+          <span>Queue {status.system.queueDepth}</span>
+          <span>{status.system.agentsOnline}/{status.system.agentsTotal} agents</span>
+          <span>{status.system.scheduler.maxConcurrentAgentRuns} parallel</span>
+          <span>{apiState.connected ? status.system.githubSync : "offline"}</span>
+        </div>
+
+        <div className="header-actions">
+          <button className="icon-button" onClick={loadStatus} disabled={loading} data-testid="refresh-state" aria-label="Refresh">
             <RefreshCw size={16} />
-            Refresh
+            <span>Refresh</span>
           </button>
           <button
             className={`stop-button ${status.system.emergencyStop ? "is-resume" : ""}`}
             onClick={toggleEmergencyStop}
             disabled={loading || !apiState.connected}
             data-testid="emergency-toggle"
+            aria-label={status.system.emergencyStop ? "Resume autonomous agents" : "Emergency stop autonomous agents"}
           >
             {status.system.emergencyStop ? <PlayCircle size={16} /> : <CircleStop size={16} />}
             {status.system.emergencyStop ? "Resume" : "Stop"}
@@ -316,14 +351,6 @@ export function App() {
       </header>
 
       <main className="page">
-        <section className="runtime-strip" aria-label="Runtime state">
-          <RuntimeStat label="Queue" value={String(status.system.queueDepth)} icon={Activity} />
-          <RuntimeStat label="Agents" value={`${status.system.agentsOnline}/${status.system.agentsTotal}`} icon={Bot} />
-          <RuntimeStat label="Parallel" value={`${status.system.scheduler.maxConcurrentAgentRuns} lanes`} icon={Workflow} />
-          <RuntimeStat label="GitHub" value={apiState.connected ? status.system.githubSync : "offline"} icon={Github} />
-          <RuntimeStat label="Repo writes" value={String(status.system.scheduler.maxConcurrentRepoWrites)} icon={Lock} />
-        </section>
-
         {(apiMessage || status.system.emergencyReason) && (
           <div className="notice" role="status">
             <AlertTriangle size={16} />
@@ -331,20 +358,33 @@ export function App() {
           </div>
         )}
 
-        <div className="dashboard-grid">
-          <div className="main-stack">
-            <section className="panel intake-panel" aria-labelledby="create-work-title" data-testid="work-intake">
-              <PanelHeader title="Create Work" kicker="Add, route, run" icon={PlayCircle} />
-              <form className="intake-form" onSubmit={createWorkItem}>
-                <label className="field title-field">
-                  <span>Title</span>
-                  <input
-                    value={workDraft.title}
-                    onChange={(event) => setWorkDraft((draft) => ({ ...draft, title: event.target.value }))}
-                    placeholder="Feature, bug, refactor, research..."
-                    data-testid="work-title"
-                  />
-                </label>
+        <section className="command-panel" aria-labelledby="create-work-title" data-testid="work-intake">
+          <h2 className="sr-only" id="create-work-title">Create work</h2>
+          <div className="section-label">
+            <span>Command</span>
+            <strong>New autonomous work</strong>
+          </div>
+
+          <form className="command-form" onSubmit={createWorkItem}>
+            <label className="field command-title">
+              <span>Work item</span>
+              <input
+                value={workDraft.title}
+                onChange={(event) => setWorkDraft((draft) => ({ ...draft, title: event.target.value }))}
+                placeholder="Describe the work to run..."
+                data-testid="work-title"
+                aria-invalid={Boolean(createError)}
+                aria-describedby={createError ? "work-title-error" : undefined}
+              />
+            </label>
+            <button className="primary-button" type="submit" disabled={loading || !apiState.connected} data-testid="start-loop">
+              <PlayCircle size={16} />
+              Start
+            </button>
+
+            <details className="options-menu">
+              <summary>Options</summary>
+              <div className="options-grid">
                 <label className="field criteria-field">
                   <span>Acceptance</span>
                   <textarea
@@ -354,208 +394,131 @@ export function App() {
                     data-testid="work-criteria"
                   />
                 </label>
-
-                <div className="control-row">
-                  <label className="field select-field">
-                    <span>Type</span>
-                    <select
-                      value={workDraft.requestType}
-                      onChange={(event) => setWorkDraft((draft) => ({ ...draft, requestType: event.target.value }))}
-                    >
-                      {["feature", "bug", "performance", "security", "privacy", "refactor", "research"].map((option) => (
-                        <option key={option}>{option}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="field select-field">
-                    <span>Priority</span>
-                    <select
-                      value={workDraft.priority}
-                      onChange={(event) => setWorkDraft((draft) => ({ ...draft, priority: event.target.value }))}
-                    >
-                      {["low", "medium", "high", "urgent"].map((option) => (
-                        <option key={option}>{option}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="field select-field">
-                    <span>Risk</span>
-                    <select
-                      value={workDraft.riskLevel}
-                      onChange={(event) => setWorkDraft((draft) => ({ ...draft, riskLevel: event.target.value }))}
-                    >
-                      {["low", "medium", "high"].map((option) => (
-                        <option key={option}>{option}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <div className="route-toggles" aria-label="Routing">
-                    {routeToggles.map(([key, label]) => (
-                      <label className="route-toggle" key={key}>
-                        <input
-                          type="checkbox"
-                          checked={workDraft[key]}
-                          onChange={(event) => setWorkDraft((draft) => ({ ...draft, [key]: event.target.checked }))}
-                        />
-                        <span>{label}</span>
-                      </label>
+                <label className="field">
+                  <span>Type</span>
+                  <select value={workDraft.requestType} onChange={(event) => setWorkDraft((draft) => ({ ...draft, requestType: event.target.value as RequestType }))}>
+                    {requestTypeOptions.map((option) => (
+                      <option key={option}>{option}</option>
                     ))}
-                  </div>
-                  <button className="primary-button" type="submit" disabled={loading || !apiState.connected} data-testid="start-loop">
-                    <PlayCircle size={16} />
-                    Start
-                  </button>
-                </div>
-              </form>
-              {createError && <p className="form-error">{createError}</p>}
-            </section>
-
-            <section className="panel loop-panel" aria-labelledby="workflow-title" data-testid="active-loop">
-              <PanelHeader title="Workflow" kicker="Lean Automaker loop" icon={Workflow} />
-              <div className="flow-grid">
-                {flowGroups.map(({ label, states, icon: Icon }) => {
-                  const count = states.reduce((total, state) => total + (pipeline[state] ?? 0), 0);
-                  return (
-                    <div className="flow-step" key={label}>
-                      <span className="step-icon">
-                        <Icon size={17} />
-                      </span>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Priority</span>
+                  <select value={workDraft.priority} onChange={(event) => setWorkDraft((draft) => ({ ...draft, priority: event.target.value as Priority }))}>
+                    {priorityOptions.map((option) => (
+                      <option key={option}>{option}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Risk</span>
+                  <select value={workDraft.riskLevel} onChange={(event) => setWorkDraft((draft) => ({ ...draft, riskLevel: event.target.value as RiskLevel }))}>
+                    {riskLevelOptions.map((option) => (
+                      <option key={option}>{option}</option>
+                    ))}
+                  </select>
+                </label>
+                <div className="route-toggles" aria-label="Routing">
+                  {routeToggles.map(([key, label]) => (
+                    <label className="route-toggle" key={key}>
+                      <input
+                        type="checkbox"
+                        checked={workDraft[key]}
+                        onChange={(event) => setWorkDraft((draft) => ({ ...draft, [key]: event.target.checked }))}
+                      />
                       <span>{label}</span>
-                      <strong>{count}</strong>
-                    </div>
-                  );
-                })}
+                    </label>
+                  ))}
+                </div>
               </div>
+            </details>
+          </form>
+          {createError && <p className="form-error" id="work-title-error" role="alert">{createError}</p>}
+        </section>
 
-              <div className="work-list">
-                {activeWorkItems.length ? (
-                  activeWorkItems.map((item) => (
-                    <button
-                      className={`work-card ${selected?.id === item.id ? "is-selected" : ""}`}
-                      key={item.id}
-                      onClick={() => setSelectedWorkItem(item.id)}
-                      data-testid={`work-card-${item.id}`}
-                    >
-                      <span className="work-topline">
-                        <strong>{item.title}</strong>
-                        <em>{item.state}</em>
-                      </span>
-                      <span className="work-meta">
-                        <span>{item.id}</span>
-                        <span>{item.priority}</span>
-                        <span>{item.riskLevel} risk</span>
-                      </span>
-                    </button>
-                  ))
-                ) : (
-                  <div className="empty-state">No active work items.</div>
-                )}
+        <div className="workspace-grid">
+          <section className="flow-panel" aria-labelledby="workflow-title" data-testid="active-loop">
+            <div className="panel-heading">
+              <div>
+                <span>Workflow</span>
+                <h2 id="workflow-title">Current loop</h2>
               </div>
-            </section>
+              <small>{activeWorkItems.length ? `${activeWorkItems.length} active` : "No active work"}</small>
+            </div>
+
+            <div className="flow-rail">
+              {flowGroups.map(({ label, states, icon: Icon }) => {
+                const count = states.reduce((total, state) => total + (pipeline[state] ?? 0), 0);
+                return (
+                  <div className={`flow-node ${count ? "has-work" : ""}`} key={label}>
+                    <span>
+                      <Icon size={15} />
+                    </span>
+                    <strong>{label}</strong>
+                    <em>{count}</em>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="work-list">
+              {activeWorkItems.length ? (
+                activeWorkItems.map((item) => (
+                  <button
+                    className={`work-card ${selected?.id === item.id ? "is-selected" : ""}`}
+                    key={item.id}
+                    onClick={() => setSelectedWorkItem(item.id)}
+                    data-testid={`work-card-${item.id}`}
+                    aria-pressed={selected?.id === item.id}
+                  >
+                    <span>
+                      <strong>{item.title}</strong>
+                      <small>{item.id}</small>
+                    </span>
+                    <em>{item.state}</em>
+                  </button>
+                ))
+              ) : (
+                <div className="empty-state">No active work items.</div>
+              )}
+            </div>
 
             {selected && (
-              <section className="panel selected-panel" aria-labelledby="selected-work-title">
-                <PanelHeader title="Selected Work" kicker={selected.id} icon={GitBranch} />
-                <div className="selected-body">
-                  <div>
-                    <span className="state-chip">{selected.state}</span>
-                    <h2>{selected.title}</h2>
-                  </div>
-                  <ul className="criteria-list">
+              <div className="selected-strip">
+                <span className="state-chip">{selected.state}</span>
+                <strong>{selected.title}</strong>
+                <details>
+                  <summary>Acceptance</summary>
+                  <ul>
                     {selected.acceptanceCriteria.length ? (
                       selected.acceptanceCriteria.map((criterion) => <li key={criterion}>{criterion}</li>)
                     ) : (
                       <li>Acceptance criteria pending.</li>
                     )}
                   </ul>
-                </div>
-              </section>
+                </details>
+              </div>
             )}
-          </div>
+          </section>
 
-          <aside className="side-column">
-            <section className="panel team-panel" aria-labelledby="team-title" data-testid="team-panel">
-              <PanelHeader title="Team" kicker="Live lanes" icon={Bot} />
-              <div className="team-list">
-                {agentRows.map((agent) => (
-                  <div className="agent-row" key={agent.name}>
-                    <span className={`agent-icon ${agent.tone}`}>
-                      <agent.icon size={17} />
-                    </span>
-                    <span className="agent-copy">
-                      <strong>{agent.name}</strong>
-                      <small>{agent.task}</small>
-                    </span>
-                    <span className={`agent-status ${agent.status.toLowerCase()}`}>{agent.status}</span>
-                    <span className="progress-track" aria-label={`${agent.name} ${agent.progress}%`}>
-                      <i style={{ width: `${agent.progress}%` }} />
-                    </span>
-                  </div>
-                ))}
+          <aside className="insight-panel" aria-labelledby="insight-title">
+            <div className="panel-heading compact">
+              <div>
+                <span>Insights</span>
+                <h2 id="insight-title">Details</h2>
               </div>
-            </section>
-
-            <section className="panel release-panel" aria-labelledby="release-gate-title" data-testid="release-panel">
-              <PanelHeader title="Release Gate" kicker={status.releaseReadiness.target} icon={releaseReady ? CheckCircle2 : ShieldCheck} />
-              <div className={`release-state ${releaseReady ? "ready" : "waiting"}`}>
-                {releaseReady ? <CheckCircle2 size={20} /> : <ShieldCheck size={20} />}
-                <strong>{releaseReady ? "Ready" : status.releaseReadiness.status}</strong>
-              </div>
-              <div className="check-grid">
-                {status.releaseReadiness.checks.map(([label, value]) => (
-                  <div key={label}>
-                    <span>{label}</span>
-                    <strong>{value}</strong>
-                  </div>
-                ))}
-              </div>
-            </section>
-
-            <section className="panel memory-panel" aria-labelledby="memory-title">
-              <PanelHeader title="Memory" kicker="Persistent context" icon={Activity} />
-              <div className="memory-list">
-                {visibleMemories.length ? (
-                  visibleMemories.map((memory) => (
-                    <article key={memory.id}>
-                      <strong>{memory.title}</strong>
-                      <span>{memory.kind} · {memory.permanence}</span>
-                      <p>{memory.content}</p>
-                    </article>
-                  ))
-                ) : (
-                  status.sharedContext.activeThreads.length ? (
-                    status.sharedContext.activeThreads.slice(0, 3).map(([agent, item, summary]) => (
-                      <article key={`${agent}-${item}`}>
-                        <strong>{agent}</strong>
-                        <span>{item}</span>
-                        <p>{summary}</p>
-                      </article>
-                    ))
-                  ) : (
-                    <div className="empty-state compact">No stored context yet.</div>
-                  )
-                )}
-              </div>
-            </section>
-
-            <section className="panel event-panel" aria-labelledby="events-title">
-              <PanelHeader title="Events" kicker="Latest proof" icon={Activity} />
-              <div className="event-list">
-                {visibleEvents.length ? (
-                  visibleEvents.map(([time, level, source, message, item]) => (
-                    <div className="event-row" key={`${time}-${source}-${message}`}>
-                      <time>{time}</time>
-                      <span className={`event-level ${String(level).toLowerCase()}`}>{level}</span>
-                      <strong>{source}</strong>
-                      <p>{message}</p>
-                      <em>{item}</em>
-                    </div>
-                  ))
-                ) : (
-                  <div className="empty-state compact">No events yet.</div>
-                )}
-              </div>
-            </section>
+              <label className="insight-select">
+                <span className="sr-only">Insight view</span>
+                <select value={activeInsight} onChange={(event) => setActiveInsight(event.target.value as InsightView)} data-testid="insight-select">
+                  {insightOptions.map(([value, label]) => (
+                    <option value={value} key={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            {renderInsight(activeInsight, { agentRows, releaseReady, status, visibleMemories, visibleEvents })}
           </aside>
         </div>
       </main>
@@ -563,24 +526,99 @@ export function App() {
   );
 }
 
-function PanelHeader({ title, kicker, icon: Icon }: { title: string; kicker: string; icon: LucideIcon }) {
-  return (
-    <div className="panel-header">
-      <div>
-        <span>{kicker}</span>
-        <h2 id={`${title.toLowerCase().replace(/\s+/g, "-")}-title`}>{title}</h2>
-      </div>
-      <Icon size={18} />
-    </div>
-  );
-}
+function renderInsight(
+  activeInsight: InsightView,
+  input: {
+    agentRows: AgentLane[];
+    releaseReady: boolean;
+    status: Status;
+    visibleMemories: MemoryRecord[];
+    visibleEvents: Status["logs"];
+  }
+) {
+  const { agentRows, releaseReady, status, visibleMemories, visibleEvents } = input;
 
-function RuntimeStat({ icon: Icon, label, value }: { icon: LucideIcon; label: string; value: string }) {
+  if (activeInsight === "team") {
+    return (
+      <div className="team-list" data-testid="team-panel">
+        {agentRows.map((agent) => (
+          <div className="agent-row" key={agent.name}>
+            <span className={`agent-icon ${agent.tone}`}>
+              <agent.icon size={16} />
+            </span>
+            <span className="agent-copy">
+              <strong>{agent.name}</strong>
+              <small>{agent.task}</small>
+            </span>
+            <span className={`agent-status ${agent.status.toLowerCase()}`}>{agent.status}</span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (activeInsight === "memory") {
+    const fallbackThreads = status.sharedContext.activeThreads.slice(0, 3);
+    return (
+      <div className="memory-list">
+        {visibleMemories.length ? (
+          visibleMemories.map((memory) => (
+            <article key={memory.id}>
+              <strong>{memory.title}</strong>
+              <span>{memory.kind} · {memory.permanence}</span>
+              <p>{memory.content}</p>
+            </article>
+          ))
+        ) : fallbackThreads.length ? (
+          fallbackThreads.map(([agent, item, summary]) => (
+            <article key={`${agent}-${item}`}>
+              <strong>{agent}</strong>
+              <span>{item}</span>
+              <p>{summary}</p>
+            </article>
+          ))
+        ) : (
+          <div className="empty-state compact">No stored context yet.</div>
+        )}
+      </div>
+    );
+  }
+
+  if (activeInsight === "events") {
+    return (
+      <div className="event-list">
+        {visibleEvents.length ? (
+          visibleEvents.map(([time, level, source, message, item]) => (
+            <div className="event-row" key={`${time}-${source}-${message}`}>
+              <time>{time}</time>
+              <span className={`event-level ${String(level).toLowerCase()}`}>{level}</span>
+              <strong>{source}</strong>
+              <p>{message}</p>
+              <em>{item}</em>
+            </div>
+          ))
+        ) : (
+          <div className="empty-state compact">No events yet.</div>
+        )}
+      </div>
+    );
+  }
+
   return (
-    <div className="runtime-stat">
-      <Icon size={16} />
-      <span>{label}</span>
-      <strong>{value}</strong>
+    <div className="release-panel" data-testid="release-panel">
+      <div className={`release-state ${releaseReady ? "ready" : "waiting"}`}>
+        {releaseReady ? <CheckCircle2 size={19} /> : <ShieldCheck size={19} />}
+        <span>{status.releaseReadiness.target}</span>
+        <strong>{releaseReady ? "Ready" : status.releaseReadiness.status}</strong>
+      </div>
+      <div className="check-grid">
+        {status.releaseReadiness.checks.map(([label, value]) => (
+          <div key={label}>
+            <span>{label}</span>
+            <strong>{value}</strong>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
