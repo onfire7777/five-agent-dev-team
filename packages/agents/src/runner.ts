@@ -199,10 +199,22 @@ function createMcpServer(sdk: any, server: McpServerConfig): any {
 }
 
 export function resolveMcpEnv(env: Record<string, string>): Record<string, string> {
-  return Object.fromEntries(Object.entries(env).map(([key, value]) => [
+  const resolved = Object.fromEntries(Object.entries(env).map(([key, value]) => [
     key,
     value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_match, name: string) => process.env[name] || "")
   ]));
+
+  if ("GITHUB_PERSONAL_ACCESS_TOKEN" in resolved && !resolved.GITHUB_PERSONAL_ACCESS_TOKEN) {
+    resolved.GITHUB_PERSONAL_ACCESS_TOKEN = process.env.GITHUB_PERSONAL_ACCESS_TOKEN || process.env.GH_TOKEN || process.env.GITHUB_TOKEN || "";
+  }
+  if ("GH_TOKEN" in resolved && !resolved.GH_TOKEN) {
+    resolved.GH_TOKEN = process.env.GH_TOKEN || process.env.GITHUB_TOKEN || process.env.GITHUB_PERSONAL_ACCESS_TOKEN || "";
+  }
+  if ("GITHUB_TOKEN" in resolved && !resolved.GITHUB_TOKEN) {
+    resolved.GITHUB_TOKEN = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || process.env.GITHUB_PERSONAL_ACCESS_TOKEN || "";
+  }
+
+  return resolved;
 }
 
 function parseLiveArtifact(

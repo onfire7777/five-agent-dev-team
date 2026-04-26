@@ -60,17 +60,18 @@ export function targetRepoConfigFromProjectConnection(project: ProjectConnection
       },
       mcpServers: [
         {
-          name: "github-read",
+          name: "github-mcp",
           category: "github",
-          description: "Lean GitHub CLI MCP server for repo status, issues, pull requests, Actions, checks, and release context.",
+          description: "Official GitHub MCP server for deep repo, issue, PR, Actions, code security, and release context.",
           enabled: parsed.githubMcpEnabled,
           transport: "stdio",
-          command: "node",
-          args: ["scripts/github-cli-mcp.mjs"],
+          command: "github-mcp-server",
+          args: parsed.githubWriteEnabled ? ["stdio", "--dynamic-toolsets"] : ["stdio", "--dynamic-toolsets", "--read-only"],
           env: {
             GH_TOKEN: "${GH_TOKEN}",
             GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_PERSONAL_ACCESS_TOKEN}",
-            GITHUB_TOKEN: "${GITHUB_TOKEN}"
+            GITHUB_TOKEN: "${GITHUB_TOKEN}",
+            GITHUB_HOST: "${GITHUB_HOST}"
           },
           activation: {
             mode: "on_demand",
@@ -80,11 +81,11 @@ export function targetRepoConfigFromProjectConnection(project: ProjectConnection
           },
           timeoutSeconds: 45,
           cacheToolsList: true,
-          toolAllowlist: ["github_repo_status", "github_issue_list", "github_pr_list", "github_actions_latest"],
+          toolAllowlist: [],
           notes: [
-            "This local MCP wraps gh with narrow read tools so Docker-in-Docker is not required.",
-            "Use GitHub MCP for project-scoped GitHub context only; deterministic write/release operations still go through gh and controller gates.",
-            "Prefer read-only token scopes unless the current stage explicitly needs delivery or release actions."
+            "Uses GitHub's official MCP server with dynamic tool discovery so documented toolsets are available on demand without loading the full catalog by default.",
+            "Read-only mode is the default; set githubWriteEnabled for a connected project only when GitHub MCP writes are explicitly required by policy.",
+            "GitHub CLI remains first-class for deterministic local branch, PR, workflow, release, and sync gates."
           ]
         },
         {

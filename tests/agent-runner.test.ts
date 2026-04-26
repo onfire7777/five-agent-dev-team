@@ -18,6 +18,14 @@ const workItem: WorkItem = {
   updatedAt: new Date().toISOString()
 };
 
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+    return;
+  }
+  process.env[name] = value;
+}
+
 describe("agent runner", () => {
   it("creates deterministic artifacts without live OpenAI mode", async () => {
     const result = await runRoleAgent(getAgentDefinition("rnd-architecture-innovation"), {
@@ -41,5 +49,29 @@ describe("agent runner", () => {
       STATIC_VALUE: "literal"
     });
     delete process.env.TEST_GITHUB_TOKEN;
+  });
+
+  it("maps GitHub CLI tokens into the official GitHub MCP token when needed", () => {
+    const originalGhToken = process.env.GH_TOKEN;
+    const originalGithubToken = process.env.GITHUB_TOKEN;
+    const originalPersonalToken = process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
+    process.env.GH_TOKEN = "gh-token-value";
+    delete process.env.GITHUB_TOKEN;
+    delete process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
+    try {
+      expect(resolveMcpEnv({
+        GH_TOKEN: "${GH_TOKEN}",
+        GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_PERSONAL_ACCESS_TOKEN}",
+        GITHUB_TOKEN: "${GITHUB_TOKEN}"
+      })).toEqual({
+        GH_TOKEN: "gh-token-value",
+        GITHUB_PERSONAL_ACCESS_TOKEN: "gh-token-value",
+        GITHUB_TOKEN: "gh-token-value"
+      });
+    } finally {
+      restoreEnv("GH_TOKEN", originalGhToken);
+      restoreEnv("GITHUB_TOKEN", originalGithubToken);
+      restoreEnv("GITHUB_PERSONAL_ACCESS_TOKEN", originalPersonalToken);
+    }
   });
 });

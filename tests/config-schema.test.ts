@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { ProjectConnectionInputSchema, TargetRepoConfigSchema } from "../packages/shared/src";
+import {
+  ProjectConnectionInputSchema,
+  ProjectConnectionSchema,
+  TargetRepoConfigSchema,
+  targetRepoConfigFromProjectConnection
+} from "../packages/shared/src";
 
 const minimalConfig = {
   repo: {
@@ -60,19 +65,23 @@ describe("target repo config schema", () => {
         },
         mcpServers: [
           {
-            name: "github-read",
+            name: "github-mcp",
             category: "github",
             enabled: true,
             transport: "stdio",
-            command: "node",
-            args: ["scripts/github-cli-mcp.mjs"],
+            command: "github-mcp-server",
+            args: ["stdio", "--dynamic-toolsets", "--read-only"],
+            env: {
+              GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_PERSONAL_ACCESS_TOKEN}",
+              GITHUB_HOST: "${GITHUB_HOST}"
+            },
             activation: {
               mode: "on_demand",
               stages: ["INTAKE", "VERIFY"],
               agents: ["product-delivery-orchestrator"],
               keywords: ["issue", "pr", "github"]
             },
-            toolAllowlist: ["github_repo_status", "github_issue_list", "github_pr_list"]
+            toolAllowlist: []
           },
           {
             name: "deep-web-research",
@@ -109,10 +118,47 @@ describe("target repo config schema", () => {
 
     expect(config.integrations.mcpServers[0].activation.stages).toContain("VERIFY");
     expect(config.integrations.mcpServers[0].category).toBe("github");
-    expect(config.integrations.mcpServers[0]).toMatchObject({ transport: "stdio", command: "node" });
+    expect(config.integrations.mcpServers[0]).toMatchObject({
+      transport: "stdio",
+      command: "github-mcp-server",
+      args: ["stdio", "--dynamic-toolsets", "--read-only"]
+    });
     expect(config.integrations.mcpServers[1].category).toBe("web_search");
     expect(config.integrations.mcpServers[1].activation.keywords).toContain("latest");
     expect(config.integrations.mcpServers[1].timeoutSeconds).toBe(60);
     expect(config.integrations.capabilityPacks[0].activation.keywords).toContain("react");
+  });
+
+  it("generates official GitHub MCP server config for connected projects", () => {
+    const connection = ProjectConnectionSchema.parse({
+      id: "acme-app",
+      projectId: "acme-app",
+      name: "Acme App",
+      repo: "acme/app",
+      repoOwner: "acme",
+      repoName: "app",
+      localPath: "C:/repo/app",
+      defaultBranch: "main",
+      memoryNamespace: "acme-app",
+      contextDir: ".agent-team/context",
+      githubMcpEnabled: true,
+      githubWriteEnabled: false,
+      webResearchEnabled: true,
+      active: true,
+      createdAt: "2026-04-25T00:00:00.000Z",
+      updatedAt: "2026-04-25T00:00:00.000Z"
+    });
+    const config = targetRepoConfigFromProjectConnection(connection);
+    const githubServer = config.integrations.mcpServers.find((server) => server.category === "github");
+
+    expect(githubServer).toMatchObject({
+      command: "github-mcp-server",
+      args: ["stdio", "--dynamic-toolsets", "--read-only"],
+      toolAllowlist: []
+    });
+    expect(githubServer?.env).toMatchObject({
+      GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_PERSONAL_ACCESS_TOKEN}",
+      GITHUB_HOST: "${GITHUB_HOST}"
+    });
   });
 });

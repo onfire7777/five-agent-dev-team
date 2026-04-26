@@ -91,29 +91,30 @@ integrations:
       toolAllowlist: []
       notes:
         - Use slim mode by default; enable trace tools only for performance work.
-    - name: github-read
+    - name: github-mcp
       category: github
-      description: Lean GitHub CLI MCP server for issue, PR, Actions, and release context.
+      description: Official GitHub MCP server for deep issue, PR, Actions, code security, and release context.
       enabled: false
       transport: stdio
-      command: node
-      args: ["scripts/github-cli-mcp.mjs"]
+      command: github-mcp-server
+      args: ["stdio", "--dynamic-toolsets", "--read-only"]
       env:
         GH_TOKEN: ${GH_TOKEN}
         GITHUB_PERSONAL_ACCESS_TOKEN: ${GITHUB_PERSONAL_ACCESS_TOKEN}
         GITHUB_TOKEN: ${GITHUB_TOKEN}
+        GITHUB_HOST: ${GITHUB_HOST}
       activation:
         mode: on_demand
-        stages: [INTAKE, VERIFY, RELEASE]
-        agents: [product-delivery-orchestrator, quality-security-privacy-release]
-        keywords: [github, issue, pr, actions, release, ci]
+        stages: [INTAKE, RND, VERIFY, RELEASE]
+        agents: [product-delivery-orchestrator, rnd-architecture-innovation, quality-security-privacy-release]
+        keywords: [github, issue, pr, pull request, actions, checks, release, ci, review, security]
       timeoutSeconds: 45
       cacheToolsList: true
-      toolAllowlist: [github_repo_status, github_issue_list, github_pr_list, github_actions_latest]
+      toolAllowlist: []
       notes:
-        - Prefer read-only token scopes unless the current work item explicitly needs GitHub writes.
-        - This local MCP wraps gh with narrow read tools so Docker-in-Docker is not required.
-        - Use on demand with the GitHub CLI; do not keep GitHub MCP always loaded.
+        - Uses GitHub's official MCP server with dynamic tool discovery for full documented GitHub toolsets on demand.
+        - Keep --read-only unless repo policy explicitly enables GitHub MCP writes for delivery or release work.
+        - GitHub CLI remains first-class for deterministic branch, PR, workflow, release, and local/remote sync gates.
     - name: deep-web-research
       category: web_search
       description: Deep web research for current docs, ecosystem changes, and source-backed investigation.

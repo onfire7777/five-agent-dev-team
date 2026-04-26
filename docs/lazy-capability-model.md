@@ -25,8 +25,8 @@ work item + stage + agent role + risk + acceptance criteria
 | --- | --- | --- | --- |
 | `browser-e2e` | UI, accessibility, screenshots, forms, e2e verification | Playwright MCP | Use isolated profiles and narrow tool allowlists. |
 | `chrome-diagnostics` | console, network, performance, renderer debugging | Chrome DevTools MCP | Start slim and isolated; enable tracing only for performance tasks. |
-| `github-read` | issues, PRs, checks, release state | Lean GitHub CLI MCP or existing GitHub API client | Use read-only scopes by default. |
-| `github-write` | comments, PRs, workflow dispatches | GitHub MCP or existing GitHub API client | Enable only for specific delivery/release tasks. |
+| `github-mcp` | issues, PRs, checks, release state, security context | Official GitHub MCP server with dynamic toolsets | Use read-only mode by default. |
+| `github-write` | comments, PRs, workflow dispatches | Official GitHub MCP server or existing GitHub API client | Enable only for specific delivery/release tasks. |
 | `github-cli` | local branch, PR, workflow, and release operations | `gh` authenticated by env or mounted config | Prefer deterministic CLI commands for local gates and release verification. |
 | `deep-web-research` | current ecosystem docs, source-backed investigation, external release notes | Web/search MCP or browser research | Load on demand; cite sources and persist only durable findings. |
 | `workspace-read` | code search and repository inspection | Native `rg`, `git`, file reads first | MCP filesystem roots must stay inside the target repo. |
@@ -52,13 +52,13 @@ Every MCP server and capability pack supports:
 
 Each project should connect its own GitHub repository explicitly. The recommended GitHub stack is:
 
-- the built-in GitHub CLI MCP for issue/PR/check/release context when a stage needs GitHub awareness
+- GitHub's official MCP server for issue/PR/check/release/security context when a stage needs GitHub awareness
 - GitHub CLI for deterministic local operations and CI/release verification
 - existing GitHub API client for controller-owned branch/PR/release coordination
 
 Do not let GitHub MCP memory or tool state bleed between repos. Use project-specific tokens or GitHub App installation scopes where possible. For local and container runs, provide GitHub CLI credentials with `GH_TOKEN` or `GITHUB_TOKEN`, or mount the user's `gh` config directory into the runtime as a deliberate project capability.
 
-The default MCP path is `scripts/github-cli-mcp.mjs`, a small read-focused MCP wrapper around `gh`. That keeps the runtime lean and avoids Docker-in-Docker. If you need GitHub's official MCP server, swap the command in the project config and make sure the binary or Docker transport is available inside the runtime.
+The Docker runtime installs the official `github-mcp-server` binary and configures it as `github-mcp-server stdio --dynamic-toolsets --read-only` by default. Dynamic tool discovery keeps the prompt/tool catalog compact while still allowing the agent to enable any documented GitHub MCP toolset when the work item actually needs it. The runtime mirrors `GH_TOKEN` or `GITHUB_TOKEN` into `GITHUB_PERSONAL_ACCESS_TOKEN` for the official MCP server if the MCP-specific variable is blank. Remove `--read-only` only for project policies that explicitly allow GitHub MCP writes; controller release gates still own tests, GitHub Actions, merge, tag, release, rollback, and local/remote sync.
 
 ## Project Paths And Mounts
 
