@@ -26,7 +26,7 @@ jobs:
       - name: High-severity dependency audit
         run: npm audit --audit-level=high
       - name: Moderate dependency audit report
-        run: npm audit --audit-level=moderate || echo "::warning::Known moderate Temporal/uuid advisory is tracked in docs/security.md"
+        run: npm run audit:security
       - name: Secret scan
         uses: gitleaks/gitleaks-action@v2
         env:

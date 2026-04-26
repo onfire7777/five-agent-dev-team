@@ -9,7 +9,7 @@ services:
       POSTGRES_USER: agent_team
       POSTGRES_PASSWORD: agent_team
     ports:
-      - "5432:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -32,7 +32,7 @@ services:
       POSTGRES_SEEDS: postgres
       DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/docker.yaml
     ports:
-      - "7233:7233"
+      - "127.0.0.1:${TEMPORAL_PORT:-7233}:7233"
     healthcheck:
       test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "temporal:7233"]
       interval: 10s
@@ -55,8 +55,9 @@ services:
       PORT: 4310
       DATABASE_URL: postgres://agent_team:agent_team@postgres:5432/agent_team
       TEMPORAL_ADDRESS: temporal:7233
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:${DASHBOARD_PORT:-5173},http://127.0.0.1:${DASHBOARD_PORT:-5173}}
     ports:
-      - "${CONTROLLER_PORT:-4310}:4310"
+      - "127.0.0.1:${CONTROLLER_PORT:-4310}:4310"
     volumes:
       - .:/app
       - node-modules:/app/node_modules
@@ -81,11 +82,13 @@ services:
     environment:
       DATABASE_URL: postgres://agent_team:agent_team@postgres:5432/agent_team
       TEMPORAL_ADDRESS: temporal:7233
+      WORKER_READY_FILE: /tmp/agent-team-worker-ready
+      WORKER_READY_MAX_AGE_MS: 30000
     volumes:
       - .:/app
       - node-modules:/app/node_modules
     healthcheck:
-      test: ["CMD-SHELL", "test -f /tmp/agent-team-worker-ready"]
+      test: ["CMD-SHELL", "node -e \"const fs=require('fs'); const file=process.env.WORKER_READY_FILE||'/tmp/agent-team-worker-ready'; const max=Number(process.env.WORKER_READY_MAX_AGE_MS||30000); const stat=fs.statSync(file); if(Date.now()-stat.mtimeMs>max) process.exit(1); const {Connection}=require('@temporalio/client'); Connection.connect({address:process.env.TEMPORAL_ADDRESS||'temporal:7233'}).then((connection)=>connection.close()).then(()=>process.exit(0)).catch(()=>process.exit(1));\""]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -102,9 +105,9 @@ services:
         required: false
     environment:
       DASHBOARD_PORT: 5173
-      VITE_API_BASE_URL: http://localhost:4310
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:${CONTROLLER_PORT:-4310}}
     ports:
-      - "${DASHBOARD_PORT:-5173}:5173"
+      - "127.0.0.1:${DASHBOARD_PORT:-5173}:5173"
     volumes:
       - .:/app
       - node-modules:/app/node_modules

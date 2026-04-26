@@ -60,6 +60,36 @@ type AgentLane = {
 
 const API_BASE = typeof __DASHBOARD_API_BASE__ === "string" && __DASHBOARD_API_BASE__ ? __DASHBOARD_API_BASE__ : "http://localhost:4310";
 
+function createOfflineStatus(): Status {
+  const status = createSampleStatus();
+  return {
+    ...status,
+    system: {
+      ...status.system,
+      operational: false,
+      emergencyStop: false,
+      queueDepth: 0,
+      agentsOnline: 0,
+      githubSync: "offline",
+      systemLoad: 0,
+      emergencyReason: ""
+    },
+    pipeline: Object.fromEntries(Object.keys(status.pipeline).map((key) => [key, 0])) as Status["pipeline"],
+    workItems: [],
+    artifacts: [],
+    releaseReadiness: {
+      ...status.releaseReadiness,
+      status: "unknown",
+      target: "Controller offline"
+    },
+    logs: [],
+    sharedContext: {
+      activeThreads: [],
+      research: []
+    }
+  };
+}
+
 const fallbackAgentRows: AgentLane[] = [
   {
     icon: SquareKanban,
@@ -212,6 +242,8 @@ export function App() {
       }
       return true;
     } catch (error) {
+      setStatus(createOfflineStatus());
+      setMemories([]);
       setApiState({
         connected: false,
         usingFallback: true,
@@ -652,7 +684,7 @@ function systemPresentation(status: Status, apiState: ApiState) {
 function apiNotice(apiState: ApiState) {
   if (apiState.connected) return "";
   return apiState.usingFallback
-    ? `Controller connection failed: ${apiState.lastError}. Showing demo or last-known state.`
+    ? `Controller connection failed: ${apiState.lastError}. Showing offline state.`
     : apiState.lastError;
 }
 

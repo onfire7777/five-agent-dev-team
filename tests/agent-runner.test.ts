@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getAgentDefinition, runRoleAgent } from "../packages/agents/src";
+import { getAgentDefinition, resolveMcpEnv, runRoleAgent } from "../packages/agents/src";
 import type { WorkItem } from "../packages/shared/src";
 
 const workItem: WorkItem = {
@@ -29,5 +29,17 @@ describe("agent runner", () => {
     expect(result.live).toBe(false);
     expect(result.artifact.ownerAgent).toBe("rnd-architecture-innovation");
     expect(result.artifact.nextStage).toBe("CONTRACT");
+  });
+
+  it("interpolates MCP environment placeholders from process env", () => {
+    process.env.TEST_GITHUB_TOKEN = "token-value";
+    expect(resolveMcpEnv({
+      GITHUB_PERSONAL_ACCESS_TOKEN: "${TEST_GITHUB_TOKEN}",
+      STATIC_VALUE: "literal"
+    })).toEqual({
+      GITHUB_PERSONAL_ACCESS_TOKEN: "token-value",
+      STATIC_VALUE: "literal"
+    });
+    delete process.env.TEST_GITHUB_TOKEN;
   });
 });

@@ -12,6 +12,7 @@ import {
   StageArtifactSchema,
   MemoryRecordSchema,
   memoryFromArtifact,
+  selectRelevantMemories,
   WorkItemSchema,
   type AgentEvent,
   type MemoryRecord,
@@ -125,8 +126,10 @@ export class MemoryStore implements ControllerStore {
 
   async listMemories(workItemId?: string): Promise<MemoryRecord[]> {
     if (!workItemId) return this.memories;
+    const workItem = this.workItems.find((item) => item.id === workItemId);
+    if (workItem) return selectRelevantMemories(this.memories, workItem, 100);
     return this.memories.filter((memory) =>
-      memory.workItemId === workItemId || memory.scope === "global" || memory.scope === "repo"
+      memory.workItemId === workItemId
     );
   }
 
@@ -363,14 +366,16 @@ export class PostgresStore extends MemoryStore {
   }
 
   override async listMemories(workItemId?: string): Promise<MemoryRecord[]> {
-    const result = workItemId
-      ? await this.pool.query(
-        "select payload from memory_records where work_item_id = $1 or scope in ('global', 'repo') order by importance desc, updated_at desc",
-        [workItemId]
-      )
-      : await this.pool.query("select payload from memory_records order by importance desc, updated_at desc");
+    const result = await this.pool.query("select payload from memory_records order by importance desc, updated_at desc");
     const stored = result.rows.map((row) => MemoryRecordSchema.parse(row.payload));
-    return stored.length ? stored : super.listMemories(workItemId);
+    if (!workItemId) return stored.length ? stored : super.listMemories();
+
+    const workItemResult = await this.pool.query("select payload from work_items where id = $1", [workItemId]);
+    const workItem = workItemResult.rows[0] ? WorkItemSchema.parse(workItemResult.rows[0].payload) : null;
+    if (workItem) return selectRelevantMemories(stored, workItem, 100);
+
+    const filtered = stored.filter((memory) => memory.workItemId === workItemId);
+    return filtered.length ? filtered : super.listMemories(workItemId);
   }
 
   override async addMemories(memories: MemoryRecord[]): Promise<void> {

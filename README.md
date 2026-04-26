@@ -16,16 +16,16 @@ Local-first controller for a five-agent autonomous software development team. It
 Copy-Item .env.example .env
 npm install
 npm run check
-npm run dev
+docker compose up --build
 ```
 
 Dashboard: `http://localhost:5173`  
 Controller API: `http://localhost:4310`
 
-For full durable local runtime:
+For host-based development against already-running local Postgres and Temporal:
 
 ```powershell
-docker compose up --build
+npm run dev
 ```
 
 ## Configuration
@@ -33,6 +33,8 @@ docker compose up --build
 Create `agent-team.config.yaml` from `agent-team.config.example.yaml` and point it at one target repo. The target repo must expose install, lint, typecheck, test, build, security, and release commands. The controller will not guess project-specific commands.
 
 Each connected repo is treated as an isolated project. Work items and permanent memory carry a project/repo scope so one repository's decisions, gotchas, and automation state are not mixed into another repository. Connect a repo explicitly in `agent-team.config.yaml` before starting autonomous work on it.
+
+Autonomous activities fail closed when `agent-team.config.yaml` is missing or invalid. Set `AGENT_TEAM_ALLOW_DEFAULT_CONFIG=true` only for local smoke tests where running against the controller checkout is intentional.
 
 ## Release Safety Invariant
 

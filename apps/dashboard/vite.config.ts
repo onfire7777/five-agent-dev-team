@@ -14,7 +14,7 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       port: dashboardPort,
-      strictPort: false
+      strictPort: true
     },
     preview: {
       port: dashboardPort

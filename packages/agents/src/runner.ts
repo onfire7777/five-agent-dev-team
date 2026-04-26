@@ -40,9 +40,32 @@ export async function runRoleAgent(definition: AgentDefinition, context: AgentRu
 
 async function runLiveOpenAIAgent(definition: AgentDefinition, context: AgentRunContext): Promise<AgentRunResult> {
   const sdk = await import("@openai/agents");
+  const primaryModel = modelForAgent(definition, context.targetRepoConfig);
+  const fallbackModel = fallbackModelForAgent(context.targetRepoConfig);
+  try {
+    return await runLiveOpenAIAgentWithModel(sdk, definition, context, primaryModel);
+  } catch (error) {
+    if (!fallbackModel || fallbackModel === primaryModel) throw error;
+    try {
+      const fallbackResult = await runLiveOpenAIAgentWithModel(sdk, definition, context, fallbackModel);
+      return {
+        ...fallbackResult,
+        rawOutput: `Primary model ${primaryModel} failed; fallback ${fallbackModel} succeeded.\n${fallbackResult.rawOutput}`
+      };
+    } catch {
+      throw error;
+    }
+  }
+}
+
+async function runLiveOpenAIAgentWithModel(
+  sdk: any,
+  definition: AgentDefinition,
+  context: AgentRunContext,
+  model: string
+): Promise<AgentRunResult> {
   const AgentCtor = (sdk as any).Agent;
   const run = (sdk as any).run;
-  const model = modelForAgent(definition, context.targetRepoConfig);
   const mcpServers = createConfiguredMcpServers(sdk, definition, context);
   const mcpSession = mcpServers.length
     ? await sdk.MCPServers.open(mcpServers, {
@@ -62,7 +85,7 @@ async function runLiveOpenAIAgent(definition: AgentDefinition, context: AgentRun
       mcpServers: mcpSession?.active || []
     });
 
-    const result = await run(agent, buildAgentPrompt(definition, context));
+    const result = await run(agent, buildAgentPrompt(definition, context, model));
     const rawOutput = String(result?.finalOutput ?? result?.output ?? result ?? "");
     const artifact = parseLiveArtifact(definition, context, rawOutput) || createTemplateArtifact(definition, context, rawOutput);
     return { artifact, rawOutput, live: true };
@@ -71,7 +94,7 @@ async function runLiveOpenAIAgent(definition: AgentDefinition, context: AgentRun
   }
 }
 
-function buildAgentPrompt(definition: AgentDefinition, context: AgentRunContext): string {
+function buildAgentPrompt(definition: AgentDefinition, context: AgentRunContext, selectedModel = modelForAgent(definition, context.targetRepoConfig)): string {
   const sharedContext = buildSharedContext(context.workItem, context.previousArtifacts, context.memories || [], {
     targetRepoConfig: context.targetRepoConfig,
     stage: context.stage,
@@ -83,7 +106,7 @@ function buildAgentPrompt(definition: AgentDefinition, context: AgentRunContext)
     `Agent: ${definition.displayName}`,
     `Project scope: ${context.workItem.projectId || (context.targetRepoConfig ? "configured repo" : "unscoped")}`,
     `Repository scope: ${context.workItem.repo || "not connected"}`,
-    `Model policy: ${modelForAgent(definition, context.targetRepoConfig)} primary, with configured fallback only if unavailable.`,
+    `Model policy: ${selectedModel} selected for this run, with configured fallback only if unavailable.`,
     "",
     "Shared team context:",
     formatSharedContext(sharedContext),
@@ -105,6 +128,11 @@ function modelForAgent(definition: AgentDefinition, config?: TargetRepoConfig): 
   return config.models.primaryCodingModel;
 }
 
+function fallbackModelForAgent(config?: TargetRepoConfig): string | null {
+  if (process.env.AGENT_MODEL || !config || !config.models.useBestAvailable) return null;
+  return config.models.fallbackModel;
+}
+
 function createConfiguredMcpServers(sdk: any, definition: AgentDefinition, context: AgentRunContext): any[] {
   if (!context.targetRepoConfig) return [];
   return context.targetRepoConfig.integrations.mcpServers
@@ -123,7 +151,7 @@ function createMcpServer(sdk: any, server: McpServerConfig): any {
   const common = {
     name: server.name,
     cwd: server.cwd,
-    env: Object.keys(server.env).length ? { ...process.env, ...server.env } : undefined,
+    env: Object.keys(server.env).length ? { ...process.env, ...resolveMcpEnv(server.env) } : undefined,
     cacheToolsList: server.cacheToolsList,
     clientSessionTimeoutSeconds: server.timeoutSeconds,
     toolFilter,
@@ -142,6 +170,13 @@ function createMcpServer(sdk: any, server: McpServerConfig): any {
     ...common,
     url: server.url
   });
+}
+
+export function resolveMcpEnv(env: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(env).map(([key, value]) => [
+    key,
+    value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_match, name: string) => process.env[name] || "")
+  ]));
 }
 
 function parseLiveArtifact(

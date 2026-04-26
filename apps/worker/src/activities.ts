@@ -28,19 +28,20 @@ export interface StageInput {
   previousArtifacts: StageArtifact[];
 }
 
-export async function ensureNotStopped(workItemId: string): Promise<void> {
+export async function ensureNotStopped(workItemId: string, config?: TargetRepoConfig): Promise<void> {
   const store = await getActivityStore();
   const status = await store.getStatus();
   if (status.system.emergencyStop) {
     throw new Error(`Emergency stop is active. Work item ${workItemId} cannot continue.`);
   }
 
-  const emergencyStopFile = process.env.EMERGENCY_STOP_FILE || path.resolve(".agent-team", "emergency-stop");
+  const emergencyStopFile = resolveEmergencyStopFile(config);
   try {
-    await exec(`node -e "require('fs').accessSync(${JSON.stringify(emergencyStopFile)})"`);
+    await fs.access(emergencyStopFile);
     throw new Error(`Emergency stop is active. Work item ${workItemId} cannot continue.`);
   } catch (error) {
     if (error instanceof Error && error.message.includes("Emergency stop is active")) throw error;
+    if ((error as NodeJS.ErrnoException).code && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 }
 
@@ -50,6 +51,7 @@ export async function runAgentStage(input: StageInput): Promise<StageArtifact> {
   const store = await getActivityStore();
   const config = loadReleaseConfig();
   const scopedWorkItem = scopeWorkItemToProject(input.workItem, config);
+  await ensureNotStopped(scopedWorkItem.id, config);
   await store.addEvent({
     workItemId: scopedWorkItem.id,
     stage: input.stage,
@@ -71,13 +73,14 @@ export async function runAgentStage(input: StageInput): Promise<StageArtifact> {
 export async function prepareBuildBranches(workItem: WorkItem): Promise<{ branchPrefix: string }> {
   const config = loadReleaseConfig();
   const scopedWorkItem = scopeWorkItemToProject(workItem, config);
-  await ensureNotStopped(scopedWorkItem.id);
+  await ensureNotStopped(scopedWorkItem.id, config);
   return { branchPrefix: automationBranchPrefix(scopedWorkItem) };
 }
 
 export async function integrateBranches(workItem: WorkItem, previousArtifacts: StageArtifact[]): Promise<StageArtifact> {
-  const scopedWorkItem = scopeWorkItemToProject(workItem, loadReleaseConfig());
-  await ensureNotStopped(scopedWorkItem.id);
+  const config = loadReleaseConfig();
+  const scopedWorkItem = scopeWorkItemToProject(workItem, config);
+  await ensureNotStopped(scopedWorkItem.id, config);
   const artifact = StageArtifactSchema.parse({
     workItemId: scopedWorkItem.id,
     projectId: scopedWorkItem.projectId,
@@ -102,7 +105,7 @@ export async function integrateBranches(workItem: WorkItem, previousArtifacts: S
 export async function runVerification(workItem: WorkItem, previousArtifacts: StageArtifact[]): Promise<StageArtifact> {
   const config = loadReleaseConfig();
   const scopedWorkItem = scopeWorkItemToProject(workItem, config);
-  await ensureNotStopped(scopedWorkItem.id);
+  await ensureNotStopped(scopedWorkItem.id, config);
   const checks = await runConfiguredChecks(config, ["install", "lint", "typecheck", "test", "build", "security"]);
   const failedChecks = checks.filter((check) => !check.ok);
   const artifact = StageArtifactSchema.parse({
@@ -134,8 +137,9 @@ export async function runVerification(workItem: WorkItem, previousArtifacts: Sta
 }
 
 export async function planVerification(workItem: WorkItem, previousArtifacts: StageArtifact[]): Promise<StageArtifact> {
-  const scopedWorkItem = scopeWorkItemToProject(workItem, loadReleaseConfig());
-  await ensureNotStopped(scopedWorkItem.id);
+  const config = loadReleaseConfig();
+  const scopedWorkItem = scopeWorkItemToProject(workItem, config);
+  await ensureNotStopped(scopedWorkItem.id, config);
   return StageArtifactSchema.parse({
     workItemId: scopedWorkItem.id,
     projectId: scopedWorkItem.projectId,
@@ -158,7 +162,7 @@ export async function planVerification(workItem: WorkItem, previousArtifacts: St
 export async function performAutonomousRelease(workItem: WorkItem, previousArtifacts: StageArtifact[]): Promise<StageArtifact> {
   const config = loadReleaseConfig();
   const scopedWorkItem = scopeWorkItemToProject(workItem, config);
-  await ensureNotStopped(scopedWorkItem.id);
+  await ensureNotStopped(scopedWorkItem.id, config);
   const { signal, syncReasons } = await collectReleaseSignal(scopedWorkItem, config, previousArtifacts);
   const decision = evaluateReleasePolicy(config, signal);
   const releaseCommand = decision.allowed ? await runReleaseCommand(config) : null;
@@ -409,9 +413,23 @@ function loadReleaseConfig(): TargetRepoConfig {
   const configPath = process.env.AGENT_TEAM_CONFIG || "agent-team.config.yaml";
   try {
     return loadTargetRepoConfig(configPath);
-  } catch {
-    return createDefaultReleaseConfig();
+  } catch (error) {
+    if (/^(1|true|yes)$/i.test(process.env.AGENT_TEAM_ALLOW_DEFAULT_CONFIG || "")) {
+      return createDefaultReleaseConfig();
+    }
+    throw new Error([
+      `Target repo config could not be loaded from ${configPath}.`,
+      "Create agent-team.config.yaml for the repository this team should operate on,",
+      "or set AGENT_TEAM_ALLOW_DEFAULT_CONFIG=true only for local smoke tests.",
+      error instanceof Error ? `Original error: ${error.message}` : ""
+    ].filter(Boolean).join(" "));
   }
+}
+
+function resolveEmergencyStopFile(config?: TargetRepoConfig): string {
+  const configured = process.env.EMERGENCY_STOP_FILE || config?.release.emergencyStopFile || ".agent-team/emergency-stop";
+  if (path.isAbsolute(configured)) return configured;
+  return path.resolve(config?.repo.localPath || process.cwd(), configured);
 }
 
 function automationBranchPrefix(workItem: WorkItem): string {

@@ -25,8 +25,13 @@ jobs:
       - run: npm test --if-present
       - run: npm run build --if-present
       - run: npm audit --audit-level=high
-      - name: Moderate dependency audit report
-        run: npm audit --audit-level=moderate || echo "::warning::Review any accepted moderate advisory before autonomous release."
+      - name: Project dependency audit policy
+        run: |
+          if npm run | grep -q "audit:security"; then
+            npm run audit:security
+          else
+            echo "::notice::No audit:security script is defined; high-or-worse audit is the active dependency gate."
+          fi
 
   release:
     needs: verify

@@ -5,6 +5,7 @@ import { z } from "zod";
 import { createStore } from "./store";
 import { checkTemporalConnection, startAutonomousWorkflow } from "./temporal";
 import { startSmartScheduler } from "./scheduler";
+import { loadTargetRepoConfig } from "../../../packages/shared/src";
 
 const CreateWorkItemRequest = z.object({
   title: z.string().min(1),
@@ -21,6 +22,10 @@ const CreateWorkItemRequest = z.object({
 const app = express();
 const store = createStore();
 const port = Number(process.env.PORT || 4310);
+const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:5173,http://127.0.0.1:5173")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 
 class HttpError extends Error {
   constructor(message: string, public statusCode: number) {
@@ -28,7 +33,36 @@ class HttpError extends Error {
   }
 }
 
-app.use(cors());
+function boundedInteger(value: unknown, defaultValue: number, min: number, max: number): number {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (raw === undefined || raw === null || raw === "") return defaultValue;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return defaultValue;
+  return Math.min(Math.max(Math.floor(parsed), min), max);
+}
+
+function requireConnectedTargetRepo(): void {
+  if (/^(1|true|yes)$/i.test(process.env.AGENT_TEAM_ALLOW_DEFAULT_CONFIG || "")) return;
+  const configPath = process.env.AGENT_TEAM_CONFIG || "agent-team.config.yaml";
+  try {
+    loadTargetRepoConfig(configPath);
+  } catch (error) {
+    throw new HttpError([
+      `Target repo config could not be loaded from ${configPath}.`,
+      "Connect a target repository before starting autonomous work."
+    ].join(" "), 400);
+  }
+}
+
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+      return;
+    }
+    callback(new HttpError(`Origin ${origin} is not allowed by CORS policy.`, 403));
+  }
+}));
 app.use(express.json());
 
 app.get("/health", async (_req, res) => {
@@ -77,9 +111,9 @@ app.get("/api/memories", async (req, res, next) => {
 
 app.get("/api/events", async (req, res, next) => {
   try {
-    const after = Number(req.query.after || 0);
-    const limit = Math.min(Number(req.query.limit || 50), 100);
-    res.json(await store.listEvents(Number.isFinite(after) ? after : 0, Number.isFinite(limit) ? limit : 50));
+    const after = boundedInteger(req.query.after, 0, 0, Number.MAX_SAFE_INTEGER);
+    const limit = boundedInteger(req.query.limit, 50, 1, 100);
+    res.json(await store.listEvents(after, limit));
   } catch (error) {
     next(error);
   }
@@ -91,32 +125,44 @@ app.get("/api/events/stream", async (req, res) => {
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders?.();
 
-  let lastSequence = Number(req.query.after || 0);
-  if (!Number.isFinite(lastSequence)) lastSequence = 0;
+  let lastSequence = boundedInteger(req.query.after, 0, 0, Number.MAX_SAFE_INTEGER);
 
-  const sendEvents = async () => {
+  const sendEvents = async (): Promise<boolean> => {
     const events = await store.listEvents(lastSequence, 50);
+    let wrote = false;
     for (const event of events) {
       lastSequence = event.sequence;
       res.write(`id: ${event.sequence}\n`);
       res.write(`event: agent-event\n`);
       res.write(`data: ${JSON.stringify(event)}\n\n`);
+      wrote = true;
     }
+    return wrote;
+  };
+
+  const sendHeartbeat = () => {
+    res.write(`: heartbeat ${new Date().toISOString()}\n\n`);
   };
 
   const timer = setInterval(() => {
-    sendEvents().catch((error) => {
-      res.write(`event: stream-error\n`);
-      res.write(`data: ${JSON.stringify({ error: error instanceof Error ? error.message : "event stream failed" })}\n\n`);
-    });
+    sendEvents()
+      .then((wrote) => {
+        if (!wrote) sendHeartbeat();
+      })
+      .catch((error) => {
+        res.write(`event: stream-error\n`);
+        res.write(`data: ${JSON.stringify({ error: error instanceof Error ? error.message : "event stream failed" })}\n\n`);
+      });
   }, 2000);
 
-  await sendEvents().catch(() => undefined);
+  const wroteInitialEvents = await sendEvents().catch(() => false);
+  if (!wroteInitialEvents) sendHeartbeat();
   req.on("close", () => clearInterval(timer));
 });
 
 app.post("/api/work-items", async (req, res, next) => {
   try {
+    requireConnectedTargetRepo();
     const input = CreateWorkItemRequest.parse(req.body);
     const workItem = await store.createWorkItem(input);
     const currentStatus = await store.getStatus();
