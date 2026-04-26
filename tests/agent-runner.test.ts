@@ -8,6 +8,7 @@ const workItem: WorkItem = {
   requestType: "feature",
   priority: "high",
   state: "RND",
+  dependencies: [],
   acceptanceCriteria: ["Release only after all gates pass"],
   riskLevel: "high",
   frontendNeeded: true,

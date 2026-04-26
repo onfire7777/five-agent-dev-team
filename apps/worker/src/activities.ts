@@ -5,6 +5,7 @@ import util from "node:util";
 import {
   evaluateGitSync,
   evaluateReleasePolicy,
+  loadRepoContextMemories,
   loadTargetRepoConfig,
   selectRelevantMemories,
   StageArtifactSchema,
@@ -46,7 +47,20 @@ export async function runAgentStage(input: StageInput): Promise<StageArtifact> {
   const role = roleForStage(input.stage);
   const definition = getAgentDefinition(role);
   const store = await getActivityStore();
-  const memories = selectRelevantMemories(await store.listMemories(input.workItem.id), input.workItem);
+  await store.addEvent({
+    workItemId: input.workItem.id,
+    stage: input.stage,
+    ownerAgent: definition.role,
+    level: "info",
+    type: "stage_started",
+    message: `${definition.displayName} started ${input.stage}.`
+  });
+  const config = loadReleaseConfig();
+  const contextMemories = await loadRepoContextMemories(config, input.workItem);
+  const memories = selectRelevantMemories([
+    ...(await store.listMemories(input.workItem.id)),
+    ...contextMemories
+  ], input.workItem);
   const result = await runRoleAgent(definition, { ...input, memories });
   await persistArtifact(result.artifact);
   return result.artifact;
@@ -281,6 +295,14 @@ async function getActivityStore(): Promise<ControllerStore> {
 async function persistArtifact(artifact: StageArtifact): Promise<void> {
   const store = await getActivityStore();
   await store.addArtifact(artifact);
+  await store.addEvent({
+    workItemId: artifact.workItemId,
+    stage: artifact.stage,
+    ownerAgent: artifact.ownerAgent,
+    level: artifact.status === "blocked" || artifact.status === "failed" ? "error" : "info",
+    type: artifact.stage === "RELEASE" ? "release" : artifact.stage === "VERIFY" ? "verification" : artifact.status === "failed" || artifact.status === "blocked" ? "stage_failed" : "stage_completed",
+    message: artifact.summary
+  });
   const nextState = artifact.status === "blocked" || artifact.status === "failed"
     ? "BLOCKED"
     : artifact.nextStage || artifact.stage;
@@ -303,6 +325,13 @@ function createDefaultReleaseConfig(): TargetRepoConfig {
       build: "npm run build --if-present",
       security: "npm audit --audit-level=high",
       release: "gh workflow run release.yml --ref main"
+    },
+    context: {
+      includeDefaultContextDir: true,
+      defaultContextDir: ".agent-team/context",
+      maxFiles: 8,
+      maxBytesPerFile: 12_000,
+      files: []
     },
     release: {
       mode: "autonomous",

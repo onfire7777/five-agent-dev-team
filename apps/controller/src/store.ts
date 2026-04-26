@@ -1,13 +1,16 @@
 import pg from "pg";
 import {
   canTransition,
+  AgentEventSchema,
   createSampleArtifacts,
   createSampleStatus,
   createSampleWorkItems,
+  dependenciesSatisfied,
   StageArtifactSchema,
   MemoryRecordSchema,
   memoryFromArtifact,
   WorkItemSchema,
+  type AgentEvent,
   type MemoryRecord,
   type StageArtifact,
   type WorkItem,
@@ -20,9 +23,11 @@ export interface ControllerStore {
   init(): Promise<void>;
   getStatus(): Promise<ControllerStatus>;
   listWorkItems(): Promise<WorkItem[]>;
-  createWorkItem(input: Pick<WorkItem, "title" | "priority" | "requestType" | "acceptanceCriteria" | "riskLevel" | "frontendNeeded" | "backendNeeded" | "rndNeeded">): Promise<WorkItem>;
+  createWorkItem(input: Pick<WorkItem, "title" | "priority" | "requestType" | "dependencies" | "acceptanceCriteria" | "riskLevel" | "frontendNeeded" | "backendNeeded" | "rndNeeded">): Promise<WorkItem>;
   updateWorkItemState(id: string, state: WorkItemState): Promise<void>;
   addArtifact(artifact: StageArtifact): Promise<void>;
+  addEvent(event: Omit<AgentEvent, "sequence" | "createdAt"> & Partial<Pick<AgentEvent, "sequence" | "createdAt">>): Promise<AgentEvent>;
+  listEvents(afterSequence?: number, limit?: number): Promise<AgentEvent[]>;
   listMemories(workItemId?: string): Promise<MemoryRecord[]>;
   addMemories(memories: MemoryRecord[]): Promise<void>;
   claimWorkItemForWorkflow(id: string): Promise<boolean>;
@@ -34,6 +39,8 @@ export class MemoryStore implements ControllerStore {
   private workItems = createSampleWorkItems();
   private artifacts = createSampleArtifacts();
   private memories: MemoryRecord[] = [];
+  private events: AgentEvent[] = [];
+  private nextEventSequence = 1;
   private workflowClaims = new Set<string>();
   private emergencyStop = false;
   private emergencyReason = "";
@@ -62,7 +69,7 @@ export class MemoryStore implements ControllerStore {
     return this.workItems;
   }
 
-  async createWorkItem(input: Pick<WorkItem, "title" | "priority" | "requestType" | "acceptanceCriteria" | "riskLevel" | "frontendNeeded" | "backendNeeded" | "rndNeeded">): Promise<WorkItem> {
+  async createWorkItem(input: Pick<WorkItem, "title" | "priority" | "requestType" | "dependencies" | "acceptanceCriteria" | "riskLevel" | "frontendNeeded" | "backendNeeded" | "rndNeeded">): Promise<WorkItem> {
     const createdAt = new Date().toISOString();
     const workItem = WorkItemSchema.parse({
       id: `WI-${Math.floor(1000 + Math.random() * 9000)}`,
@@ -89,6 +96,25 @@ export class MemoryStore implements ControllerStore {
   async addArtifact(artifact: StageArtifact): Promise<void> {
     this.artifacts.unshift(StageArtifactSchema.parse(artifact));
     await this.addMemories(memoryFromArtifact(artifact));
+  }
+
+  async addEvent(event: Omit<AgentEvent, "sequence" | "createdAt"> & Partial<Pick<AgentEvent, "sequence" | "createdAt">>): Promise<AgentEvent> {
+    const parsed = AgentEventSchema.parse({
+      sequence: event.sequence ?? this.nextEventSequence++,
+      createdAt: event.createdAt ?? new Date().toISOString(),
+      ...event
+    });
+    this.nextEventSequence = Math.max(this.nextEventSequence, parsed.sequence + 1);
+    this.events.push(parsed);
+    this.events = this.events.slice(-500);
+    return parsed;
+  }
+
+  async listEvents(afterSequence = 0, limit = 50): Promise<AgentEvent[]> {
+    return this.events
+      .filter((event) => event.sequence > afterSequence)
+      .sort((a, b) => a.sequence - b.sequence)
+      .slice(0, limit);
   }
 
   async listMemories(workItemId?: string): Promise<MemoryRecord[]> {
@@ -145,6 +171,12 @@ export class PostgresStore extends MemoryStore {
         payload jsonb not null,
         created_at timestamptz not null default now()
       );
+      create table if not exists agent_events (
+        sequence bigserial primary key,
+        work_item_id text,
+        payload jsonb not null,
+        created_at timestamptz not null default now()
+      );
       create table if not exists memory_records (
         id text primary key,
         payload jsonb not null,
@@ -173,6 +205,7 @@ export class PostgresStore extends MemoryStore {
     const status = createSampleStatus();
     const workItems = await this.listWorkItems();
     const artifacts = await this.listArtifacts();
+    const events = await this.listEvents(0, 50);
     const emergencyStop = await this.readEmergencyStopFlag();
     const pipeline = buildPipelineSummary(workItems);
     const recentArtifacts = artifacts.slice(0, 10);
@@ -193,13 +226,21 @@ export class PostgresStore extends MemoryStore {
       workItems,
       artifacts,
       releaseReadiness: buildReleaseReadiness(artifacts),
-      logs: recentArtifacts.map((artifact) => [
-        new Date(artifact.createdAt).toLocaleTimeString("en-US", { hour12: false }),
-        artifact.status === "blocked" || artifact.status === "failed" ? "ERROR" : artifact.status === "running" ? "INFO" : "INFO",
-        artifact.ownerAgent,
-        artifact.summary,
-        artifact.workItemId
-      ]),
+      logs: events.length
+        ? events.slice(-10).reverse().map((event) => [
+          new Date(event.createdAt).toLocaleTimeString("en-US", { hour12: false }),
+          event.level.toUpperCase(),
+          event.ownerAgent || "system",
+          event.message,
+          event.workItemId || "-"
+        ])
+        : recentArtifacts.map((artifact) => [
+          new Date(artifact.createdAt).toLocaleTimeString("en-US", { hour12: false }),
+          artifact.status === "blocked" || artifact.status === "failed" ? "ERROR" : artifact.status === "running" ? "INFO" : "INFO",
+          artifact.ownerAgent,
+          artifact.summary,
+          artifact.workItemId
+        ]),
       sharedContext: {
         activeThreads: buildActiveThreads(workItems, artifacts),
         research: artifacts
@@ -210,7 +251,7 @@ export class PostgresStore extends MemoryStore {
     };
   }
 
-  override async createWorkItem(input: Pick<WorkItem, "title" | "priority" | "requestType" | "acceptanceCriteria" | "riskLevel" | "frontendNeeded" | "backendNeeded" | "rndNeeded">): Promise<WorkItem> {
+  override async createWorkItem(input: Pick<WorkItem, "title" | "priority" | "requestType" | "dependencies" | "acceptanceCriteria" | "riskLevel" | "frontendNeeded" | "backendNeeded" | "rndNeeded">): Promise<WorkItem> {
     const workItem = await super.createWorkItem(input);
     await this.pool.query(
       "insert into work_items (id, payload, state) values ($1, $2, $3)",
@@ -258,6 +299,36 @@ export class PostgresStore extends MemoryStore {
       [artifact.workItemId, artifact, artifactKey, artifact.createdAt]
     );
     await super.addArtifact(artifact);
+  }
+
+  override async addEvent(event: Omit<AgentEvent, "sequence" | "createdAt"> & Partial<Pick<AgentEvent, "sequence" | "createdAt">>): Promise<AgentEvent> {
+    const createdAt = event.createdAt ?? new Date().toISOString();
+    const result = await this.pool.query(
+      `insert into agent_events (work_item_id, payload, created_at)
+       values ($1, $2, $3)
+       returning sequence`,
+      [event.workItemId || null, { ...event, sequence: 0, createdAt }, createdAt]
+    );
+    const parsed = AgentEventSchema.parse({
+      ...event,
+      sequence: Number(result.rows[0].sequence),
+      createdAt
+    });
+    await this.pool.query("update agent_events set payload = $2 where sequence = $1", [parsed.sequence, parsed]);
+    await super.addEvent(parsed);
+    return parsed;
+  }
+
+  override async listEvents(afterSequence = 0, limit = 50): Promise<AgentEvent[]> {
+    const result = await this.pool.query(
+      `select payload from agent_events
+       where sequence > $1
+       order by sequence asc
+       limit $2`,
+      [afterSequence, limit]
+    );
+    const stored = result.rows.map((row) => AgentEventSchema.parse(row.payload));
+    return stored.length ? stored : super.listEvents(afterSequence, limit);
   }
 
   override async claimWorkItemForWorkflow(id: string): Promise<boolean> {
@@ -342,7 +413,7 @@ function buildPipelineSummary(workItems: WorkItem[]): ControllerStatus["pipeline
 }
 
 function countRunnableWorkItems(workItems: WorkItem[]): number {
-  return workItems.filter((item) => item.state === "NEW").length;
+  return workItems.filter((item) => item.state === "NEW" && dependenciesSatisfied(item, workItems)).length;
 }
 
 function buildReleaseReadiness(artifacts: StageArtifact[]): ControllerStatus["releaseReadiness"] {

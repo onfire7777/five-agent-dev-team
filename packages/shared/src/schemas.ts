@@ -50,6 +50,19 @@ export const StageArtifactSchema = z.object({
 
 export type StageArtifact = z.infer<typeof StageArtifactSchema>;
 
+export const AgentEventSchema = z.object({
+  sequence: z.number().int().nonnegative().default(0),
+  workItemId: z.string().min(1).optional(),
+  stage: WorkItemStateSchema.optional(),
+  ownerAgent: AgentRoleSchema.optional(),
+  level: z.enum(["info", "warn", "error"]).default("info"),
+  type: z.enum(["workflow_claimed", "stage_started", "stage_completed", "stage_failed", "verification", "release", "scheduler", "system"]),
+  message: z.string().min(1),
+  createdAt: z.string().datetime()
+});
+
+export type AgentEvent = z.infer<typeof AgentEventSchema>;
+
 export const TeammateActivitySchema = z.object({
   agent: AgentRoleSchema,
   stage: WorkItemStateSchema,
@@ -76,6 +89,7 @@ export const SharedContextSchema = z.object({
   activeGoal: z.string().min(1),
   acceptanceCriteria: z.array(z.string()).default([]),
   buildContract: z.array(z.string()).default([]),
+  contextNotes: z.array(z.string()).default([]),
   teammateActivity: z.array(TeammateActivitySchema).default([]),
   researchFindings: z.array(ResearchFindingSchema).default([]),
   openQuestions: z.array(z.string()).default([]),
@@ -117,6 +131,7 @@ export const WorkItemSchema = z.object({
   githubIssueNumber: z.number().int().positive().optional(),
   githubPrNumber: z.number().int().positive().optional(),
   branchName: z.string().optional(),
+  dependencies: z.array(z.string().min(1)).default([]),
   acceptanceCriteria: z.array(z.string()).default([]),
   riskLevel: RiskLevelSchema.default("medium"),
   frontendNeeded: z.boolean().default(true),
@@ -138,6 +153,13 @@ export const RepoCommandSchema = z.object({
   release: z.string().min(1)
 });
 
+export const ContextFileReferenceSchema = z.object({
+  path: z.string().min(1),
+  description: z.string().optional(),
+  required: z.boolean().default(false),
+  maxBytes: z.number().int().positive().max(64_000).default(12_000)
+});
+
 export const TargetRepoConfigSchema = z.object({
   repo: z.object({
     owner: z.string().min(1),
@@ -146,6 +168,19 @@ export const TargetRepoConfigSchema = z.object({
     localPath: z.string().min(1)
   }),
   commands: RepoCommandSchema,
+  context: z.object({
+    includeDefaultContextDir: z.boolean().default(true),
+    defaultContextDir: z.string().default(".agent-team/context"),
+    maxFiles: z.number().int().positive().max(20).default(8),
+    maxBytesPerFile: z.number().int().positive().max(64_000).default(12_000),
+    files: z.array(ContextFileReferenceSchema).default([])
+  }).default({
+    includeDefaultContextDir: true,
+    defaultContextDir: ".agent-team/context",
+    maxFiles: 8,
+    maxBytesPerFile: 12_000,
+    files: []
+  }),
   release: z.object({
     mode: z.literal("autonomous"),
     githubActionsRequired: z.boolean().default(true),

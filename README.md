@@ -61,12 +61,16 @@ Default parallelism:
 
 Agents are context-aware through shared artifacts plus permanent memory. R&D decisions, contracts, release decisions, recurring risks, failures, and stable preferences are stored as typed memory records and injected into future agent runs when relevant.
 
+The lean AutoMaker-inspired context pack lives in the target repo at `.agent-team/context/`. Put only durable rules, architecture notes, and gotchas there; the controller loads them into every relevant agent run without adding dashboard complexity.
+
 ## API
 
 - `GET /health`
 - `GET /api/status`
 - `GET /api/work-items`
 - `GET /api/memories`
+- `GET /api/events`
+- `GET /api/events/stream`
 - `POST /api/work-items`
 - `POST /api/emergency-stop`
 - `POST /api/emergency-resume`

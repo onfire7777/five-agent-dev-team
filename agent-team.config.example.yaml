@@ -11,6 +11,19 @@ commands:
   build: npm run build
   security: npm audit --audit-level=high
   release: gh workflow run release.yml --ref main
+context:
+  # Lean AutoMaker-inspired context packs. Put only durable repo rules here:
+  # architecture decisions, command conventions, safety rules, and recurring gotchas.
+  includeDefaultContextDir: true
+  defaultContextDir: .agent-team/context
+  maxFiles: 8
+  maxBytesPerFile: 12000
+  files:
+    # Optional required files, relative to repo.localPath.
+    # - path: CLAUDE.md
+    #   description: Project coding rules and command conventions
+    #   required: false
+    #   maxBytes: 12000
 release:
   mode: autonomous
   githubActionsRequired: true

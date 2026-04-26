@@ -47,7 +47,9 @@ export function getPriorityScore(workItem: WorkItem): number {
 
 export function selectNextWorkItem(workItems: WorkItem[], policy: SchedulerPolicy): WorkItem | null {
   if (!policy.continuous) return null;
-  const candidates = workItems.filter((item) => !["CLOSED", "BLOCKED"].includes(item.state));
+  const candidates = workItems.filter((item) =>
+    !["CLOSED", "BLOCKED"].includes(item.state) && getBlockingWorkItemIds(item, workItems).length === 0
+  );
   if (candidates.length === 0) return null;
   return [...candidates].sort((a, b) => getPriorityScore(b) - getPriorityScore(a))[0] ?? null;
 }
@@ -59,8 +61,20 @@ export function selectParallelWorkItems(workItems: WorkItem[], policy: Scheduler
   return workItems
     .filter((item) => !activeIds.has(item.id))
     .filter((item) => !["CLOSED", "BLOCKED"].includes(item.state))
+    .filter((item) => getBlockingWorkItemIds(item, workItems).length === 0)
     .sort((a, b) => getPriorityScore(b) - getPriorityScore(a))
     .slice(0, policy.allowParallelWorkItemsWhenDisjoint ? capacity : 1);
+}
+
+export function getBlockingWorkItemIds(workItem: WorkItem, allWorkItems: WorkItem[]): string[] {
+  const dependencies = workItem.dependencies || [];
+  if (dependencies.length === 0) return [];
+  const byId = new Map(allWorkItems.map((item) => [item.id, item]));
+  return dependencies.filter((dependencyId) => byId.get(dependencyId)?.state !== "CLOSED");
+}
+
+export function dependenciesSatisfied(workItem: WorkItem, allWorkItems: WorkItem[]): boolean {
+  return getBlockingWorkItemIds(workItem, allWorkItems).length === 0;
 }
 
 export function getSafeParallelStages(workItem: WorkItem): string[] {

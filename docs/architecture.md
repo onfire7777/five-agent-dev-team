@@ -75,3 +75,12 @@ Memory scopes:
 - `agent`: role-specific observations
 
 The context builder retrieves relevant non-expired memories and injects them into every agent prompt alongside teammate activity and current artifacts. R&D, contract, and release decisions default to permanent memory; transient build observations stay durable or session-scoped.
+
+## Lean AutoMaker-Inspired Features
+
+The project deliberately borrows only the useful operating mechanisms from AutoMaker-style systems, not the full desktop surface area.
+
+- **Repo context packs**: agents can load focused `.md`/`.txt` files from `.agent-team/context` or from explicit config paths. This gives every stage durable repo rules, conventions, and gotchas without adding a separate context-management UI.
+- **Dependency-aware scheduling**: work items may declare `dependencies`. The scheduler skips blocked work until dependencies reach `CLOSED`, which preserves safe parallelism without forcing a Kanban board or graph view into the operator console.
+- **Durable event spine**: worker and controller lifecycle events are persisted before they are streamed to the dashboard. This keeps operator feedback fast while avoiding raw token/log streaming.
+- **Bloat rejected for v1**: Electron packaging, theme marketplaces, integrated terminals, large multi-view sidebars, project galleries, and generic file browsers stay out of scope unless they directly improve autonomous release reliability.

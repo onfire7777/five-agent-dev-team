@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_SCHEDULER_POLICY, selectNextWorkItem, selectParallelWorkItems, shouldUseLiveApi, type WorkItem } from "../packages/shared/src";
+import { DEFAULT_SCHEDULER_POLICY, dependenciesSatisfied, getBlockingWorkItemIds, selectNextWorkItem, selectParallelWorkItems, shouldUseLiveApi, type WorkItem } from "../packages/shared/src";
 
 const base: WorkItem = {
   id: "WI-1",
@@ -7,6 +7,7 @@ const base: WorkItem = {
   requestType: "feature",
   priority: "medium",
   state: "NEW",
+  dependencies: [],
   acceptanceCriteria: [],
   riskLevel: "medium",
   frontendNeeded: true,
@@ -40,5 +41,23 @@ describe("smart scheduler policy", () => {
     ], { ...DEFAULT_SCHEDULER_POLICY, maxConcurrentWorkflows: 2 }, new Set());
 
     expect(selected.map((item) => item.id)).toEqual(["WI-1", "WI-2"]);
+  });
+
+  it("does not start dependency-blocked work in parallel", () => {
+    const selected = selectParallelWorkItems([
+      { ...base, id: "WI-prereq", priority: "medium", state: "VERIFY" },
+      { ...base, id: "WI-blocked", priority: "urgent", dependencies: ["WI-prereq"] },
+      { ...base, id: "WI-free", priority: "high" }
+    ], { ...DEFAULT_SCHEDULER_POLICY, maxConcurrentWorkflows: 3 }, new Set());
+
+    expect(selected.map((item) => item.id)).toEqual(["WI-free", "WI-prereq"]);
+    expect(getBlockingWorkItemIds({ ...base, id: "WI-blocked", dependencies: ["WI-prereq"] }, [
+      { ...base, id: "WI-prereq", state: "VERIFY" }
+    ])).toEqual(["WI-prereq"]);
+  });
+
+  it("treats closed dependency work as satisfied", () => {
+    const item = { ...base, id: "WI-dependent", dependencies: ["WI-done"] };
+    expect(dependenciesSatisfied(item, [{ ...base, id: "WI-done", state: "CLOSED" }, item])).toBe(true);
   });
 });

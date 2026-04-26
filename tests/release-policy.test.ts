@@ -17,6 +17,13 @@ const config: TargetRepoConfig = {
     security: "npm audit --audit-level=high",
     release: "gh workflow run release.yml"
   },
+  context: {
+    includeDefaultContextDir: true,
+    defaultContextDir: ".agent-team/context",
+    maxFiles: 8,
+    maxBytesPerFile: 12_000,
+    files: []
+  },
   release: {
     mode: "autonomous",
     githubActionsRequired: true,

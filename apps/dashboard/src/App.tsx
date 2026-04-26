@@ -295,6 +295,15 @@ export function App() {
     return () => window.clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    if (!("EventSource" in window)) return undefined;
+    const source = new EventSource(`${API_BASE}/api/events/stream`);
+    source.addEventListener("agent-event", () => {
+      loadStatus();
+    });
+    return () => source.close();
+  }, []);
+
   const agentRows = useMemo(() => deriveAgentRows(status, apiState.connected), [status, apiState.connected]);
   const releaseReady = apiState.connected && status.releaseReadiness.status === "ready";
   const visibleMemories = memories.slice(0, 3);

@@ -5,7 +5,7 @@ coverage/
 .env.local
 agent-team.config.yaml
 .DS_Store
-.agent-team/
+/.agent-team/
 *.log
 apps/dashboard/dist/
 playwright-report/
