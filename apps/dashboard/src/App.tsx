@@ -3,22 +3,16 @@ import {
   Activity,
   AlertTriangle,
   Bot,
-  Check,
-  ChevronRight,
+  CheckCircle2,
   CircleStop,
-  Cloud,
   GitBranch,
   Github,
-  Gauge,
   LayoutDashboard,
-  ListChecks,
   Lock,
-  PauseCircle,
   PlayCircle,
   RefreshCw,
   Rocket,
   SearchCheck,
-  Settings,
   ShieldCheck,
   SquareKanban,
   TerminalSquare,
@@ -28,7 +22,11 @@ import {
 import { createSampleStatus } from "../../../packages/shared/src/sample-data";
 import type { AgentRole, MemoryRecord, StageArtifact } from "../../../packages/shared/src";
 
+declare const __DASHBOARD_API_BASE__: string | undefined;
+
 type Status = ReturnType<typeof createSampleStatus>;
+type RoutingKey = "frontendNeeded" | "backendNeeded" | "rndNeeded";
+
 type ApiState = {
   connected: boolean;
   usingFallback: boolean;
@@ -46,13 +44,13 @@ type AgentLane = {
   tone: string;
 };
 
-const API_BASE = "http://localhost:4310";
+const API_BASE = typeof __DASHBOARD_API_BASE__ === "string" && __DASHBOARD_API_BASE__ ? __DASHBOARD_API_BASE__ : "http://localhost:4310";
 
 const fallbackAgentRows: AgentLane[] = [
   {
     icon: SquareKanban,
     name: "Product",
-    role: "Product & Delivery Orchestrator",
+    role: "Product & Delivery",
     status: "Active",
     work: "WI-1289",
     task: "Locking acceptance criteria",
@@ -62,22 +60,22 @@ const fallbackAgentRows: AgentLane[] = [
   {
     icon: SearchCheck,
     name: "R&D",
-    role: "Architecture & Innovation",
+    role: "Architecture",
     status: "Active",
     work: "WI-1290",
-    task: "Finalizing API/data contract",
+    task: "Finalizing contract",
     progress: 66,
-    tone: "teal"
+    tone: "green"
   },
   {
     icon: LayoutDashboard,
     name: "Frontend",
-    role: "UX & Client Engineering",
+    role: "UX Engineering",
     status: "Active",
     work: "WI-1290",
-    task: "Building settings states",
+    task: "Building interface states",
     progress: 58,
-    tone: "indigo"
+    tone: "violet"
   },
   {
     icon: TerminalSquare,
@@ -85,14 +83,14 @@ const fallbackAgentRows: AgentLane[] = [
     role: "Systems Engineering",
     status: "Active",
     work: "WI-1290",
-    task: "Implementing preference API",
+    task: "Implementing API",
     progress: 62,
     tone: "slate"
   },
   {
     icon: ShieldCheck,
     name: "Quality",
-    role: "Security, Privacy & Release",
+    role: "Security & Release",
     status: "Blocked",
     work: "WI-1291",
     task: "Waiting on rollback proof",
@@ -105,22 +103,22 @@ const roleLanes: Array<Omit<AgentLane, "status" | "work" | "task" | "progress"> 
   {
     icon: SquareKanban,
     name: "Product",
-    role: "Product & Delivery Orchestrator",
+    role: "Product & Delivery",
     tone: "blue",
     agentRole: "product-delivery-orchestrator"
   },
   {
     icon: SearchCheck,
     name: "R&D",
-    role: "Architecture & Innovation",
-    tone: "teal",
+    role: "Architecture",
+    tone: "green",
     agentRole: "rnd-architecture-innovation"
   },
   {
     icon: LayoutDashboard,
     name: "Frontend",
-    role: "UX & Client Engineering",
-    tone: "indigo",
+    role: "UX Engineering",
+    tone: "violet",
     agentRole: "frontend-ux-engineering"
   },
   {
@@ -133,24 +131,24 @@ const roleLanes: Array<Omit<AgentLane, "status" | "work" | "task" | "progress"> 
   {
     icon: ShieldCheck,
     name: "Quality",
-    role: "Security, Privacy & Release",
+    role: "Security & Release",
     tone: "amber",
     agentRole: "quality-security-privacy-release"
   }
 ];
 
-const pipelineOrder = [
-  ["NEW", "New"],
-  ["INTAKE", "Intake"],
-  ["RND", "R&D"],
-  ["CONTRACT", "Contract"],
-  ["FRONTEND_BUILD", "Frontend"],
-  ["BACKEND_BUILD", "Backend"],
-  ["INTEGRATION", "Integration"],
-  ["VERIFY", "Verify"],
-  ["RELEASE", "Release"],
-  ["CLOSED", "Closed"],
-  ["BLOCKED", "Blocked"]
+const routeToggles: Array<[RoutingKey, string]> = [
+  ["rndNeeded", "R&D"],
+  ["frontendNeeded", "Frontend"],
+  ["backendNeeded", "Backend"]
+];
+
+const flowGroups = [
+  { label: "Intake", states: ["NEW", "INTAKE"], icon: SquareKanban },
+  { label: "Research", states: ["RND", "CONTRACT"], icon: SearchCheck },
+  { label: "Build", states: ["FRONTEND_BUILD", "BACKEND_BUILD", "INTEGRATION"], icon: Workflow },
+  { label: "Verify", states: ["VERIFY", "BLOCKED"], icon: ShieldCheck },
+  { label: "Release", states: ["RELEASE", "CLOSED"], icon: Rocket }
 ] as const;
 
 export function App() {
@@ -240,46 +238,12 @@ export function App() {
       setSelectedWorkItem(response.workItem.id);
       setWorkDraft((draft) => ({ ...draft, title: "", acceptanceCriteria: "" }));
       await loadStatus();
-      if (response.blocked) setCreateError(response.reason || "Work item queued while emergency stop is active.");
+      if (response.blocked) setCreateError(response.reason || "Queued while emergency stop is active.");
     } catch (error) {
       setCreateError(error instanceof Error ? error.message : "Work item creation failed.");
     } finally {
       setLoading(false);
     }
-  }
-
-  async function refreshFromButton() {
-    await loadStatus();
-  }
-
-  function systemPresentation() {
-    if (!apiState.connected) {
-      return {
-        label: apiState.usingFallback ? "Demo Data" : "Offline",
-        className: "warning",
-        dot: "amber"
-      };
-    }
-    if (status.system.emergencyStop) {
-      return { label: "Stopped", className: "warning", dot: "amber" };
-    }
-    if (!status.system.operational) {
-      return { label: "Degraded", className: "warning", dot: "amber" };
-    }
-    return { label: "Operational", className: "ok", dot: "green" };
-  }
-
-  const systemState = systemPresentation();
-  const agentRows = useMemo(() => deriveAgentRows(status, apiState.connected), [status, apiState.connected]);
-  const releaseReady = apiState.connected && status.releaseReadiness.status === "ready";
-  const visibleMemories = memories.slice(0, 6);
-  const latestSyncCheck = status.releaseReadiness.checks.find(([label]) => label === "Local/Remote Sync")?.[1] || "Pending release gate";
-
-  function apiNotice() {
-    if (apiState.connected) return "";
-    return apiState.usingFallback
-      ? `Controller connection failed: ${apiState.lastError}. Showing demo or last-known state.`
-      : apiState.lastError;
   }
 
   async function toggleEmergencyStop() {
@@ -309,339 +273,346 @@ export function App() {
     () => status.workItems.find((item) => item.id === selectedWorkItem) || status.workItems[0],
     [selectedWorkItem, status.workItems]
   );
+  const agentRows = useMemo(() => deriveAgentRows(status, apiState.connected), [status, apiState.connected]);
+  const releaseReady = apiState.connected && status.releaseReadiness.status === "ready";
+  const visibleMemories = memories.slice(0, 3);
+  const visibleEvents = status.logs.slice(0, 4);
+  const pipeline = status.pipeline as Record<string, number>;
+  const activeWorkItems = status.workItems.filter((item) => item.state !== "CLOSED").slice(0, 5);
+  const systemState = systemPresentation(status, apiState);
+  const apiMessage = apiNotice(apiState);
 
   return (
-    <div className="shell">
-      <aside className="rail" aria-label="Main navigation">
-        <div className="brand">
-          <div className="brand-mark"><Bot size={20} /></div>
+    <div className="app-shell">
+      <header className="top-header">
+        <div className="brand-lockup">
+          <div className="brand-mark">
+            <Bot size={20} />
+          </div>
           <div>
-            <strong>AI Dev Team</strong>
-            <span>Controller</span>
+            <span>AI Dev Team</span>
+            <strong>Autonomous Control</strong>
           </div>
         </div>
-
-        <nav className="nav">
-          {[
-            { icon: LayoutDashboard, label: "Overview" },
-            { icon: ListChecks, label: "Work Items" },
-            { icon: Bot, label: "Agents" },
-            { icon: Workflow, label: "Pipelines" },
-            { icon: Rocket, label: "Releases" },
-            { icon: Github, label: "GitHub Sync" },
-            { icon: ShieldCheck, label: "Verification" },
-            { icon: Activity, label: "Observability" },
-            { icon: Settings, label: "Settings" }
-          ].map(({ icon: Icon, label }) => (
-            <button className={label === "Overview" ? "active" : ""} key={String(label)}>
-              <Icon size={18} />
-              <span>{label}</span>
-            </button>
-          ))}
-        </nav>
-
-        <button
-          className={`stop-panel ${status.system.emergencyStop ? "is-active" : ""}`}
-          onClick={toggleEmergencyStop}
-          disabled={loading}
-        >
-          {status.system.emergencyStop ? <PlayCircle size={22} /> : <CircleStop size={22} />}
-          <strong>{status.system.emergencyStop ? "Resume Agents" : "Emergency Stop"}</strong>
-          <span>{status.system.emergencyStop ? "Restore workflow execution" : "Immediately halt all workflows"}</span>
-        </button>
-
-        <div className="environment">
-          <span>Environment</span>
-          <strong><span className={`dot ${apiState.connected ? "green" : "amber"}`} /> {apiState.connected ? "Local Runtime" : "Disconnected"}</strong>
-          <small>{apiState.usingFallback ? "Demo or last-known state" : "Controller v0.1.0"}</small>
-        </div>
-      </aside>
-
-      <main className="main">
-        <header className="topbar">
-          <div>
-            <h1>Autonomous Delivery Console</h1>
-            <p>Five-agent software development team with release governance.</p>
-          </div>
-          <div className="top-metrics">
-            <Metric icon={Gauge} label="Load" value={`${status.system.systemLoad}%`} />
-            <Metric icon={Cloud} label="Queue" value={String(status.system.queueDepth)} />
-            <Metric icon={Bot} label="Agents" value={`${status.system.agentsOnline}/${status.system.agentsTotal}`} />
-            <Metric icon={PauseCircle} label="Mode" value={status.system.executionMode} />
-            <Metric icon={GitBranch} label="GitHub" value={apiState.connected ? status.system.githubSync : "unknown"} ok={apiState.connected} />
-          </div>
-        </header>
-
-        <section className="hero-band">
-          <div>
-            <span className={`status-chip ${systemState.className}`}><span className={`dot ${systemState.dot}`} /> {systemState.label}</span>
-            <h2>Fully autonomous team, parallel where it is safe.</h2>
-            <p>Designed for ChatGPT Pro plus Codex-style usage: event-triggered stages, controlled parallelism, cooldowns, and release autonomy when local checks, GitHub Actions, security, privacy, rollback, and sync gates are provably clean.</p>
-            {status.system.emergencyReason && <p className="api-notice">{status.system.emergencyReason}</p>}
-            {apiNotice() && <p className="api-notice">{apiNotice()}</p>}
-          </div>
-          <button className="primary-action" onClick={refreshFromButton}>
+        <div className="header-actions">
+          <span className={`status-pill ${systemState.className}`}>
+            <span className={`dot ${systemState.dot}`} />
+            {systemState.label}
+          </span>
+          <button className="ghost-button" onClick={loadStatus} disabled={loading} data-testid="refresh-state">
             <RefreshCw size={16} />
-            Refresh State
+            Refresh
           </button>
+          <button
+            className={`stop-button ${status.system.emergencyStop ? "is-resume" : ""}`}
+            onClick={toggleEmergencyStop}
+            disabled={loading || !apiState.connected}
+            data-testid="emergency-toggle"
+          >
+            {status.system.emergencyStop ? <PlayCircle size={16} /> : <CircleStop size={16} />}
+            {status.system.emergencyStop ? "Resume" : "Stop"}
+          </button>
+        </div>
+      </header>
+
+      <main className="page">
+        <section className="runtime-strip" aria-label="Runtime state">
+          <RuntimeStat label="Queue" value={String(status.system.queueDepth)} icon={Activity} />
+          <RuntimeStat label="Agents" value={`${status.system.agentsOnline}/${status.system.agentsTotal}`} icon={Bot} />
+          <RuntimeStat label="Parallel" value={`${status.system.scheduler.maxConcurrentAgentRuns} lanes`} icon={Workflow} />
+          <RuntimeStat label="GitHub" value={apiState.connected ? status.system.githubSync : "offline"} icon={Github} />
+          <RuntimeStat label="Repo writes" value={String(status.system.scheduler.maxConcurrentRepoWrites)} icon={Lock} />
         </section>
 
-        <section className="intake-band" aria-labelledby="intake-title">
-          <div className="section-head">
-            <h3 id="intake-title">New Work Item</h3>
-            <span className="subtle-label">Continuous queue intake</span>
+        {(apiMessage || status.system.emergencyReason) && (
+          <div className="notice" role="status">
+            <AlertTriangle size={16} />
+            <span>{status.system.emergencyReason || apiMessage}</span>
           </div>
-          <form className="intake-form" onSubmit={createWorkItem}>
-            <label className="field wide">
-              <span>Title</span>
-              <input
-                value={workDraft.title}
-                onChange={(event) => setWorkDraft((draft) => ({ ...draft, title: event.target.value }))}
-                placeholder="Add billing retry safeguards"
-              />
-            </label>
-            <label className="field wide">
-              <span>Acceptance Criteria</span>
-              <textarea
-                value={workDraft.acceptanceCriteria}
-                onChange={(event) => setWorkDraft((draft) => ({ ...draft, acceptanceCriteria: event.target.value }))}
-                placeholder="One criterion per line"
-              />
-            </label>
-            <div className="intake-controls">
-              <label className="field">
-                <span>Type</span>
-                <select value={workDraft.requestType} onChange={(event) => setWorkDraft((draft) => ({ ...draft, requestType: event.target.value }))}>
-                  {["feature", "bug", "performance", "security", "privacy", "refactor", "research"].map((option) => <option key={option}>{option}</option>)}
-                </select>
-              </label>
-              <label className="field">
-                <span>Priority</span>
-                <select value={workDraft.priority} onChange={(event) => setWorkDraft((draft) => ({ ...draft, priority: event.target.value }))}>
-                  {["low", "medium", "high", "urgent"].map((option) => <option key={option}>{option}</option>)}
-                </select>
-              </label>
-              <label className="field">
-                <span>Risk</span>
-                <select value={workDraft.riskLevel} onChange={(event) => setWorkDraft((draft) => ({ ...draft, riskLevel: event.target.value }))}>
-                  {["low", "medium", "high"].map((option) => <option key={option}>{option}</option>)}
-                </select>
-              </label>
-              <div className="toggle-group" aria-label="Routing">
-                {[
-                  ["frontendNeeded", "Frontend"],
-                  ["backendNeeded", "Backend"],
-                  ["rndNeeded", "R&D"]
-                ].map(([key, label]) => (
-                  <label className="toggle" key={key}>
-                    <input
-                      type="checkbox"
-                      checked={Boolean(workDraft[key as "frontendNeeded" | "backendNeeded" | "rndNeeded"])}
-                      onChange={(event) => setWorkDraft((draft) => ({ ...draft, [key]: event.target.checked }))}
-                    />
-                    <span>{label}</span>
+        )}
+
+        <div className="dashboard-grid">
+          <div className="main-stack">
+            <section className="panel intake-panel" aria-labelledby="create-work-title" data-testid="work-intake">
+              <PanelHeader title="Create Work" kicker="Add, route, run" icon={PlayCircle} />
+              <form className="intake-form" onSubmit={createWorkItem}>
+                <label className="field title-field">
+                  <span>Title</span>
+                  <input
+                    value={workDraft.title}
+                    onChange={(event) => setWorkDraft((draft) => ({ ...draft, title: event.target.value }))}
+                    placeholder="Feature, bug, refactor, research..."
+                    data-testid="work-title"
+                  />
+                </label>
+                <label className="field criteria-field">
+                  <span>Acceptance</span>
+                  <textarea
+                    value={workDraft.acceptanceCriteria}
+                    onChange={(event) => setWorkDraft((draft) => ({ ...draft, acceptanceCriteria: event.target.value }))}
+                    placeholder="One criterion per line"
+                    data-testid="work-criteria"
+                  />
+                </label>
+
+                <div className="control-row">
+                  <label className="field select-field">
+                    <span>Type</span>
+                    <select
+                      value={workDraft.requestType}
+                      onChange={(event) => setWorkDraft((draft) => ({ ...draft, requestType: event.target.value }))}
+                    >
+                      {["feature", "bug", "performance", "security", "privacy", "refactor", "research"].map((option) => (
+                        <option key={option}>{option}</option>
+                      ))}
+                    </select>
                   </label>
-                ))}
-              </div>
-              <button className="primary-action" type="submit" disabled={loading || !apiState.connected}>
-                <PlayCircle size={16} />
-                Start Loop
-              </button>
-            </div>
-          </form>
-          {createError && <p className="api-notice">{createError}</p>}
-        </section>
-
-        <section className="pipeline" aria-labelledby="pipeline-title">
-          <div className="section-head">
-            <h3 id="pipeline-title">Work Item Pipeline</h3>
-            <button>View all <ChevronRight size={16} /></button>
-          </div>
-          <div className="pipeline-grid">
-            {pipelineOrder.map(([key, label]) => (
-              <button className="stage" key={key}>
-                <span>{label}</span>
-                <strong>{status.pipeline[key] ?? 0}</strong>
-                <small>{describeStage(key)}</small>
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <div className="content-grid">
-          <section className="agent-table" aria-labelledby="agents-title">
-            <div className="section-head">
-              <h3 id="agents-title">Agent Lanes</h3>
-              <button>Manage agents <ChevronRight size={16} /></button>
-            </div>
-            <div className="table">
-              <div className="row header">
-                <span>Agent</span>
-                <span>Current Work</span>
-                <span>Status</span>
-                <span>Progress</span>
-              </div>
-              {agentRows.map((agent) => (
-                <div className="row" key={agent.name}>
-                  <span className="agent-name">
-                    <span className={`agent-icon ${agent.tone}`}><agent.icon size={18} /></span>
-                    <span><strong>{agent.name}</strong><small>{agent.role}</small></span>
-                  </span>
-                  <span>
-                    <strong>{agent.work}</strong>
-                    <small>{agent.task}</small>
-                  </span>
-                  <span className={agent.status === "Blocked" ? "status warn" : agent.status === "Idle" ? "status muted" : "status ok"}>
-                    <span className={`dot ${agent.status === "Blocked" ? "amber" : agent.status === "Idle" ? "slate" : "green"}`} />
-                    {agent.status}
-                  </span>
-                  <span className="progress-cell">
-                    <span>{agent.progress}%</span>
-                    <span className="bar"><i style={{ width: `${agent.progress}%` }} /></span>
-                  </span>
+                  <label className="field select-field">
+                    <span>Priority</span>
+                    <select
+                      value={workDraft.priority}
+                      onChange={(event) => setWorkDraft((draft) => ({ ...draft, priority: event.target.value }))}
+                    >
+                      {["low", "medium", "high", "urgent"].map((option) => (
+                        <option key={option}>{option}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field select-field">
+                    <span>Risk</span>
+                    <select
+                      value={workDraft.riskLevel}
+                      onChange={(event) => setWorkDraft((draft) => ({ ...draft, riskLevel: event.target.value }))}
+                    >
+                      {["low", "medium", "high"].map((option) => (
+                        <option key={option}>{option}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="route-toggles" aria-label="Routing">
+                    {routeToggles.map(([key, label]) => (
+                      <label className="route-toggle" key={key}>
+                        <input
+                          type="checkbox"
+                          checked={workDraft[key]}
+                          onChange={(event) => setWorkDraft((draft) => ({ ...draft, [key]: event.target.checked }))}
+                        />
+                        <span>{label}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <button className="primary-button" type="submit" disabled={loading || !apiState.connected} data-testid="start-loop">
+                    <PlayCircle size={16} />
+                    Start
+                  </button>
                 </div>
-              ))}
-            </div>
-          </section>
+              </form>
+              {createError && <p className="form-error">{createError}</p>}
+            </section>
 
-          <aside className="side-stack">
-            <section className="sync-card">
-              <div className="section-head compact">
-                <h3>Team Context</h3>
-                <Workflow size={18} />
+            <section className="panel loop-panel" aria-labelledby="workflow-title" data-testid="active-loop">
+              <PanelHeader title="Workflow" kicker="Lean Automaker loop" icon={Workflow} />
+              <div className="flow-grid">
+                {flowGroups.map(({ label, states, icon: Icon }) => {
+                  const count = states.reduce((total, state) => total + (pipeline[state] ?? 0), 0);
+                  return (
+                    <div className="flow-step" key={label}>
+                      <span className="step-icon">
+                        <Icon size={17} />
+                      </span>
+                      <span>{label}</span>
+                      <strong>{count}</strong>
+                    </div>
+                  );
+                })}
               </div>
-              <div className="context-list">
-                {status.sharedContext.activeThreads.map(([agent, item, summary]) => (
-                  <div key={`${agent}-${item}`}>
-                    <strong>{agent}</strong>
-                    <span>{item}</span>
-                    <p>{summary}</p>
+
+              <div className="work-list">
+                {activeWorkItems.length ? (
+                  activeWorkItems.map((item) => (
+                    <button
+                      className={`work-card ${selected?.id === item.id ? "is-selected" : ""}`}
+                      key={item.id}
+                      onClick={() => setSelectedWorkItem(item.id)}
+                      data-testid={`work-card-${item.id}`}
+                    >
+                      <span className="work-topline">
+                        <strong>{item.title}</strong>
+                        <em>{item.state}</em>
+                      </span>
+                      <span className="work-meta">
+                        <span>{item.id}</span>
+                        <span>{item.priority}</span>
+                        <span>{item.riskLevel} risk</span>
+                      </span>
+                    </button>
+                  ))
+                ) : (
+                  <div className="empty-state">No active work items.</div>
+                )}
+              </div>
+            </section>
+
+            {selected && (
+              <section className="panel selected-panel" aria-labelledby="selected-work-title">
+                <PanelHeader title="Selected Work" kicker={selected.id} icon={GitBranch} />
+                <div className="selected-body">
+                  <div>
+                    <span className="state-chip">{selected.state}</span>
+                    <h2>{selected.title}</h2>
+                  </div>
+                  <ul className="criteria-list">
+                    {selected.acceptanceCriteria.length ? (
+                      selected.acceptanceCriteria.map((criterion) => <li key={criterion}>{criterion}</li>)
+                    ) : (
+                      <li>Acceptance criteria pending.</li>
+                    )}
+                  </ul>
+                </div>
+              </section>
+            )}
+          </div>
+
+          <aside className="side-column">
+            <section className="panel team-panel" aria-labelledby="team-title" data-testid="team-panel">
+              <PanelHeader title="Team" kicker="Live lanes" icon={Bot} />
+              <div className="team-list">
+                {agentRows.map((agent) => (
+                  <div className="agent-row" key={agent.name}>
+                    <span className={`agent-icon ${agent.tone}`}>
+                      <agent.icon size={17} />
+                    </span>
+                    <span className="agent-copy">
+                      <strong>{agent.name}</strong>
+                      <small>{agent.task}</small>
+                    </span>
+                    <span className={`agent-status ${agent.status.toLowerCase()}`}>{agent.status}</span>
+                    <span className="progress-track" aria-label={`${agent.name} ${agent.progress}%`}>
+                      <i style={{ width: `${agent.progress}%` }} />
+                    </span>
                   </div>
                 ))}
               </div>
             </section>
 
-            <section className="sync-card">
-              <div className="section-head compact">
-                <h3>Permanent Memory</h3>
-                <Activity size={18} />
+            <section className="panel release-panel" aria-labelledby="release-gate-title" data-testid="release-panel">
+              <PanelHeader title="Release Gate" kicker={status.releaseReadiness.target} icon={releaseReady ? CheckCircle2 : ShieldCheck} />
+              <div className={`release-state ${releaseReady ? "ready" : "waiting"}`}>
+                {releaseReady ? <CheckCircle2 size={20} /> : <ShieldCheck size={20} />}
+                <strong>{releaseReady ? "Ready" : status.releaseReadiness.status}</strong>
               </div>
-              <div className="memory-list">
-                {visibleMemories.length ? visibleMemories.map((memory) => (
-                  <div key={memory.id}>
-                    <strong>{memory.title}</strong>
-                    <span>{memory.kind} · {memory.permanence}</span>
-                    <p>{memory.content}</p>
-                  </div>
-                )) : <p className="empty-note">No persisted memories yet.</p>}
-              </div>
-            </section>
-
-            <section className="readiness">
-              <div className="release-icon"><Check size={22} /></div>
-              <h3>{releaseReady ? "Ready for Release" : "Release Gate"}</h3>
-              <p>{releaseReady ? "All configured autonomous gates are currently passing." : `${status.releaseReadiness.target} is ${status.releaseReadiness.status}.`}</p>
-              <div className="check-list">
+              <div className="check-grid">
                 {status.releaseReadiness.checks.map(([label, value]) => (
                   <div key={label}>
-                    <span><Check size={14} /> {label}</span>
+                    <span>{label}</span>
                     <strong>{value}</strong>
                   </div>
                 ))}
               </div>
             </section>
 
-            <section className="sync-card">
-              <div className="section-head compact">
-                <h3>GitHub Sync</h3>
-                <Github size={18} />
+            <section className="panel memory-panel" aria-labelledby="memory-title">
+              <PanelHeader title="Memory" kicker="Persistent context" icon={Activity} />
+              <div className="memory-list">
+                {visibleMemories.length ? (
+                  visibleMemories.map((memory) => (
+                    <article key={memory.id}>
+                      <strong>{memory.title}</strong>
+                      <span>{memory.kind} · {memory.permanence}</span>
+                      <p>{memory.content}</p>
+                    </article>
+                  ))
+                ) : (
+                  status.sharedContext.activeThreads.length ? (
+                    status.sharedContext.activeThreads.slice(0, 3).map(([agent, item, summary]) => (
+                      <article key={`${agent}-${item}`}>
+                        <strong>{agent}</strong>
+                        <span>{item}</span>
+                        <p>{summary}</p>
+                      </article>
+                    ))
+                  ) : (
+                    <div className="empty-state compact">No stored context yet.</div>
+                  )
+                )}
               </div>
-              <dl>
-                <div><dt>Repository</dt><dd>configured target</dd></div>
-                <div><dt>Default Branch</dt><dd>from policy file</dd></div>
-                <div><dt>Sync Status</dt><dd>{status.system.githubSync}</dd></div>
-                <div><dt>Latest Proof</dt><dd>{latestSyncCheck}</dd></div>
-              </dl>
             </section>
 
-            <section className="sync-card">
-              <div className="section-head compact">
-                <h3>Smart Scheduler</h3>
-                <Lock size={18} />
+            <section className="panel event-panel" aria-labelledby="events-title">
+              <PanelHeader title="Events" kicker="Latest proof" icon={Activity} />
+              <div className="event-list">
+                {visibleEvents.length ? (
+                  visibleEvents.map(([time, level, source, message, item]) => (
+                    <div className="event-row" key={`${time}-${source}-${message}`}>
+                      <time>{time}</time>
+                      <span className={`event-level ${String(level).toLowerCase()}`}>{level}</span>
+                      <strong>{source}</strong>
+                      <p>{message}</p>
+                      <em>{item}</em>
+                    </div>
+                  ))
+                ) : (
+                  <div className="empty-state compact">No events yet.</div>
+                )}
               </div>
-              <dl>
-                <div><dt>Mode</dt><dd>{status.system.executionMode}</dd></div>
-                <div><dt>Continuous</dt><dd>{status.system.scheduler.continuous ? "Enabled" : "Paused"}</dd></div>
-                <div><dt>Poll</dt><dd>{status.system.scheduler.pollIntervalSeconds}s</dd></div>
-                <div><dt>Workflow Limit</dt><dd>{status.system.scheduler.maxConcurrentWorkflows}</dd></div>
-                <div><dt>Agent Limit</dt><dd>{status.system.scheduler.maxConcurrentAgentRuns}</dd></div>
-                <div><dt>Repo Writes</dt><dd>{status.system.scheduler.maxConcurrentRepoWrites}</dd></div>
-              </dl>
             </section>
           </aside>
-        </div>
-
-        <div className="lower-grid">
-          <section className="work-detail">
-            <div className="section-head">
-              <h3>Selected Work Item</h3>
-              <select value={selected?.id || ""} onChange={(event) => setSelectedWorkItem(event.target.value)} disabled={!status.workItems.length}>
-                {!status.workItems.length && <option>No work items</option>}
-                {status.workItems.map((item) => <option key={item.id}>{item.id}</option>)}
-              </select>
-            </div>
-            {selected && (
-              <div className="detail-body">
-                <span className="status-chip muted">{selected.state}</span>
-                <h4>{selected.title}</h4>
-                <p>{selected.acceptanceCriteria.join(" · ") || "Acceptance criteria pending."}</p>
-                <div className="detail-tags">
-                  <span>{selected.priority} priority</span>
-                  <span>{selected.riskLevel} risk</span>
-                  <span>{selected.frontendNeeded ? "frontend" : "no frontend"}</span>
-                  <span>{selected.backendNeeded ? "backend" : "no backend"}</span>
-                </div>
-              </div>
-            )}
-          </section>
-
-          <section className="logs">
-            <div className="section-head">
-              <h3>Recent Verification Logs</h3>
-              <button>Full logs <ChevronRight size={16} /></button>
-            </div>
-            <div className="log-list">
-              {status.logs.map(([time, level, source, message, item]) => (
-                <div className="log-row" key={`${time}-${message}`}>
-                  <time>{time}</time>
-                  <span className={`level ${String(level).toLowerCase()}`}>{level}</span>
-                  <strong>{source}</strong>
-                  <span>{message}</span>
-                  <em>{item}</em>
-                </div>
-              ))}
-            </div>
-          </section>
         </div>
       </main>
     </div>
   );
 }
 
-function Metric({ icon: Icon, label, value, ok }: { icon: LucideIcon; label: string; value: string; ok?: boolean }) {
+function PanelHeader({ title, kicker, icon: Icon }: { title: string; kicker: string; icon: LucideIcon }) {
   return (
-    <div className="metric">
-      <Icon size={16} />
-      <span>{label}</span>
-      <strong className={ok ? "green-text" : ""}>{value}</strong>
+    <div className="panel-header">
+      <div>
+        <span>{kicker}</span>
+        <h2 id={`${title.toLowerCase().replace(/\s+/g, "-")}-title`}>{title}</h2>
+      </div>
+      <Icon size={18} />
     </div>
   );
+}
+
+function RuntimeStat({ icon: Icon, label, value }: { icon: LucideIcon; label: string; value: string }) {
+  return (
+    <div className="runtime-stat">
+      <Icon size={16} />
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function systemPresentation(status: Status, apiState: ApiState) {
+  if (!apiState.connected) {
+    return {
+      label: apiState.usingFallback ? "Demo Data" : "Offline",
+      className: "warning",
+      dot: "amber"
+    };
+  }
+  if (status.system.emergencyStop) {
+    return { label: "Stopped", className: "warning", dot: "amber" };
+  }
+  if (!status.system.operational) {
+    return { label: "Degraded", className: "warning", dot: "amber" };
+  }
+  return { label: "Operational", className: "ok", dot: "green" };
+}
+
+function apiNotice(apiState: ApiState) {
+  if (apiState.connected) return "";
+  return apiState.usingFallback
+    ? `Controller connection failed: ${apiState.lastError}. Showing demo or last-known state.`
+    : apiState.lastError;
 }
 
 function deriveAgentRows(status: Status, connected: boolean): AgentLane[] {
   if (!connected) return fallbackAgentRows;
   return roleLanes.map((lane) => {
-    const latestArtifact = status.artifacts.find((artifact) => artifact.ownerAgent === lane.agentRole);
+    const latestArtifact = [...status.artifacts].reverse().find((artifact) => artifact.ownerAgent === lane.agentRole);
     const workItem = latestArtifact ? status.workItems.find((item) => item.id === latestArtifact.workItemId) : undefined;
     const agentStatus = statusForAgent(latestArtifact, workItem?.state);
     return {
@@ -665,23 +636,7 @@ function statusForAgent(artifact: StageArtifact | undefined, state?: string): st
 }
 
 function progressForStage(stage: string): number {
-  const index = pipelineOrder.findIndex(([key]) => key === stage);
-  return index === -1 ? 0 : Math.round(((index + 1) / pipelineOrder.length) * 100);
-}
-
-function describeStage(stage: string) {
-  const descriptions: Record<string, string> = {
-    NEW: "queued request",
-    INTAKE: "scope and route",
-    RND: "research and contract",
-    CONTRACT: "interface lock",
-    FRONTEND_BUILD: "client work",
-    BACKEND_BUILD: "system work",
-    INTEGRATION: "branch merge",
-    VERIFY: "quality gates",
-    RELEASE: "merge and publish",
-    CLOSED: "loop complete",
-    BLOCKED: "needs fix"
-  };
-  return descriptions[stage] || "workflow";
+  const order = ["NEW", "INTAKE", "RND", "CONTRACT", "FRONTEND_BUILD", "BACKEND_BUILD", "INTEGRATION", "VERIFY", "RELEASE", "CLOSED"];
+  const index = order.indexOf(stage);
+  return index === -1 ? 0 : Math.round(((index + 1) / order.length) * 100);
 }

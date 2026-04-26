@@ -21,6 +21,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: docker compose config --quiet
       - run: npm run check
       - name: High-severity dependency audit
         run: npm audit --audit-level=high
