@@ -32,6 +32,8 @@ docker compose up --build
 
 Create `agent-team.config.yaml` from `agent-team.config.example.yaml` and point it at one target repo. The target repo must expose install, lint, typecheck, test, build, security, and release commands. The controller will not guess project-specific commands.
 
+Each connected repo is treated as an isolated project. Work items and permanent memory carry a project/repo scope so one repository's decisions, gotchas, and automation state are not mixed into another repository. Connect a repo explicitly in `agent-team.config.yaml` before starting autonomous work on it.
+
 ## Release Safety Invariant
 
 A completed autonomous loop must leave:
@@ -62,6 +64,16 @@ Default parallelism:
 Agents are context-aware through shared artifacts plus permanent memory. R&D decisions, contracts, release decisions, recurring risks, failures, and stable preferences are stored as typed memory records and injected into future agent runs when relevant.
 
 The lean AutoMaker-inspired context pack lives in the target repo at `.agent-team/context/`. Put only durable rules, architecture notes, and gotchas there; the controller loads them into every relevant agent run without adding dashboard complexity.
+
+## Lazy MCP, Skills, And Plugins
+
+Agents can be configured with MCP servers and capability packs, but they are not loaded into every run. The runner selects tools from the current work item, stage, agent role, risk, and keywords, then closes MCP sessions after that run. This gives the team proactive access to browser automation, Chrome diagnostics, GitHub context, security scanners, database tools, Electron diagnostics, and specialized coding knowledge without bloating normal prompts.
+
+See `agent-team.config.example.yaml` and `docs/lazy-capability-model.md`.
+
+## Model Policy
+
+Live agent runs default to the configured best coding model policy: `gpt-5.5` for coding, research, and review roles, with `gpt-5.4` only as an explicit fallback. Set `AGENT_MODEL` only when you intentionally want to override the per-role model policy.
 
 ## API
 

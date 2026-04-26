@@ -7,6 +7,7 @@ import {
   evaluateReleasePolicy,
   loadRepoContextMemories,
   loadTargetRepoConfig,
+  scopeWorkItemToProject,
   selectRelevantMemories,
   StageArtifactSchema,
   type StageArtifact,
@@ -47,34 +48,40 @@ export async function runAgentStage(input: StageInput): Promise<StageArtifact> {
   const role = roleForStage(input.stage);
   const definition = getAgentDefinition(role);
   const store = await getActivityStore();
+  const config = loadReleaseConfig();
+  const scopedWorkItem = scopeWorkItemToProject(input.workItem, config);
   await store.addEvent({
-    workItemId: input.workItem.id,
+    workItemId: scopedWorkItem.id,
     stage: input.stage,
     ownerAgent: definition.role,
     level: "info",
     type: "stage_started",
     message: `${definition.displayName} started ${input.stage}.`
   });
-  const config = loadReleaseConfig();
-  const contextMemories = await loadRepoContextMemories(config, input.workItem);
+  const contextMemories = await loadRepoContextMemories(config, scopedWorkItem);
   const memories = selectRelevantMemories([
-    ...(await store.listMemories(input.workItem.id)),
+    ...(await store.listMemories(scopedWorkItem.id)),
     ...contextMemories
-  ], input.workItem);
-  const result = await runRoleAgent(definition, { ...input, memories });
+  ], scopedWorkItem);
+  const result = await runRoleAgent(definition, { ...input, workItem: scopedWorkItem, memories, targetRepoConfig: config });
   await persistArtifact(result.artifact);
   return result.artifact;
 }
 
 export async function prepareBuildBranches(workItem: WorkItem): Promise<{ branchPrefix: string }> {
-  await ensureNotStopped(workItem.id);
-  return { branchPrefix: automationBranchPrefix(workItem) };
+  const config = loadReleaseConfig();
+  const scopedWorkItem = scopeWorkItemToProject(workItem, config);
+  await ensureNotStopped(scopedWorkItem.id);
+  return { branchPrefix: automationBranchPrefix(scopedWorkItem) };
 }
 
 export async function integrateBranches(workItem: WorkItem, previousArtifacts: StageArtifact[]): Promise<StageArtifact> {
-  await ensureNotStopped(workItem.id);
+  const scopedWorkItem = scopeWorkItemToProject(workItem, loadReleaseConfig());
+  await ensureNotStopped(scopedWorkItem.id);
   const artifact = StageArtifactSchema.parse({
-    workItemId: workItem.id,
+    workItemId: scopedWorkItem.id,
+    projectId: scopedWorkItem.projectId,
+    repo: scopedWorkItem.repo,
     stage: "INTEGRATION",
     ownerAgent: "backend-systems-engineering",
     status: "passed",
@@ -93,12 +100,15 @@ export async function integrateBranches(workItem: WorkItem, previousArtifacts: S
 }
 
 export async function runVerification(workItem: WorkItem, previousArtifacts: StageArtifact[]): Promise<StageArtifact> {
-  await ensureNotStopped(workItem.id);
   const config = loadReleaseConfig();
+  const scopedWorkItem = scopeWorkItemToProject(workItem, config);
+  await ensureNotStopped(scopedWorkItem.id);
   const checks = await runConfiguredChecks(config, ["install", "lint", "typecheck", "test", "build", "security"]);
   const failedChecks = checks.filter((check) => !check.ok);
   const artifact = StageArtifactSchema.parse({
-    workItemId: workItem.id,
+    workItemId: scopedWorkItem.id,
+    projectId: scopedWorkItem.projectId,
+    repo: scopedWorkItem.repo,
     stage: "VERIFY",
     ownerAgent: "quality-security-privacy-release",
     status: failedChecks.length ? "failed" : "passed",
@@ -124,9 +134,12 @@ export async function runVerification(workItem: WorkItem, previousArtifacts: Sta
 }
 
 export async function planVerification(workItem: WorkItem, previousArtifacts: StageArtifact[]): Promise<StageArtifact> {
-  await ensureNotStopped(workItem.id);
+  const scopedWorkItem = scopeWorkItemToProject(workItem, loadReleaseConfig());
+  await ensureNotStopped(scopedWorkItem.id);
   return StageArtifactSchema.parse({
-    workItemId: workItem.id,
+    workItemId: scopedWorkItem.id,
+    projectId: scopedWorkItem.projectId,
+    repo: scopedWorkItem.repo,
     stage: "VERIFY",
     ownerAgent: "quality-security-privacy-release",
     status: "pending",
@@ -143,15 +156,18 @@ export async function planVerification(workItem: WorkItem, previousArtifacts: St
 }
 
 export async function performAutonomousRelease(workItem: WorkItem, previousArtifacts: StageArtifact[]): Promise<StageArtifact> {
-  await ensureNotStopped(workItem.id);
   const config = loadReleaseConfig();
-  const { signal, syncReasons } = await collectReleaseSignal(workItem, config, previousArtifacts);
+  const scopedWorkItem = scopeWorkItemToProject(workItem, config);
+  await ensureNotStopped(scopedWorkItem.id);
+  const { signal, syncReasons } = await collectReleaseSignal(scopedWorkItem, config, previousArtifacts);
   const decision = evaluateReleasePolicy(config, signal);
   const releaseCommand = decision.allowed ? await runReleaseCommand(config) : null;
   const releaseAllowed = decision.allowed && (!releaseCommand || releaseCommand.ok);
 
   const artifact = StageArtifactSchema.parse({
-    workItemId: workItem.id,
+    workItemId: scopedWorkItem.id,
+    projectId: scopedWorkItem.projectId,
+    repo: scopedWorkItem.repo,
     stage: "RELEASE",
     ownerAgent: "quality-security-privacy-release",
     status: releaseAllowed ? "passed" : "blocked",
@@ -317,6 +333,13 @@ function createDefaultReleaseConfig(): TargetRepoConfig {
       defaultBranch: "main",
       localPath: process.cwd()
     },
+    project: {
+      isolation: {
+        requireExplicitRepoConnection: true,
+        allowCrossProjectMemory: false,
+        allowGlobalMemory: false
+      }
+    },
     commands: {
       install: "npm ci",
       lint: "npm run lint --if-present",
@@ -332,6 +355,25 @@ function createDefaultReleaseConfig(): TargetRepoConfig {
       maxFiles: 8,
       maxBytesPerFile: 12_000,
       files: []
+    },
+    integrations: {
+      electron: {
+        enabled: false,
+        preferredAutomation: "playwright_test",
+        artifactsDir: ".agent-team/artifacts/electron",
+        requireIsolatedProfile: true,
+        allowRemoteDebugging: false,
+        notes: []
+      },
+      mcpServers: [],
+      capabilityPacks: []
+    },
+    models: {
+      primaryCodingModel: process.env.AGENT_PRIMARY_MODEL || "gpt-5.5",
+      researchModel: process.env.AGENT_RESEARCH_MODEL || "gpt-5.5",
+      reviewModel: process.env.AGENT_REVIEW_MODEL || "gpt-5.5",
+      fallbackModel: process.env.AGENT_FALLBACK_MODEL || "gpt-5.4",
+      useBestAvailable: true
     },
     release: {
       mode: "autonomous",

@@ -23,6 +23,7 @@ export const AGENT_DEFINITIONS: AgentDefinition[] = [
     instructions: [
       "You are the Product & Delivery Orchestrator for an autonomous software development team.",
       "Convert raw requests into bounded work items with testable acceptance criteria.",
+      "Confirm the connected project/repository scope before routing work and avoid mixing context across repos.",
       "Decide routing, scope, risk level, and final closure documentation.",
       "Do not invent technical architecture or approve release readiness."
     ].join("\n")
@@ -38,6 +39,7 @@ export const AGENT_DEFINITIONS: AgentDefinition[] = [
     instructions: [
       "You are the R&D, Architecture & Innovation Agent.",
       "Research the best technical direction before production implementation begins.",
+      "Proactively use active research, documentation, browser, GitHub, or diagnostics capabilities only when they improve the decision.",
       "Document tradeoffs, rejected alternatives, API/data contracts, security/privacy risks, and performance risks.",
       "Keep recommendations implementable by frontend and backend agents."
     ].join("\n")
@@ -53,6 +55,7 @@ export const AGENT_DEFINITIONS: AgentDefinition[] = [
     instructions: [
       "You are the Frontend & UX Engineering Agent.",
       "Own user-facing implementation, accessibility, responsive behavior, client validation, and frontend tests.",
+      "Use browser and frontend capability packs when UI behavior, accessibility, rendering, or performance needs live verification.",
       "Build only after the build contract is stable. Escalate contract deviations."
     ].join("\n")
   },
@@ -67,6 +70,7 @@ export const AGENT_DEFINITIONS: AgentDefinition[] = [
     instructions: [
       "You are the Backend & Systems Engineering Agent.",
       "Own server-side behavior, data, APIs, integrations, jobs, observability hooks, and backend tests.",
+      "Use database, API, and documentation capabilities only for the connected project/repository and only when the stage needs them.",
       "Keep implementation aligned with the locked build contract and release policy."
     ].join("\n")
   },
@@ -81,6 +85,7 @@ export const AGENT_DEFINITIONS: AgentDefinition[] = [
     instructions: [
       "You are the Quality, Security, Privacy & Release Agent.",
       "Independently prove whether work is correct, safe, performant, private, and ready to release.",
+      "Proactively load verification, GitHub, security, browser, and diagnostics capabilities when release readiness cannot be proven from existing artifacts.",
       "Block release when acceptance criteria, security, privacy, rollback, local checks, GitHub Actions, or local/remote sync cannot be proven."
     ].join("\n")
   }
@@ -113,4 +118,3 @@ export function roleForStage(stage: WorkItemState): AgentRole {
       return "product-delivery-orchestrator";
   }
 }
-

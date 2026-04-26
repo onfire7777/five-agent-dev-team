@@ -2,6 +2,12 @@
 
 v1 manages one target repo. Add an `agent-team.config.yaml` in this controller repo, then add the workflow template in `templates/target-repo/.github/workflows/agent-release.yml` to the target repository.
 
+## Project Isolation
+
+Set `project.id` and `repo` for every repository you connect. The autonomous team treats that repository as a separate project: work items, permanent memory, context packs, and lazy tool activation are scoped to that project/repo. Do not reuse one config across unrelated repositories unless you also change the project id and memory namespace.
+
+The default isolation policy requires an explicit repo connection and does not allow cross-project memory.
+
 ## Required Commands
 
 The target repo config must define:
@@ -33,6 +39,23 @@ Good files are small and concrete:
 - `GOTCHAS.md`: recurring failures, migration traps, release risks
 
 The controller loads these into agent prompts as repo-scoped permanent memory. Keep this directory curated; do not dump full docs or generated logs into it. You can also list explicit context files in `agent-team.config.yaml` under `context.files`.
+
+## Optional Lazy Capabilities
+
+Use `integrations.mcpServers` and `integrations.capabilityPacks` in `agent-team.config.yaml` to give agents extra tools and knowledge only when useful. Configure browser, GitHub, security, database, documentation, and Electron diagnostics as separate on-demand bundles instead of one always-on tool list.
+
+For GitHub, prefer the official GitHub MCP server as a lazy project capability plus the existing GitHub CLI/API fallback. Use read-only scopes by default and enable write-capable GitHub tools only for delivery/release stages that need them.
+
+Recommended defaults:
+
+- keep write-capable bundles disabled or tightly activated
+- use tool allowlists where the MCP server exposes many tools
+- keep filesystem roots inside the target repo
+- use isolated browser/Electron profiles
+- keep secrets in environment variables, never in committed config
+- convert successful MCP investigation into checked-in tests or durable context
+
+See `docs/lazy-capability-model.md` for the capability catalog.
 
 ## GitHub Permissions
 

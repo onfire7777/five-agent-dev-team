@@ -8,5 +8,6 @@ Keep it short and operational:
 - branch naming and PR expectations
 - architecture boundaries
 - security, privacy, and release gotchas
+- optional MCP/skill capability rules that agents should load only when relevant
 
 Do not store secrets, generated logs, or long reference dumps here.

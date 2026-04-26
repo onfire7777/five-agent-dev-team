@@ -6,6 +6,9 @@ import {
   createSampleStatus,
   createSampleWorkItems,
   dependenciesSatisfied,
+  loadTargetRepoConfig,
+  projectIdForConfig,
+  repoKeyForConfig,
   StageArtifactSchema,
   MemoryRecordSchema,
   memoryFromArtifact,
@@ -23,7 +26,7 @@ export interface ControllerStore {
   init(): Promise<void>;
   getStatus(): Promise<ControllerStatus>;
   listWorkItems(): Promise<WorkItem[]>;
-  createWorkItem(input: Pick<WorkItem, "title" | "priority" | "requestType" | "dependencies" | "acceptanceCriteria" | "riskLevel" | "frontendNeeded" | "backendNeeded" | "rndNeeded">): Promise<WorkItem>;
+  createWorkItem(input: Pick<WorkItem, "title" | "priority" | "requestType" | "dependencies" | "acceptanceCriteria" | "riskLevel" | "frontendNeeded" | "backendNeeded" | "rndNeeded"> & Partial<Pick<WorkItem, "projectId" | "repo">>): Promise<WorkItem>;
   updateWorkItemState(id: string, state: WorkItemState): Promise<void>;
   addArtifact(artifact: StageArtifact): Promise<void>;
   addEvent(event: Omit<AgentEvent, "sequence" | "createdAt"> & Partial<Pick<AgentEvent, "sequence" | "createdAt">>): Promise<AgentEvent>;
@@ -69,14 +72,17 @@ export class MemoryStore implements ControllerStore {
     return this.workItems;
   }
 
-  async createWorkItem(input: Pick<WorkItem, "title" | "priority" | "requestType" | "dependencies" | "acceptanceCriteria" | "riskLevel" | "frontendNeeded" | "backendNeeded" | "rndNeeded">): Promise<WorkItem> {
+  async createWorkItem(input: Pick<WorkItem, "title" | "priority" | "requestType" | "dependencies" | "acceptanceCriteria" | "riskLevel" | "frontendNeeded" | "backendNeeded" | "rndNeeded"> & Partial<Pick<WorkItem, "projectId" | "repo">>): Promise<WorkItem> {
     const createdAt = new Date().toISOString();
+    const project = resolveConfiguredProject();
     const workItem = WorkItemSchema.parse({
       id: `WI-${Math.floor(1000 + Math.random() * 9000)}`,
       state: "NEW",
       createdAt,
       updatedAt: createdAt,
-      ...input
+      ...input,
+      projectId: input.projectId || project.projectId,
+      repo: input.repo || project.repo
     });
     this.workItems.unshift(workItem);
     return workItem;
@@ -146,6 +152,19 @@ export class MemoryStore implements ControllerStore {
   async setEmergencyStop(active: boolean, reason = ""): Promise<void> {
     this.emergencyStop = active;
     this.emergencyReason = active ? reason : "";
+  }
+}
+
+function resolveConfiguredProject(): { projectId?: string; repo?: string } {
+  const configPath = process.env.AGENT_TEAM_CONFIG || "agent-team.config.yaml";
+  try {
+    const config = loadTargetRepoConfig(configPath);
+    return {
+      projectId: projectIdForConfig(config),
+      repo: repoKeyForConfig(config)
+    };
+  } catch {
+    return {};
   }
 }
 
@@ -251,7 +270,7 @@ export class PostgresStore extends MemoryStore {
     };
   }
 
-  override async createWorkItem(input: Pick<WorkItem, "title" | "priority" | "requestType" | "dependencies" | "acceptanceCriteria" | "riskLevel" | "frontendNeeded" | "backendNeeded" | "rndNeeded">): Promise<WorkItem> {
+  override async createWorkItem(input: Pick<WorkItem, "title" | "priority" | "requestType" | "dependencies" | "acceptanceCriteria" | "riskLevel" | "frontendNeeded" | "backendNeeded" | "rndNeeded"> & Partial<Pick<WorkItem, "projectId" | "repo">>): Promise<WorkItem> {
     const workItem = await super.createWorkItem(input);
     await this.pool.query(
       "insert into work_items (id, payload, state) values ($1, $2, $3)",

@@ -38,6 +38,8 @@ describe("permanent smart memory", () => {
     const repoMemory: MemoryRecord = {
       id: "repo-architecture",
       scope: "repo",
+      projectId: workItem.projectId,
+      repo: workItem.repo,
       kind: "architecture",
       title: "Repo architecture",
       content: "Use Temporal for durable orchestration.",
@@ -51,5 +53,26 @@ describe("permanent smart memory", () => {
     };
 
     expect(selectRelevantMemories([repoMemory], workItem, 1)).toEqual([repoMemory]);
+  });
+
+  it("excludes repo-scoped memory that has no connected project or repo scope", () => {
+    const workItem = createSampleWorkItems()[0];
+    const now = new Date().toISOString();
+    const repoMemory: MemoryRecord = {
+      id: "unscoped-repo-architecture",
+      scope: "repo",
+      kind: "architecture",
+      title: "Repo architecture",
+      content: "This must not leak into connected projects.",
+      tags: [],
+      confidence: "high",
+      importance: 5,
+      permanence: "permanent",
+      source: "test",
+      createdAt: now,
+      updatedAt: now
+    };
+
+    expect(selectRelevantMemories([repoMemory], workItem, 1)).toEqual([]);
   });
 });

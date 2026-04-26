@@ -76,6 +76,12 @@ Memory scopes:
 
 The context builder retrieves relevant non-expired memories and injects them into every agent prompt alongside teammate activity and current artifacts. R&D, contract, and release decisions default to permanent memory; transient build observations stay durable or session-scoped.
 
+Memory is project-isolated by default. Every connected repository gets a project id and repo key, and repo-scoped memory is selected only when it matches that project/repo. Global memory is disabled by default because autonomous teams should not silently transfer one repository's assumptions into another repository.
+
+## Model Policy
+
+Live OpenAI agent runs use the configured model policy instead of an implicit SDK default. The recommended quality-first policy is `gpt-5.5` for coding, research, and release review, with `gpt-5.4` reserved as an explicit fallback. Operators can override with `AGENT_MODEL`, but normal project configs should keep per-role model settings visible.
+
 ## Lean AutoMaker-Inspired Features
 
 The project deliberately borrows only the useful operating mechanisms from AutoMaker-style systems, not the full desktop surface area.
@@ -84,3 +90,16 @@ The project deliberately borrows only the useful operating mechanisms from AutoM
 - **Dependency-aware scheduling**: work items may declare `dependencies`. The scheduler skips blocked work until dependencies reach `CLOSED`, which preserves safe parallelism without forcing a Kanban board or graph view into the operator console.
 - **Durable event spine**: worker and controller lifecycle events are persisted before they are streamed to the dashboard. This keeps operator feedback fast while avoiding raw token/log streaming.
 - **Bloat rejected for v1**: Electron packaging, theme marketplaces, integrated terminals, large multi-view sidebars, project galleries, and generic file browsers stay out of scope unless they directly improve autonomous release reliability.
+
+## Lazy Capability Loading
+
+The agents can use MCP servers, skills, plugins, and specialized knowledge packs, but the controller treats them as lazy capabilities. Each capability declares activation rules by workflow stage, agent role, and keywords. A run for a frontend accessibility bug can attach browser tools; a release investigation can attach GitHub and security context; a normal backend fix does not inherit those tool schemas.
+
+This keeps autonomy proactive without sacrificing performance:
+
+- tool catalogs stay small per run
+- MCP processes are short-lived and closed after use
+- write-capable capabilities are separate from read-only capabilities
+- release gates remain controller-owned
+
+See `docs/lazy-capability-model.md` for the recommended catalog and operating rules.

@@ -2,6 +2,13 @@ import { describe, expect, it } from "vitest";
 import { evaluateReleasePolicy, type TargetRepoConfig, type VerificationSignal } from "../packages/shared/src";
 
 const config: TargetRepoConfig = {
+  project: {
+    isolation: {
+      requireExplicitRepoConnection: true,
+      allowCrossProjectMemory: false,
+      allowGlobalMemory: false
+    }
+  },
   repo: {
     owner: "acme",
     name: "app",
@@ -23,6 +30,25 @@ const config: TargetRepoConfig = {
     maxFiles: 8,
     maxBytesPerFile: 12_000,
     files: []
+  },
+  integrations: {
+    electron: {
+      enabled: false,
+      preferredAutomation: "playwright_test",
+      artifactsDir: ".agent-team/artifacts/electron",
+      requireIsolatedProfile: true,
+      allowRemoteDebugging: false,
+      notes: []
+    },
+    mcpServers: [],
+    capabilityPacks: []
+  },
+  models: {
+    primaryCodingModel: "gpt-5.5",
+    researchModel: "gpt-5.5",
+    reviewModel: "gpt-5.5",
+    fallbackModel: "gpt-5.4",
+    useBestAvailable: true
   },
   release: {
     mode: "autonomous",

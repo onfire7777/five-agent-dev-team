@@ -3,6 +3,16 @@ repo:
   name: your-repo
   defaultBranch: main
   localPath: C:\path\to\your\repo
+project:
+  # Each connected repository is its own isolated project. Memory and tool state
+  # should not cross this boundary unless you explicitly loosen policy.
+  id: your-org-your-repo
+  name: Your Repo
+  isolation:
+    requireExplicitRepoConnection: true
+    allowCrossProjectMemory: false
+    allowGlobalMemory: false
+    memoryNamespace: your-org-your-repo
 commands:
   install: npm ci
   lint: npm run lint
@@ -24,6 +34,110 @@ context:
     #   description: Project coding rules and command conventions
     #   required: false
     #   maxBytes: 12000
+integrations:
+  electron:
+    # Keep off unless the target repo is an Electron app.
+    enabled: false
+    preferredAutomation: playwright_test
+    # appPath: apps/desktop
+    # launchCommand: npm run electron:dev
+    # devServerUrl: http://localhost:5173
+    # debugPort: 9222
+    # testCommand: npm run test:electron
+    artifactsDir: .agent-team/artifacts/electron
+    requireIsolatedProfile: true
+    allowRemoteDebugging: false
+    notes:
+      - Use Playwright _electron tests for repeatable CI coverage; use Electron MCP/CDP only for local investigation.
+  mcpServers:
+    # Lazy capability model: enabled servers are visible only when activation rules match
+    # the current work item, stage, agent role, or keywords.
+    - name: browser-e2e
+      category: browser
+      description: Playwright MCP for UI flow verification and accessibility snapshots.
+      enabled: false
+      transport: stdio
+      command: npx
+      args: ["-y", "@playwright/mcp@latest", "--isolated"]
+      activation:
+        mode: on_demand
+        stages: [VERIFY]
+        agents: [quality-security-privacy-release]
+        keywords: [ui, browser, accessibility, screenshot, e2e]
+      timeoutSeconds: 30
+      cacheToolsList: true
+      toolAllowlist: [browser_navigate, browser_snapshot, browser_click, browser_type, browser_take_screenshot]
+      notes:
+        - Convert useful exploratory flows into checked-in Playwright tests.
+    - name: chrome-diagnostics
+      category: debugging
+      description: Chrome DevTools MCP for console, network, screenshots, and performance traces.
+      enabled: false
+      transport: stdio
+      command: npx
+      args: ["-y", "chrome-devtools-mcp@latest", "--isolated=true", "--no-usage-statistics", "--slim"]
+      activation:
+        mode: on_demand
+        stages: [RND, VERIFY]
+        agents: [rnd-architecture-innovation, quality-security-privacy-release]
+        keywords: [performance, console, network, trace, devtools, renderer]
+      timeoutSeconds: 30
+      cacheToolsList: true
+      toolAllowlist: []
+      notes:
+        - Use slim mode by default; enable trace tools only for performance work.
+    - name: github-read
+      category: github
+      description: Official GitHub MCP server for issue, PR, Actions, and release context.
+      enabled: false
+      transport: stdio
+      command: docker
+      args: ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server"]
+      env:
+        GITHUB_PERSONAL_ACCESS_TOKEN: ${GITHUB_PERSONAL_ACCESS_TOKEN}
+      activation:
+        mode: on_demand
+        stages: [INTAKE, VERIFY, RELEASE]
+        agents: [product-delivery-orchestrator, quality-security-privacy-release]
+        keywords: [github, issue, pr, actions, release, ci]
+      timeoutSeconds: 45
+      cacheToolsList: true
+      toolAllowlist: []
+      notes:
+        - Prefer read-only token scopes unless the current work item explicitly needs GitHub writes.
+  capabilityPacks:
+    - name: frontend-performance
+      kind: skill
+      enabled: true
+      summary: Use React/frontend performance patterns when UI work mentions rendering, bundles, or interaction latency.
+      activation:
+        mode: on_demand
+        stages: [FRONTEND_BUILD, VERIFY]
+        agents: [frontend-ux-engineering, quality-security-privacy-release]
+        keywords: [react, frontend, performance, bundle, rerender, latency]
+      contextFiles: []
+      notes:
+        - Prefer framework-native performance fixes and verify with local checks.
+    - name: secure-release
+      kind: knowledge
+      enabled: true
+      summary: Apply secure release, secret scanning, dependency review, rollback, and local/remote sync gates.
+      activation:
+        mode: always
+        stages: []
+        agents: []
+        keywords: []
+      contextFiles: []
+      notes:
+        - This pack is intentionally always active because release safety is a hard invariant.
+models:
+  # The default policy is designed for best-quality autonomous coding. Override with
+  # AGENT_MODEL only if a specific local/runtime model is required.
+  primaryCodingModel: gpt-5.5
+  researchModel: gpt-5.5
+  reviewModel: gpt-5.5
+  fallbackModel: gpt-5.4
+  useBestAvailable: true
 release:
   mode: autonomous
   githubActionsRequired: true

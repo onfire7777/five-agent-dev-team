@@ -6,6 +6,8 @@ export function createSampleWorkItems(): WorkItem[] {
   return [
     {
       id: "WI-1289",
+      projectId: "sample-project",
+      repo: "sample/repo",
       title: "Add retry for API rate limit",
       requestType: "bug",
       priority: "high",
@@ -21,6 +23,8 @@ export function createSampleWorkItems(): WorkItem[] {
     },
     {
       id: "WI-1290",
+      projectId: "sample-project",
+      repo: "sample/repo",
       title: "Implement user preferences",
       requestType: "feature",
       priority: "medium",
@@ -36,6 +40,8 @@ export function createSampleWorkItems(): WorkItem[] {
     },
     {
       id: "WI-1291",
+      projectId: "sample-project",
+      repo: "sample/repo",
       title: "Payment flow e2e verification",
       requestType: "security",
       priority: "urgent",
@@ -56,6 +62,8 @@ export function createSampleArtifacts(): StageArtifact[] {
   return [
     {
       workItemId: "WI-1290",
+      projectId: "sample-project",
+      repo: "sample/repo",
       stage: "RND",
       ownerAgent: "rnd-architecture-innovation",
       status: "passed",
@@ -71,6 +79,8 @@ export function createSampleArtifacts(): StageArtifact[] {
     },
     {
       workItemId: "WI-1291",
+      projectId: "sample-project",
+      repo: "sample/repo",
       stage: "VERIFY",
       ownerAgent: "quality-security-privacy-release",
       status: "running",

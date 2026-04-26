@@ -6,13 +6,28 @@ import {
   type StageArtifact,
   type TargetRepoConfig,
   type TeammateActivity,
-  type WorkItem
+  type ToolIntegrationContext,
+  type WorkItem,
+  type WorkItemState,
+  type AgentRole,
+  type CapabilityActivation
 } from "./schemas";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-export function buildSharedContext(workItem: WorkItem, artifacts: StageArtifact[], memories: MemoryRecord[] = []): SharedContext {
+export interface SharedContextOptions {
+  targetRepoConfig?: TargetRepoConfig;
+  stage?: WorkItemState;
+  agent?: AgentRole;
+}
+
+export function buildSharedContext(
+  workItem: WorkItem,
+  artifacts: StageArtifact[],
+  memories: MemoryRecord[] = [],
+  options: SharedContextOptions = {}
+): SharedContext {
   const relevant = artifacts.filter((artifact) => artifact.workItemId === workItem.id);
   const teammateActivity: TeammateActivity[] = relevant.map((artifact) => ({
     agent: artifact.ownerAgent,
@@ -44,14 +59,26 @@ export function buildSharedContext(workItem: WorkItem, artifacts: StageArtifact[
 
   return SharedContextSchema.parse({
     workItemId: workItem.id,
-    activeGoal: workItem.title,
+    activeGoal: workItem.repo ? `${workItem.title} [${workItem.repo}]` : workItem.title,
     acceptanceCriteria: workItem.acceptanceCriteria,
     buildContract: relevant
       .filter((artifact) => artifact.stage === "CONTRACT")
       .flatMap((artifact) => artifact.decisions),
-    contextNotes: memories
-      .filter((memory) => memory.kind === "preference" || memory.source.startsWith("context-file:"))
-      .map((memory) => `${memory.title}: ${memory.content}`),
+    toolIntegrations: summarizeToolIntegrations(options.targetRepoConfig, {
+      workItem,
+      stage: options.stage,
+      agent: options.agent
+    }),
+    contextNotes: [
+      ...memories
+        .filter((memory) => memory.kind === "preference" || memory.source.startsWith("context-file:"))
+        .map((memory) => `${memory.title}: ${memory.content}`),
+      ...capabilityPackNotes(options.targetRepoConfig, {
+        workItem,
+        stage: options.stage,
+        agent: options.agent
+      })
+    ],
     teammateActivity,
     researchFindings: [...artifactResearch, ...memoryResearch],
     openQuestions: [],
@@ -75,17 +102,145 @@ export function formatSharedContext(context: SharedContext): string {
   const research = context.researchFindings
     .map((finding) => `${finding.topic} (${finding.confidence}): ${finding.summary}`)
     .join("\n");
+  const tools = context.toolIntegrations
+    .map((integration) => {
+      const risk = integration.risks.length ? ` Risks: ${integration.risks.join("; ")}` : "";
+      const notes = integration.notes.length ? ` Notes: ${integration.notes.join("; ")}` : "";
+      return `${integration.name} [${integration.enabled ? "enabled" : "disabled"}]: ${integration.summary}${risk}${notes}`;
+    })
+    .join("\n");
   return [
     `Active goal: ${context.activeGoal}`,
     `Acceptance criteria: ${context.acceptanceCriteria.join("; ") || "none"}`,
     `Build contract: ${context.buildContract.join("; ") || "not locked yet"}`,
     `Repo context:\n${context.contextNotes.join("\n") || "none"}`,
+    `Tool integrations:\n${tools || "none"}`,
     `Teammate activity:\n${teammates || "none"}`,
     `Research findings:\n${research || "none"}`,
     `Decisions: ${context.decisions.join("; ") || "none"}`,
     `Risks: ${context.risks.join("; ") || "none"}`,
     `Blockers: ${context.blockers.join("; ") || "none"}`
   ].join("\n\n");
+}
+
+export interface CapabilitySelectionInput {
+  workItem?: WorkItem;
+  stage?: WorkItemState;
+  agent?: AgentRole;
+}
+
+export function summarizeToolIntegrations(config?: TargetRepoConfig, input: CapabilitySelectionInput = {}): ToolIntegrationContext[] {
+  if (!config) return [];
+
+  const integrations: ToolIntegrationContext[] = [];
+  const electron = config.integrations.electron;
+  if (electron.enabled || electron.notes.length || electron.appPath || electron.launchCommand || electron.testCommand) {
+    integrations.push({
+      name: "Electron app automation",
+      kind: "electron",
+      enabled: electron.enabled,
+      summary: [
+        `preferred=${electron.preferredAutomation}`,
+        electron.appPath ? `appPath=${electron.appPath}` : "",
+        electron.launchCommand ? `launchCommand=${electron.launchCommand}` : "",
+        electron.devServerUrl ? `devServerUrl=${electron.devServerUrl}` : "",
+        electron.debugPort ? `debugPort=${electron.debugPort}` : "",
+        electron.testCommand ? `testCommand=${electron.testCommand}` : "",
+        `artifactsDir=${electron.artifactsDir}`
+      ].filter(Boolean).join(", "),
+      risks: [
+        electron.allowRemoteDebugging
+          ? "Remote debugging can expose renderer data and should use local-only disposable profiles."
+          : "Remote debugging is blocked unless policy explicitly enables it.",
+        electron.requireIsolatedProfile ? "" : "Persistent Electron profiles can leak local session state into agent runs."
+      ].filter(Boolean),
+      notes: electron.notes
+    });
+  }
+
+  for (const server of config.integrations.mcpServers) {
+    const active = shouldActivateCapability(server.enabled, server.activation, input);
+    integrations.push({
+      name: `MCP:${server.name}`,
+      kind: "mcp",
+      enabled: active,
+      summary: server.transport === "stdio"
+        ? `stdio ${server.command} ${server.args.join(" ")}`.trim()
+        : `streamable_http ${server.url}`,
+      risks: [
+        server.toolAllowlist.length ? "" : "No tool allowlist configured; expose only trusted MCP servers.",
+        Object.keys(server.env).length ? `Environment variables configured: ${Object.keys(server.env).join(", ")}.` : ""
+      ].filter(Boolean),
+      notes: [
+        server.transport,
+        `timeout=${server.timeoutSeconds}s`,
+        server.toolAllowlist.length ? `allowedTools=${server.toolAllowlist.join(",")}` : "",
+        `activation=${describeActivation(server.activation)}`,
+        ...server.notes
+      ].filter(Boolean)
+    });
+  }
+
+  for (const pack of config.integrations.capabilityPacks) {
+    const active = shouldActivateCapability(pack.enabled, pack.activation, input);
+    integrations.push({
+      name: `Capability:${pack.name}`,
+      kind: pack.kind,
+      enabled: active,
+      summary: pack.summary,
+      risks: [],
+      notes: [
+        `activation=${describeActivation(pack.activation)}`,
+        pack.contextFiles.length ? `contextFiles=${pack.contextFiles.map((file) => file.path).join(",")}` : "",
+        ...pack.notes
+      ].filter(Boolean)
+    });
+  }
+
+  return integrations;
+}
+
+export function shouldActivateCapability(
+  enabled: boolean,
+  activation: CapabilityActivation,
+  input: CapabilitySelectionInput = {}
+): boolean {
+  if (!enabled) return false;
+  if (activation.mode === "manual") return false;
+  if (activation.mode === "always") return true;
+
+  if (input.stage && activation.stages.includes(input.stage)) return true;
+  if (input.agent && activation.agents.includes(input.agent)) return true;
+
+  const haystack = [
+    input.workItem?.title,
+    input.workItem?.requestType,
+    input.workItem?.priority,
+    input.workItem?.riskLevel,
+    ...(input.workItem?.acceptanceCriteria || [])
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .toLowerCase();
+
+  return activation.keywords.some((keyword) => haystack.includes(keyword.toLowerCase()));
+}
+
+function capabilityPackNotes(config?: TargetRepoConfig, input: CapabilitySelectionInput = {}): string[] {
+  if (!config) return [];
+  return config.integrations.capabilityPacks
+    .filter((pack) => shouldActivateCapability(pack.enabled, pack.activation, input))
+    .map((pack) => `${pack.name}: ${pack.summary}${pack.notes.length ? ` Notes: ${pack.notes.join("; ")}` : ""}`);
+}
+
+function describeActivation(activation: CapabilityActivation): string {
+  if (activation.mode !== "on_demand") return activation.mode;
+  const parts = [
+    activation.stages.length ? `stages:${activation.stages.join("|")}` : "",
+    activation.agents.length ? `agents:${activation.agents.join("|")}` : "",
+    activation.keywords.length ? `keywords:${activation.keywords.join("|")}` : ""
+  ].filter(Boolean);
+  return parts.length ? `on_demand(${parts.join(";")})` : "on_demand(no rules configured)";
 }
 
 export function memoryFromArtifact(artifact: StageArtifact): MemoryRecord[] {
@@ -141,6 +296,8 @@ export function memoryFromArtifact(artifact: StageArtifact): MemoryRecord[] {
       id: `${artifact.workItemId}-${artifact.stage}-decision-${index}`,
       scope: "work_item",
       workItemId: artifact.workItemId,
+      projectId: artifact.projectId,
+      repo: artifact.repo,
       agent: artifact.ownerAgent,
       kind: artifact.stage === "RND" || artifact.stage === "CONTRACT" ? "architecture" : "decision",
       title: `${artifact.stage} decision`,
@@ -160,6 +317,8 @@ export function memoryFromArtifact(artifact: StageArtifact): MemoryRecord[] {
       id: `${artifact.workItemId}-${artifact.stage}-risk-${index}`,
       scope: "work_item",
       workItemId: artifact.workItemId,
+      projectId: artifact.projectId,
+      repo: artifact.repo,
       agent: artifact.ownerAgent,
       kind: "risk",
       title: `${artifact.stage} risk`,
@@ -186,6 +345,8 @@ function createMemoryRecord(
     id: input.id,
     scope: "work_item",
     workItemId: artifact.workItemId,
+    projectId: artifact.projectId,
+    repo: artifact.repo,
     agent: artifact.ownerAgent,
     kind: input.kind,
     title: input.title,
@@ -201,11 +362,13 @@ function createMemoryRecord(
 }
 
 export function selectRelevantMemories(memories: MemoryRecord[], workItem: WorkItem, limit = 12): MemoryRecord[] {
+  const projectId = workItem.projectId;
+  const repo = workItem.repo;
   const now = Date.now();
   return memories
     .filter((memory) => !memory.expiresAt || Date.parse(memory.expiresAt) > now)
+    .filter((memory) => isMemoryInProjectScope(memory, { projectId, repo, workItemId: workItem.id }))
     .filter((memory) =>
-      memory.scope === "global" ||
       memory.scope === "repo" ||
       memory.workItemId === workItem.id ||
       memory.tags.some((tag) => workItem.title.toLowerCase().includes(tag.toLowerCase()))
@@ -219,6 +382,8 @@ export async function loadRepoContextMemories(config: TargetRepoConfig, workItem
   const contextFiles = await discoverContextFiles(config, repoRoot);
   const selected = contextFiles.slice(0, config.context.maxFiles);
   const memories: MemoryRecord[] = [];
+  const projectId = projectIdForConfig(config);
+  const repo = repoKeyForConfig(config);
 
   for (const file of selected) {
     const content = await readContextFile(file.path, file.maxBytes);
@@ -227,7 +392,8 @@ export async function loadRepoContextMemories(config: TargetRepoConfig, workItem
     memories.push({
       id: `repo-context-${hashId(relativePath)}`,
       scope: "repo",
-      repo: `${config.repo.owner}/${config.repo.name}`,
+      projectId,
+      repo,
       kind: "preference",
       title: file.description || `Context ${relativePath}`,
       content,
@@ -242,6 +408,30 @@ export async function loadRepoContextMemories(config: TargetRepoConfig, workItem
   }
 
   return memories;
+}
+
+export function repoKeyForConfig(config: TargetRepoConfig): string {
+  return `${config.repo.owner}/${config.repo.name}`;
+}
+
+export function projectIdForConfig(config: TargetRepoConfig): string {
+  return config.project.id || config.project.isolation.memoryNamespace || repoKeyForConfig(config);
+}
+
+export function scopeWorkItemToProject(workItem: WorkItem, config: TargetRepoConfig): WorkItem {
+  return {
+    ...workItem,
+    projectId: projectIdForConfig(config),
+    repo: repoKeyForConfig(config)
+  };
+}
+
+function isMemoryInProjectScope(memory: MemoryRecord, scope: { projectId?: string; repo?: string; workItemId?: string }): boolean {
+  if (memory.scope === "global") return false;
+  if (memory.workItemId) return memory.workItemId === scope.workItemId;
+  if (memory.projectId && scope.projectId) return memory.projectId === scope.projectId;
+  if (memory.repo && scope.repo) return memory.repo === scope.repo;
+  return memory.scope !== "repo";
 }
 
 type ContextFileCandidate = {

@@ -1,12 +1,20 @@
 import type { AgentDefinition } from "./definitions";
-import type { MemoryRecord, StageArtifact, WorkItem, WorkItemState } from "../../shared/src";
-import { buildSharedContext, DEFAULT_SCHEDULER_POLICY, formatSharedContext, shouldUseLiveApi, StageArtifactSchema } from "../../shared/src";
+import type { McpServerConfig, MemoryRecord, StageArtifact, TargetRepoConfig, WorkItem, WorkItemState } from "../../shared/src";
+import {
+  buildSharedContext,
+  DEFAULT_SCHEDULER_POLICY,
+  formatSharedContext,
+  shouldActivateCapability,
+  shouldUseLiveApi,
+  StageArtifactSchema
+} from "../../shared/src";
 
 export interface AgentRunContext {
   workItem: WorkItem;
   stage: WorkItemState;
   previousArtifacts: StageArtifact[];
   memories?: MemoryRecord[];
+  targetRepoConfig?: TargetRepoConfig;
   input?: string;
 }
 
@@ -34,32 +42,106 @@ async function runLiveOpenAIAgent(definition: AgentDefinition, context: AgentRun
   const sdk = await import("@openai/agents");
   const AgentCtor = (sdk as any).Agent;
   const run = (sdk as any).run;
-  const agent = new AgentCtor({
-    name: definition.displayName,
-    instructions: definition.instructions
-  });
+  const model = modelForAgent(definition, context.targetRepoConfig);
+  const mcpServers = createConfiguredMcpServers(sdk, definition, context);
+  const mcpSession = mcpServers.length
+    ? await sdk.MCPServers.open(mcpServers, {
+        connectTimeoutMs: Number(process.env.AGENT_MCP_CONNECT_TIMEOUT_MS || 10_000),
+        closeTimeoutMs: Number(process.env.AGENT_MCP_CLOSE_TIMEOUT_MS || 5_000),
+        connectInParallel: true,
+        dropFailed: true,
+        strict: /^(1|true|yes)$/i.test(process.env.AGENT_MCP_STRICT || "")
+      })
+    : null;
 
-  const result = await run(agent, buildAgentPrompt(definition, context));
-  const rawOutput = String(result?.finalOutput ?? result?.output ?? result ?? "");
-  const artifact = parseLiveArtifact(definition, context, rawOutput) || createTemplateArtifact(definition, context, rawOutput);
-  return { artifact, rawOutput, live: true };
+  try {
+    const agent = new AgentCtor({
+      name: definition.displayName,
+      instructions: definition.instructions,
+      model,
+      mcpServers: mcpSession?.active || []
+    });
+
+    const result = await run(agent, buildAgentPrompt(definition, context));
+    const rawOutput = String(result?.finalOutput ?? result?.output ?? result ?? "");
+    const artifact = parseLiveArtifact(definition, context, rawOutput) || createTemplateArtifact(definition, context, rawOutput);
+    return { artifact, rawOutput, live: true };
+  } finally {
+    await mcpSession?.close();
+  }
 }
 
 function buildAgentPrompt(definition: AgentDefinition, context: AgentRunContext): string {
-  const sharedContext = buildSharedContext(context.workItem, context.previousArtifacts, context.memories || []);
+  const sharedContext = buildSharedContext(context.workItem, context.previousArtifacts, context.memories || [], {
+    targetRepoConfig: context.targetRepoConfig,
+    stage: context.stage,
+    agent: definition.role
+  });
   return [
     `Work item: ${context.workItem.id} - ${context.workItem.title}`,
     `Stage: ${context.stage}`,
     `Agent: ${definition.displayName}`,
+    `Project scope: ${context.workItem.projectId || (context.targetRepoConfig ? "configured repo" : "unscoped")}`,
+    `Repository scope: ${context.workItem.repo || "not connected"}`,
+    `Model policy: ${modelForAgent(definition, context.targetRepoConfig)} primary, with configured fallback only if unavailable.`,
     "",
     "Shared team context:",
     formatSharedContext(sharedContext),
     "",
     `Acceptance criteria: ${context.workItem.acceptanceCriteria.join("; ") || "Not provided"}`,
     `Previous artifacts: ${context.previousArtifacts.map((artifact) => `${artifact.stage}: ${artifact.summary}`).join(" | ") || "None"}`,
+    "Capability rule: proactively use active MCP tools, skills, plugins, and knowledge packs when they materially improve this stage; do not call inactive or irrelevant tools.",
+    "When a tool uncovers a durable lesson, convert it into an artifact decision, risk, test, or follow-up rather than relying on transient tool output.",
     "Cooperate with the team: reference teammate activity, preserve prior decisions, update shared risks, and return only JSON for one stage artifact.",
     "The JSON must include title, summary, status, decisions, risks, filesChanged, testsRun, releaseReadiness, and nextStage."
   ].join("\n");
+}
+
+function modelForAgent(definition: AgentDefinition, config?: TargetRepoConfig): string {
+  if (process.env.AGENT_MODEL) return process.env.AGENT_MODEL;
+  if (!config) return "gpt-5.5";
+  if (definition.role === "rnd-architecture-innovation") return config.models.researchModel;
+  if (definition.role === "quality-security-privacy-release") return config.models.reviewModel;
+  return config.models.primaryCodingModel;
+}
+
+function createConfiguredMcpServers(sdk: any, definition: AgentDefinition, context: AgentRunContext): any[] {
+  if (!context.targetRepoConfig) return [];
+  return context.targetRepoConfig.integrations.mcpServers
+    .filter((server) => shouldActivateCapability(server.enabled, server.activation, {
+      workItem: context.workItem,
+      stage: context.stage,
+      agent: definition.role
+    }))
+    .map((server) => createMcpServer(sdk, server));
+}
+
+function createMcpServer(sdk: any, server: McpServerConfig): any {
+  const toolFilter = server.toolAllowlist.length
+    ? sdk.createMCPToolStaticFilter({ allowed: server.toolAllowlist })
+    : undefined;
+  const common = {
+    name: server.name,
+    cwd: server.cwd,
+    env: Object.keys(server.env).length ? { ...process.env, ...server.env } : undefined,
+    cacheToolsList: server.cacheToolsList,
+    clientSessionTimeoutSeconds: server.timeoutSeconds,
+    toolFilter,
+    errorFunction: () => `MCP server ${server.name} failed. Check sanitized controller and MCP logs before retrying.`
+  };
+
+  if (server.transport === "stdio") {
+    return new sdk.MCPServerStdio({
+      ...common,
+      command: server.command,
+      args: server.args
+    });
+  }
+
+  return new sdk.MCPServerStreamableHttp({
+    ...common,
+    url: server.url
+  });
 }
 
 function parseLiveArtifact(
@@ -73,6 +155,8 @@ function parseLiveArtifact(
   const candidate = {
     ...(parsed as Record<string, unknown>),
     workItemId: context.workItem.id,
+    projectId: context.workItem.projectId,
+    repo: context.workItem.repo,
     stage: context.stage,
     ownerAgent: definition.role,
     createdAt: String((parsed as any).createdAt || new Date().toISOString())
@@ -108,6 +192,8 @@ function createTemplateArtifact(
   const status = context.stage === "BLOCKED" ? "blocked" : "passed";
   const artifact = {
     workItemId: context.workItem.id,
+    projectId: context.workItem.projectId,
+    repo: context.workItem.repo,
     stage: context.stage,
     ownerAgent: definition.role,
     status,
