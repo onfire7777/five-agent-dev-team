@@ -1,3 +1,5 @@
+name: five-agent-dev-team
+
 services:
   postgres:
     image: postgres:16-alpine
