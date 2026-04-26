@@ -23,6 +23,10 @@ jobs:
       - run: npm ci
       - run: docker compose config --quiet
       - run: npm run check
+      - name: Build and verify Docker runtime tools
+        run: |
+          docker build --build-arg GITHUB_MCP_VERSION=1.0.3 -t five-agent-dev-team:ci .
+          docker run --rm five-agent-dev-team:ci sh -lc "gh --version && github-mcp-server --version"
       - name: High-severity dependency audit
         run: npm audit --audit-level=high
       - name: Moderate dependency audit report

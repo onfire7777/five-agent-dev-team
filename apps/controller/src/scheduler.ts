@@ -13,7 +13,10 @@ export function createSchedulerPolicy(): SchedulerPolicy {
     maxConcurrentRepoWrites: Number(process.env.MAX_CONCURRENT_REPO_WRITES || DEFAULT_SCHEDULER_POLICY.maxConcurrentRepoWrites),
     completeLoopBeforeNextWorkItem: process.env.COMPLETE_LOOP_BEFORE_NEXT_WORK_ITEM === undefined
       ? DEFAULT_SCHEDULER_POLICY.completeLoopBeforeNextWorkItem
-      : /^(1|true|yes)$/i.test(process.env.COMPLETE_LOOP_BEFORE_NEXT_WORK_ITEM)
+      : /^(1|true|yes)$/i.test(process.env.COMPLETE_LOOP_BEFORE_NEXT_WORK_ITEM),
+    allowParallelWorkItemsWhenDisjoint: process.env.ALLOW_PARALLEL_DISJOINT_PROJECTS === undefined
+      ? DEFAULT_SCHEDULER_POLICY.allowParallelWorkItemsWhenDisjoint
+      : /^(1|true|yes)$/i.test(process.env.ALLOW_PARALLEL_DISJOINT_PROJECTS)
   };
 }
 
@@ -32,13 +35,24 @@ export function startSmartScheduler(store: ControllerStore): NodeJS.Timeout | nu
     if (status.system.emergencyStop) return;
 
     const activeClaims = await store.listWorkflowClaims();
+    const durableActiveIds = new Set([...activeIds, ...activeClaims]);
     const activeWork = status.workItems.filter((item) => !["NEW", "CLOSED", "BLOCKED"].includes(item.state));
-    if (policy.completeLoopBeforeNextWorkItem && (activeIds.size > 0 || activeClaims.length > 0 || activeWork.length > 0)) {
+    const claimedWork = status.workItems.filter((item) => durableActiveIds.has(item.id));
+    const activeIdsForCapacity = new Set([
+      ...durableActiveIds,
+      ...activeWork.map((item) => item.id)
+    ]);
+    const activeScopeItems = [...activeWork, ...claimedWork];
+    if (
+      policy.completeLoopBeforeNextWorkItem &&
+      !policy.allowParallelWorkItemsWhenDisjoint &&
+      (activeIdsForCapacity.size > 0 || activeScopeItems.length > 0)
+    ) {
       return;
     }
 
     const queuedItems = status.workItems.filter((item) => item.state === "NEW");
-    const nextItems = selectParallelWorkItems(queuedItems, policy, activeIds, activeWork);
+    const nextItems = selectParallelWorkItems(queuedItems, policy, activeIdsForCapacity, activeScopeItems);
     await Promise.all(nextItems.map(async (next) => {
       const claimed = await store.claimWorkItemForWorkflow(next.id);
       if (!claimed) return;

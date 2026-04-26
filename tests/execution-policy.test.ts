@@ -35,21 +35,31 @@ describe("smart scheduler policy", () => {
 
   it("selects one work item by default so the current loop finishes before the next starts", () => {
     const selected = selectParallelWorkItems([
-      { ...base, id: "WI-1", priority: "high" },
-      { ...base, id: "WI-2", priority: "medium" }
+      { ...base, id: "WI-1", projectId: "repo-a", priority: "high" },
+      { ...base, id: "WI-2", projectId: "repo-a", priority: "medium" }
     ], { ...DEFAULT_SCHEDULER_POLICY, maxConcurrentWorkflows: 2 }, new Set());
 
     expect(selected.map((item) => item.id)).toEqual(["WI-1"]);
   });
 
-  it("selects multiple active work items when cross-work-item parallelism is explicitly enabled", () => {
+  it("selects one work item per disjoint project when project parallelism is enabled", () => {
+    const selected = selectParallelWorkItems([
+      { ...base, id: "WI-1", projectId: "repo-a", priority: "high" },
+      { ...base, id: "WI-2", projectId: "repo-a", priority: "medium" },
+      { ...base, id: "WI-3", projectId: "repo-b", priority: "low" }
+    ], { ...DEFAULT_SCHEDULER_POLICY, maxConcurrentWorkflows: 3 }, new Set());
+
+    expect(selected.map((item) => item.id)).toEqual(["WI-1", "WI-3"]);
+  });
+
+  it("falls back to one work item when disjoint-project parallelism is disabled", () => {
     const selected = selectParallelWorkItems([
       { ...base, id: "WI-1", priority: "high" },
       { ...base, id: "WI-2", priority: "medium" },
       { ...base, id: "WI-3", priority: "low" }
-    ], { ...DEFAULT_SCHEDULER_POLICY, completeLoopBeforeNextWorkItem: false, maxConcurrentWorkflows: 2 }, new Set());
+    ], { ...DEFAULT_SCHEDULER_POLICY, completeLoopBeforeNextWorkItem: false, allowParallelWorkItemsWhenDisjoint: false, maxConcurrentWorkflows: 2 }, new Set());
 
-    expect(selected.map((item) => item.id)).toEqual(["WI-1", "WI-2"]);
+    expect(selected.map((item) => item.id)).toEqual(["WI-1"]);
   });
 
   it("does not start dependency-blocked work in parallel", () => {

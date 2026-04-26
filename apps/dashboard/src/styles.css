@@ -727,6 +727,7 @@ button:focus-visible {
 }
 
 .team-list,
+.capability-list,
 .memory-list,
 .event-list,
 .check-grid {
@@ -797,6 +798,109 @@ button:focus-visible {
 .agent-status.blocked {
   background: #fff4dc;
   color: #985f00;
+}
+
+.team-summary {
+  display: grid;
+  gap: 3px;
+  border: 1px solid #e1e7ef;
+  border-radius: 8px;
+  background: #fbfcfd;
+  padding: 10px;
+}
+
+.team-summary strong {
+  color: #111827;
+  font-size: 13px;
+}
+
+.team-summary span {
+  color: #687386;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.capability-row {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: start;
+  border-bottom: 1px solid #e7ecf3;
+  padding-bottom: 9px;
+}
+
+.capability-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.capability-row strong,
+.capability-row small {
+  display: block;
+}
+
+.capability-row strong {
+  color: #111827;
+  font-size: 13px;
+}
+
+.capability-row small {
+  color: #687386;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.capability-details {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.capability-details i {
+  border-radius: 999px;
+  background: #eef2f7;
+  color: #596579;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+  padding: 3px 6px;
+}
+
+.capability-row em {
+  align-self: start;
+  border-radius: 999px;
+  background: #eef2f7;
+  color: #4f5b6e;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 850;
+  padding: 4px 7px;
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+
+.capability-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  margin-top: 5px;
+  background: #8792a3;
+}
+
+.capability-dot.ready,
+.capability-dot.available {
+  background: #129452;
+}
+
+.capability-dot.needs_auth,
+.capability-dot.missing,
+.capability-dot.error {
+  background: #d68a00;
+}
+
+.capability-dot.disabled {
+  background: #a7b0bf;
 }
 
 .release-state {

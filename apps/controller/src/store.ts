@@ -6,11 +6,14 @@ import {
   createSampleArtifacts,
   createSampleStatus,
   createSampleWorkItems,
+  DEFAULT_SCHEDULER_POLICY,
   dependenciesSatisfied,
   loadTargetRepoConfig,
   projectIdForConfig,
+  ProjectCapabilityStatusSchema,
   ProjectConnectionInputSchema,
   ProjectConnectionSchema,
+  ProjectTeamStatusSchema,
   repoKeyForConfig,
   StageArtifactSchema,
   MemoryRecordSchema,
@@ -29,7 +32,7 @@ import {
 type ControllerStatus = ReturnType<typeof createSampleStatus>;
 type WorkItemCreateInput = Pick<WorkItem, "title" | "priority" | "requestType" | "dependencies" | "acceptanceCriteria" | "riskLevel" | "frontendNeeded" | "backendNeeded" | "rndNeeded"> & Partial<Pick<WorkItem, "projectId" | "repo">>;
 type ProjectScope = { projectId?: string; repo?: string };
-type ProjectConnectionPersistInput = ProjectConnectionInput & Partial<Pick<ProjectConnection, "remoteUrl" | "ghAvailable" | "ghAuthed" | "githubConnected" | "remoteMatches" | "defaultBranchVerified" | "validationErrors" | "lastValidatedAt" | "status">>;
+type ProjectConnectionPersistInput = ProjectConnectionInput & Partial<Pick<ProjectConnection, "remoteUrl" | "ghAvailable" | "ghAuthed" | "githubCliVersion" | "githubMcpAvailable" | "githubMcpAuthenticated" | "githubMcpVersion" | "githubSdkConnected" | "githubSdkVersion" | "githubConnected" | "remoteMatches" | "defaultBranchVerified" | "capabilities" | "validationErrors" | "lastValidatedAt" | "status">>;
 
 export interface ControllerStore {
   init(): Promise<void>;
@@ -69,6 +72,8 @@ export class MemoryStore implements ControllerStore {
 
   async getStatus() {
     const status = createSampleStatus();
+    const projectTeams = buildProjectTeams(this.projectConnections, this.workItems);
+    const agentTotals = summarizeAgents(projectTeams);
     return {
       ...status,
       system: {
@@ -76,8 +81,12 @@ export class MemoryStore implements ControllerStore {
         operational: !this.emergencyStop,
         emergencyStop: this.emergencyStop,
         emergencyReason: this.emergencyReason,
+        agentsOnline: agentTotals.online,
+        agentsTotal: agentTotals.total,
+        githubSync: projectTeams.length ? "release-gated" : "connect-repo",
         queueDepth: countRunnableWorkItems(this.workItems)
       },
+      projectTeams,
       workItems: this.workItems,
       artifacts: this.artifacts
     };
@@ -179,9 +188,16 @@ export class MemoryStore implements ControllerStore {
       remoteUrl: diagnostics.remoteUrl,
       ghAvailable: diagnostics.ghAvailable ?? false,
       ghAuthed: diagnostics.ghAuthed ?? false,
+      githubCliVersion: diagnostics.githubCliVersion,
+      githubMcpAvailable: diagnostics.githubMcpAvailable ?? false,
+      githubMcpAuthenticated: diagnostics.githubMcpAuthenticated ?? false,
+      githubMcpVersion: diagnostics.githubMcpVersion,
+      githubSdkConnected: diagnostics.githubSdkConnected ?? false,
+      githubSdkVersion: diagnostics.githubSdkVersion,
       githubConnected: diagnostics.githubConnected ?? false,
       remoteMatches: diagnostics.remoteMatches ?? false,
       defaultBranchVerified: diagnostics.defaultBranchVerified ?? false,
+      capabilities: diagnostics.capabilities || [],
       validationErrors: diagnostics.validationErrors || [],
       lastValidatedAt: diagnostics.lastValidatedAt,
       createdAt: this.projectConnections.find((item) => item.id === projectId)?.createdAt || now,
@@ -190,8 +206,7 @@ export class MemoryStore implements ControllerStore {
 
     this.projectConnections = [
       ...this.projectConnections
-        .filter((item) => item.id !== connection.id)
-        .map((item) => parsed.active ? { ...item, active: false, status: "inactive" as const, updatedAt: now } : item),
+        .filter((item) => item.id !== connection.id),
       connection
     ];
     return connection;
@@ -204,11 +219,11 @@ export class MemoryStore implements ControllerStore {
     const activated = ProjectConnectionSchema.parse({
       ...current,
       active: true,
-      status: "connected",
+      status: current.validationErrors.length ? current.status : "connected",
       updatedAt: now
     });
     this.projectConnections = this.projectConnections.map((item) =>
-      item.id === id ? activated : { ...item, active: false, status: "inactive", updatedAt: now }
+      item.id === id ? activated : item
     );
     return activated;
   }
@@ -325,6 +340,8 @@ export class PostgresStore extends MemoryStore {
     const emergencyStop = await this.readEmergencyStopFlag();
     const pipeline = buildPipelineSummary(workItems);
     const recentArtifacts = artifacts.slice(0, 10);
+    const projectTeams = buildProjectTeams(await this.listProjectConnections(), workItems);
+    const agentTotals = summarizeAgents(projectTeams);
     return {
       ...status,
       system: {
@@ -332,12 +349,13 @@ export class PostgresStore extends MemoryStore {
         operational: !emergencyStop.active,
         emergencyStop: emergencyStop.active,
         emergencyReason: emergencyStop.reason,
-        agentsOnline: 5,
-        agentsTotal: 5,
-        githubSync: "release-gated",
+        agentsOnline: agentTotals.online,
+        agentsTotal: agentTotals.total,
+        githubSync: projectTeams.length ? "release-gated" : "connect-repo",
         systemLoad: Math.min(100, workItems.filter((item) => item.state !== "CLOSED" && item.state !== "BLOCKED").length * 12),
         queueDepth: countRunnableWorkItems(workItems)
       },
+      projectTeams,
       pipeline,
       workItems,
       artifacts,
@@ -497,13 +515,6 @@ export class PostgresStore extends MemoryStore {
 
   override async upsertProjectConnection(input: ProjectConnectionPersistInput): Promise<ProjectConnection> {
     const connection = await super.upsertProjectConnection(input);
-    if (connection.active) {
-      await this.pool.query(`
-        update project_connections
-        set active = false,
-            payload = jsonb_set(jsonb_set(payload, '{active}', 'false'::jsonb, true), '{status}', '"inactive"'::jsonb, true)
-      `);
-    }
     await this.pool.query(
       `insert into project_connections (id, payload, active)
        values ($1, $2, $3)
@@ -521,14 +532,9 @@ export class PostgresStore extends MemoryStore {
     const activated = ProjectConnectionSchema.parse({
       ...current,
       active: true,
-      status: "connected",
+      status: current.validationErrors.length ? current.status : "connected",
       updatedAt: now
     });
-    await this.pool.query(`
-      update project_connections
-      set active = false,
-          payload = jsonb_set(jsonb_set(payload, '{active}', 'false'::jsonb, true), '{status}', '"inactive"'::jsonb, true)
-    `);
     await this.pool.query(
       `insert into project_connections (id, payload, active)
        values ($1, $2, true)
@@ -607,6 +613,97 @@ function countRunnableWorkItems(workItems: WorkItem[]): number {
   return workItems.filter((item) => item.state === "NEW" && dependenciesSatisfied(item, workItems)).length;
 }
 
+function countRunnableProjectWorkItems(workItems: WorkItem[], project: ProjectConnection): number {
+  return workItems.filter((item) =>
+    item.state === "NEW" &&
+    dependenciesSatisfied(item, workItems) &&
+    workItemMatchesProject(item, project)
+  ).length;
+}
+
+function workItemMatchesProject(workItem: WorkItem, project: ProjectConnection): boolean {
+  return workItem.projectId === project.projectId || workItem.repo === project.repo;
+}
+
+function buildProjectTeams(projects: ProjectConnection[], workItems: WorkItem[]): ControllerStatus["projectTeams"] {
+  return projects
+    .filter((project) => project.active)
+    .map((project) => {
+      const activeWorkItems = workItems.filter((item) =>
+        !["NEW", "CLOSED", "BLOCKED"].includes(item.state) &&
+        workItemMatchesProject(item, project)
+      ).length;
+      const capabilityStatuses = project.capabilities.length ? project.capabilities : fallbackProjectCapabilities(project);
+      const hasAttention = project.status !== "connected" || capabilityStatuses.some((capability) =>
+        capability.enabled && ["needs_auth", "missing", "error"].includes(capability.status)
+      );
+      return ProjectTeamStatusSchema.parse({
+        projectId: project.projectId,
+        repo: project.repo,
+        name: project.name,
+        active: project.active,
+        status: hasAttention ? "attention" : "ready",
+        agentsOnline: project.active ? 5 : 0,
+        agentsTotal: project.active ? 5 : 0,
+        queueDepth: countRunnableProjectWorkItems(workItems, project),
+        activeWorkItems,
+        maxParallelAgentRuns: DEFAULT_SCHEDULER_POLICY.maxConcurrentAgentRuns,
+        maxConcurrentWorkflows: 1,
+        maxConcurrentRepoWrites: DEFAULT_SCHEDULER_POLICY.maxConcurrentRepoWrites,
+        memoryNamespace: project.memoryNamespace,
+        capabilities: capabilityStatuses
+      });
+    });
+}
+
+function summarizeAgents(projectTeams: ControllerStatus["projectTeams"]): { online: number; total: number } {
+  return {
+    online: projectTeams.reduce((total, team) => total + team.agentsOnline, 0),
+    total: projectTeams.reduce((total, team) => total + team.agentsTotal, 0)
+  };
+}
+
+function fallbackProjectCapabilities(project: ProjectConnection) {
+  return [
+    ProjectCapabilityStatusSchema.parse({
+      id: "github-cli",
+      label: "GitHub CLI",
+      kind: "github_cli",
+      enabled: true,
+      status: project.ghAvailable ? project.ghAuthed ? "ready" : "needs_auth" : "missing",
+      summary: project.ghAvailable ? "gh is installed for deterministic GitHub operations." : "gh is not available in this runtime.",
+      details: project.githubCliVersion ? [project.githubCliVersion] : []
+    }),
+    ProjectCapabilityStatusSchema.parse({
+      id: "github-mcp",
+      label: "GitHub MCP",
+      kind: "github_mcp",
+      enabled: project.githubMcpEnabled,
+      status: !project.githubMcpEnabled ? "disabled" : project.githubMcpAvailable ? project.githubMcpAuthenticated ? "ready" : "needs_auth" : "missing",
+      summary: project.githubMcpEnabled ? "Official GitHub MCP server is configured for on-demand toolsets." : "GitHub MCP is disabled for this project.",
+      details: project.githubMcpVersion ? [project.githubMcpVersion] : []
+    }),
+    ProjectCapabilityStatusSchema.parse({
+      id: "github-sdk",
+      label: "GitHub SDK",
+      kind: "github_sdk",
+      enabled: true,
+      status: project.githubSdkConnected ? "ready" : "needs_auth",
+      summary: project.githubSdkConnected ? "Octokit can read this repository." : "Octokit needs a token that can read this repository.",
+      details: project.githubSdkVersion ? [project.githubSdkVersion] : ["@octokit/rest"]
+    }),
+    ProjectCapabilityStatusSchema.parse({
+      id: "repo-memory",
+      label: "Repo Memory",
+      kind: "memory",
+      enabled: true,
+      status: "ready",
+      summary: `Permanent memory is isolated under ${project.memoryNamespace}.`,
+      details: [project.contextDir]
+    })
+  ];
+}
+
 function buildReleaseReadiness(artifacts: StageArtifact[]): ControllerStatus["releaseReadiness"] {
   const latestRelease = artifacts.find((artifact) => artifact.stage === "RELEASE");
   const testsRun = artifacts.flatMap((artifact) => artifact.testsRun);
@@ -662,6 +759,13 @@ function readConfiguredProjectConnection(): ProjectConnection | null {
       memoryNamespace: config.project.isolation.memoryNamespace || projectId,
       contextDir: config.context.defaultContextDir,
       status: "connected",
+      githubMcpAvailable: config.integrations.mcpServers.some((server) =>
+        server.category === "github" &&
+        server.transport === "stdio" &&
+        server.command === "github-mcp-server"
+      ),
+      githubMcpAuthenticated: Boolean(process.env.GITHUB_PERSONAL_ACCESS_TOKEN || process.env.GH_TOKEN || process.env.GITHUB_TOKEN),
+      githubSdkConnected: false,
       createdAt: now,
       updatedAt: now
     });

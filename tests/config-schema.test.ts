@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import YAML from "yaml";
 import {
   ProjectConnectionInputSchema,
   ProjectConnectionSchema,
@@ -160,5 +162,13 @@ describe("target repo config schema", () => {
       GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_PERSONAL_ACCESS_TOKEN}",
       GITHUB_HOST: "${GITHUB_HOST}"
     });
+  });
+
+  it("keeps the checked-in example config copy-paste valid", () => {
+    const raw = fs.readFileSync("agent-team.config.example.yaml", "utf8");
+    const config = TargetRepoConfigSchema.parse(YAML.parse(raw));
+
+    expect(config.context.files).toEqual([]);
+    expect(config.integrations.mcpServers.some((server) => server.name === "github-mcp" && server.enabled)).toBe(true);
   });
 });

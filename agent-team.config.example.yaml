@@ -33,12 +33,13 @@ context:
   defaultContextDir: .agent-team/context
   maxFiles: 8
   maxBytesPerFile: 12000
-  files:
-    # Optional required files, relative to repo.localPath.
-    # - path: CLAUDE.md
-    #   description: Project coding rules and command conventions
-    #   required: false
-    #   maxBytes: 12000
+  # Optional required files, relative to repo.localPath.
+  # files:
+  #   - path: CLAUDE.md
+  #     description: Project coding rules and command conventions
+  #     required: false
+  #     maxBytes: 12000
+  files: []
 integrations:
   electron:
     # Keep off unless the target repo is an Electron app.
@@ -60,7 +61,7 @@ integrations:
     - name: browser-e2e
       category: browser
       description: Playwright MCP for UI flow verification and accessibility snapshots.
-      enabled: false
+      enabled: true
       transport: stdio
       command: npx
       args: ["-y", "@playwright/mcp@latest", "--isolated"]
@@ -77,7 +78,7 @@ integrations:
     - name: chrome-diagnostics
       category: debugging
       description: Chrome DevTools MCP for console, network, screenshots, and performance traces.
-      enabled: false
+      enabled: true
       transport: stdio
       command: npx
       args: ["-y", "chrome-devtools-mcp@latest", "--isolated=true", "--no-usage-statistics", "--slim"]
@@ -94,7 +95,7 @@ integrations:
     - name: github-mcp
       category: github
       description: Official GitHub MCP server for deep issue, PR, Actions, code security, and release context.
-      enabled: false
+      enabled: true
       transport: stdio
       command: github-mcp-server
       args: ["stdio", "--dynamic-toolsets", "--read-only"]
@@ -137,6 +138,30 @@ integrations:
         - Use only when local repo context or checked-in docs are not enough.
         - Capture source links and convert durable findings into repo context or tests.
   capabilityPacks:
+    - name: repo-context
+      kind: knowledge
+      enabled: true
+      summary: Load curated repo context, latest loop memory, architecture decisions, and recurring gotchas before each stage.
+      activation:
+        mode: always
+        stages: []
+        agents: []
+        keywords: []
+      contextFiles: []
+      notes:
+        - Keep context project-scoped and avoid cross-repo assumptions.
+    - name: mcp-tool-routing
+      kind: knowledge
+      enabled: true
+      summary: Select MCP tools lazily by stage, agent role, risk, and keywords.
+      activation:
+        mode: always
+        stages: []
+        agents: []
+        keywords: []
+      contextFiles: []
+      notes:
+        - Prefer local repo evidence first, then GitHub MCP/CLI/SDK, browser diagnostics, web research, and security tools only when needed.
     - name: frontend-performance
       kind: skill
       enabled: true
@@ -149,6 +174,18 @@ integrations:
       contextFiles: []
       notes:
         - Prefer framework-native performance fixes and verify with local checks.
+    - name: backend-systems
+      kind: knowledge
+      enabled: true
+      summary: Use API contracts, data migration checks, observability hooks, jobs/workers, and backend tests for system work.
+      activation:
+        mode: on_demand
+        stages: [RND, BACKEND_BUILD, VERIFY, RELEASE]
+        agents: [rnd-architecture-innovation, backend-systems-engineering, quality-security-privacy-release]
+        keywords: [api, backend, database, migration, worker, job, cache, auth, observability, integration]
+      contextFiles: []
+      notes:
+        - Prefer target repo commands and checked-in tests over ad hoc verification.
     - name: secure-release
       kind: knowledge
       enabled: true

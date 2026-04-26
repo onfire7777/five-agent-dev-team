@@ -37,7 +37,7 @@ describe("controller store workflow claims", () => {
     await expect(store.listEvents(first.sequence, 10)).resolves.toEqual([second]);
   });
 
-  it("keeps project connections isolated and activates exactly one repo", async () => {
+  it("keeps project connections isolated and allows one team per repo", async () => {
     const store = new MemoryStore();
 
     const first = await store.upsertProjectConnection({
@@ -66,13 +66,13 @@ describe("controller store workflow claims", () => {
 
     let projects = await store.listProjectConnections();
     expect(projects[0].id).toBe(second.id);
-    expect(projects.filter((project) => project.active)).toHaveLength(1);
+    expect(projects.filter((project) => project.active)).toHaveLength(2);
 
     await store.activateProjectConnection(first.id);
     projects = await store.listProjectConnections();
     expect(projects[0].id).toBe(first.id);
     expect(projects[0].active).toBe(true);
-    expect(projects.find((project) => project.id === second.id)?.active).toBe(false);
+    expect(projects.find((project) => project.id === second.id)?.active).toBe(true);
     await expect(store.activateProjectConnection("missing")).rejects.toThrow(/not found/);
   });
 

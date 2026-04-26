@@ -3,13 +3,22 @@ import childProcess from "node:child_process";
 import cors from "cors";
 import express from "express";
 import fs from "node:fs/promises";
+import path from "node:path";
 import util from "node:util";
 import YAML from "yaml";
 import { z } from "zod";
+import { Octokit } from "@octokit/rest";
 import { createStore } from "./store";
 import { checkTemporalConnection, startAutonomousWorkflow } from "./temporal";
 import { startSmartScheduler } from "./scheduler";
-import { loadTargetRepoConfig, ProjectConnectionInputSchema, targetRepoConfigFromProjectConnection, type ProjectConnection, type ProjectConnectionInput } from "../../../packages/shared/src";
+import {
+  ProjectCapabilityStatusSchema,
+  ProjectConnectionInputSchema,
+  targetRepoConfigFromProjectConnection,
+  type ProjectCapabilityStatus,
+  type ProjectConnection,
+  type ProjectConnectionInput
+} from "../../../packages/shared/src";
 
 const CreateWorkItemRequest = z.object({
   title: z.string().min(1),
@@ -46,19 +55,6 @@ function boundedInteger(value: unknown, defaultValue: number, min: number, max: 
   const parsed = Number(raw);
   if (!Number.isFinite(parsed)) return defaultValue;
   return Math.min(Math.max(Math.floor(parsed), min), max);
-}
-
-function requireConnectedTargetRepo(): void {
-  if (/^(1|true|yes)$/i.test(process.env.AGENT_TEAM_ALLOW_DEFAULT_CONFIG || "")) return;
-  const configPath = process.env.AGENT_TEAM_CONFIG || "agent-team.config.yaml";
-  try {
-    loadTargetRepoConfig(configPath);
-  } catch (error) {
-    throw new HttpError([
-      `Target repo config could not be loaded from ${configPath}.`,
-      "Connect a target repository before starting autonomous work."
-    ].join(" "), 400);
-  }
 }
 
 app.use(cors({
@@ -143,6 +139,7 @@ app.get("/api/github/status", async (req, res, next) => {
       localPath: req.query.localPath,
       webResearchEnabled: req.query.webResearchEnabled === undefined ? true : /^(1|true|yes)$/i.test(String(req.query.webResearchEnabled)),
       githubMcpEnabled: req.query.githubMcpEnabled === undefined ? true : /^(1|true|yes)$/i.test(String(req.query.githubMcpEnabled)),
+      githubWriteEnabled: req.query.githubWriteEnabled === undefined ? false : /^(1|true|yes)$/i.test(String(req.query.githubWriteEnabled)),
       active: true
     });
     res.json(await inspectProjectConnection(input));
@@ -228,10 +225,14 @@ app.get("/api/events/stream", async (req, res) => {
 
 async function writeTargetRepoConfig(project: ProjectConnection): Promise<void> {
   const config = targetRepoConfigFromProjectConnection(project);
-  await fs.writeFile(process.env.AGENT_TEAM_CONFIG || "agent-team.config.yaml", YAML.stringify(config), "utf8");
+  const yaml = YAML.stringify(config);
+  await fs.writeFile(process.env.AGENT_TEAM_CONFIG || "agent-team.config.yaml", yaml, "utf8");
+  const projectConfigDir = process.env.AGENT_TEAM_PROJECT_CONFIG_DIR || ".agent-team/projects";
+  await fs.mkdir(projectConfigDir, { recursive: true });
+  await fs.writeFile(path.join(projectConfigDir, `${safeFileSegment(project.projectId)}.yaml`), yaml, "utf8");
 }
 
-type ProjectConnectionDiagnostics = Partial<Pick<ProjectConnection, "remoteUrl" | "ghAvailable" | "ghAuthed" | "githubConnected" | "remoteMatches" | "defaultBranchVerified" | "validationErrors" | "lastValidatedAt" | "status">>;
+type ProjectConnectionDiagnostics = Partial<Pick<ProjectConnection, "remoteUrl" | "ghAvailable" | "ghAuthed" | "githubCliVersion" | "githubMcpAvailable" | "githubMcpAuthenticated" | "githubMcpVersion" | "githubSdkConnected" | "githubSdkVersion" | "githubConnected" | "remoteMatches" | "defaultBranchVerified" | "capabilities" | "validationErrors" | "lastValidatedAt" | "status">>;
 
 async function inspectProjectConnection(input: ProjectConnectionInput): Promise<ProjectConnectionDiagnostics> {
   const validationErrors: string[] = [];
@@ -241,6 +242,9 @@ async function inspectProjectConnection(input: ProjectConnectionInput): Promise<
   const diagnostics: ProjectConnectionDiagnostics = {
     ghAvailable: false,
     ghAuthed: false,
+    githubMcpAvailable: false,
+    githubMcpAuthenticated: false,
+    githubSdkConnected: false,
     githubConnected: false,
     remoteMatches: false,
     defaultBranchVerified: false,
@@ -280,6 +284,7 @@ async function inspectProjectConnection(input: ProjectConnectionInput): Promise<
 
   const ghVersion = await runTool("gh", ["--version"], input.localPath);
   diagnostics.ghAvailable = ghVersion.ok;
+  diagnostics.githubCliVersion = ghVersion.ok ? firstLine(ghVersion.stdout) : undefined;
   if (!diagnostics.ghAvailable) {
     validationErrors.push("GitHub CLI is not available in this runtime.");
   } else {
@@ -309,22 +314,45 @@ async function inspectProjectConnection(input: ProjectConnectionInput): Promise<
     }
   }
 
+  const mcpVersion = await runTool("github-mcp-server", ["--version"], input.localPath);
+  diagnostics.githubMcpAvailable = mcpVersion.ok;
+  diagnostics.githubMcpVersion = mcpVersion.ok ? firstLine(mcpVersion.stdout) : undefined;
+  diagnostics.githubMcpAuthenticated = Boolean(githubToken());
+  if (input.githubMcpEnabled && !diagnostics.githubMcpAvailable) {
+    validationErrors.push("Official GitHub MCP server is not available in this runtime.");
+  }
+  if (input.githubMcpEnabled && diagnostics.githubMcpAvailable && !diagnostics.githubMcpAuthenticated) {
+    validationErrors.push("GitHub MCP needs GITHUB_PERSONAL_ACCESS_TOKEN, GH_TOKEN, or GITHUB_TOKEN.");
+  }
+
+  const sdkResult = await inspectGitHubSdk(input);
+  diagnostics.githubSdkConnected = sdkResult.connected;
+  diagnostics.githubSdkVersion = sdkResult.version;
+  if (!sdkResult.connected) validationErrors.push(sdkResult.message);
+
   if (!diagnostics.defaultBranchVerified) {
     const branch = await runTool("git", ["ls-remote", "--exit-code", "--heads", "origin", defaultBranch], input.localPath);
     diagnostics.defaultBranchVerified = branch.ok;
     if (!branch.ok) validationErrors.push(`Default branch ${defaultBranch} was not verified on origin.`);
   }
 
-  const status = !diagnostics.remoteMatches && !diagnostics.githubConnected
+  const status: ProjectConnection["status"] = !diagnostics.remoteMatches && !diagnostics.githubConnected
     ? "remote_mismatch"
-    : !diagnostics.ghAvailable || !diagnostics.ghAuthed
+    : !diagnostics.ghAvailable ||
+      !diagnostics.ghAuthed ||
+      !diagnostics.githubSdkConnected ||
+      (input.githubMcpEnabled && (!diagnostics.githubMcpAvailable || !diagnostics.githubMcpAuthenticated))
       ? "needs_github_auth"
       : "connected";
 
-  return {
+  const finalDiagnostics = {
     ...diagnostics,
     status,
     validationErrors
+  };
+  return {
+    ...finalDiagnostics,
+    capabilities: buildProjectCapabilities(input, finalDiagnostics)
   };
 }
 
@@ -358,10 +386,132 @@ function parseGitHubRemote(remoteUrl: string): { owner: string; repo: string } |
   return null;
 }
 
+async function inspectGitHubSdk(input: ProjectConnectionInput): Promise<{ connected: boolean; version: string; message: string }> {
+  const token = githubToken();
+  try {
+    const octokit = new Octokit({
+      ...(token ? { auth: token } : {}),
+      userAgent: "five-agent-dev-team/0.1.0"
+    });
+    const { data } = await octokit.rest.repos.get({
+      owner: input.repoOwner,
+      repo: input.repoName
+    });
+    const expectedRepo = `${input.repoOwner}/${input.repoName}`.toLowerCase();
+    const actualRepo = `${data.owner?.login || ""}/${data.name || ""}`.toLowerCase();
+    return {
+      connected: actualRepo === expectedRepo,
+      version: "@octokit/rest",
+      message: actualRepo === expectedRepo
+        ? "GitHub SDK/Octokit can read repository metadata."
+        : `GitHub SDK/Octokit returned ${actualRepo || "an unexpected repository"}.`
+    };
+  } catch (error) {
+    return {
+      connected: false,
+      version: "@octokit/rest",
+      message: token
+        ? `GitHub SDK/Octokit could not read ${input.repoOwner}/${input.repoName}: ${error instanceof Error ? error.message : String(error)}`
+        : `GitHub SDK/Octokit could not read ${input.repoOwner}/${input.repoName} without a token. Public repos can work unauthenticated; private repos need GH_TOKEN, GITHUB_TOKEN, or GITHUB_PERSONAL_ACCESS_TOKEN.`
+    };
+  }
+}
+
+function buildProjectCapabilities(input: ProjectConnectionInput, diagnostics: ProjectConnectionDiagnostics): ProjectCapabilityStatus[] {
+  const remoteReady = Boolean(diagnostics.remoteMatches || diagnostics.githubConnected);
+  return [
+    {
+      id: "github-cli",
+      label: "GitHub CLI",
+      kind: "github_cli",
+      enabled: true,
+      status: diagnostics.ghAvailable ? diagnostics.ghAuthed ? "ready" : "needs_auth" : "missing",
+      summary: diagnostics.ghAvailable
+        ? "gh is installed for deterministic branch, PR, Actions, release, and sync operations."
+        : "gh is missing from this runtime.",
+      details: [diagnostics.githubCliVersion || "", diagnostics.ghAuthed ? "authenticated or token-backed" : "authentication required"].filter(Boolean)
+    },
+    {
+      id: "github-mcp",
+      label: "GitHub MCP",
+      kind: "github_mcp",
+      enabled: input.githubMcpEnabled ?? true,
+      status: !input.githubMcpEnabled
+        ? "disabled"
+        : diagnostics.githubMcpAvailable
+          ? diagnostics.githubMcpAuthenticated ? "ready" : "needs_auth"
+          : "missing",
+      summary: "Official GitHub MCP server provides dynamic toolsets for repo, issue, PR, Actions, code security, and release context.",
+      details: [diagnostics.githubMcpVersion || "", "stdio", "dynamic toolsets", input.githubWriteEnabled ? "write-capable by policy" : "read-only by default"].filter(Boolean)
+    },
+    {
+      id: "github-sdk",
+      label: "GitHub SDK",
+      kind: "github_sdk",
+      enabled: true,
+      status: diagnostics.githubSdkConnected ? "ready" : "needs_auth",
+      summary: "Octokit powers controller-owned GitHub API coordination and verification.",
+      details: [diagnostics.githubSdkVersion || "@octokit/rest"]
+    },
+    {
+      id: "repo-scope",
+      label: "Repo Scope",
+      kind: "repo",
+      enabled: true,
+      status: remoteReady && diagnostics.defaultBranchVerified ? "ready" : "error",
+      summary: "Local git checkout, origin remote, and default branch are bound to this project.",
+      details: [input.localPath, `${input.repoOwner}/${input.repoName}`, `branch ${input.defaultBranch || "main"}`]
+    },
+    {
+      id: "repo-memory",
+      label: "Permanent Memory",
+      kind: "memory",
+      enabled: true,
+      status: "ready",
+      summary: "Memory, context files, artifacts, and latest-loop lessons are isolated per repository.",
+      details: [`namespace ${input.projectId || `${input.repoOwner}-${input.repoName}`.toLowerCase()}`]
+    },
+    {
+      id: "deep-research",
+      label: "Deep Research",
+      kind: "research",
+      enabled: input.webResearchEnabled ?? true,
+      status: input.webResearchEnabled ? "available" : "disabled",
+      summary: "Hosted web search and research MCPs load only for current docs, advisories, ecosystem changes, and hard debugging.",
+      details: [process.env.TAVILY_API_KEY ? "Tavily MCP token configured" : "OpenAI hosted web search available in live agent mode"]
+    },
+    {
+      id: "security-release",
+      label: "Security & Release",
+      kind: "security",
+      enabled: true,
+      status: "ready",
+      summary: "Local checks, secret scan, dependency audit, GitHub Actions, rollback, and sync gates remain controller-owned.",
+      details: ["cannot be bypassed by MCP tools"]
+    }
+  ].map((capability) => ProjectCapabilityStatusSchema.parse(capability));
+}
+
+function githubToken(): string {
+  return process.env.GITHUB_PERSONAL_ACCESS_TOKEN || process.env.GH_TOKEN || process.env.GITHUB_TOKEN || "";
+}
+
+function firstLine(value: string): string {
+  return value.split(/\r?\n/).map((line) => line.trim()).find(Boolean) || "";
+}
+
+function safeFileSegment(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "") || "project";
+}
+
 app.post("/api/work-items", async (req, res, next) => {
   try {
-    requireConnectedTargetRepo();
     const input = CreateWorkItemRequest.parse(req.body);
+    await requireConnectedProjectForWork(input);
     const workItem = await store.createWorkItem(input);
     const currentStatus = await store.getStatus();
     if (currentStatus.system.emergencyStop) {
@@ -398,6 +548,29 @@ app.post("/api/work-items", async (req, res, next) => {
     next(error);
   }
 });
+
+async function requireConnectedProjectForWork(input: z.infer<typeof CreateWorkItemRequest>): Promise<void> {
+  if (/^(1|true|yes)$/i.test(process.env.AGENT_TEAM_ALLOW_DEFAULT_CONFIG || "")) return;
+  const projects = await store.listProjectConnections();
+  if (!projects.length) {
+    throw new HttpError("Connect a target GitHub repository before starting autonomous work.", 400);
+  }
+  const project = input.projectId || input.repo
+    ? projects.find((candidate) =>
+      (input.projectId ? candidate.projectId === input.projectId : true) &&
+      (input.repo ? candidate.repo === input.repo : true)
+    )
+    : projects.find((candidate) => candidate.active);
+  if (!project) {
+    throw new HttpError(`Connected project was not found for ${input.projectId || input.repo || "the requested work item"}.`, 400);
+  }
+  if (!project.active) {
+    throw new HttpError(`Project ${project.repo} is not enabled for autonomous work.`, 400);
+  }
+  if (project.status !== "connected") {
+    throw new HttpError(`Project ${project.repo} is not fully connected: ${project.validationErrors.join("; ") || project.status}.`, 400);
+  }
+}
 
 app.post("/api/emergency-stop", async (req, res, next) => {
   try {

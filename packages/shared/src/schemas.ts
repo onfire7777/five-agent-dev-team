@@ -176,6 +176,30 @@ export const ProjectConnectionInputSchema = z.object({
 
 export type ProjectConnectionInput = z.input<typeof ProjectConnectionInputSchema>;
 
+export const ProjectCapabilityStatusSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  kind: z.enum([
+    "github_cli",
+    "github_mcp",
+    "github_sdk",
+    "repo",
+    "memory",
+    "mcp",
+    "research",
+    "security",
+    "scheduler",
+    "custom"
+  ]).default("custom"),
+  enabled: z.boolean().default(true),
+  status: z.enum(["ready", "available", "needs_auth", "missing", "disabled", "error"]).default("available"),
+  summary: z.string().min(1),
+  details: z.array(z.string().min(1)).default([]),
+  projectScoped: z.boolean().default(true)
+});
+
+export type ProjectCapabilityStatus = z.infer<typeof ProjectCapabilityStatusSchema>;
+
 export const ProjectConnectionSchema = ProjectConnectionInputSchema.extend({
   id: z.string().min(1),
   projectId: z.string().min(1),
@@ -187,9 +211,16 @@ export const ProjectConnectionSchema = ProjectConnectionInputSchema.extend({
   remoteUrl: z.string().optional(),
   ghAvailable: z.boolean().default(false),
   ghAuthed: z.boolean().default(false),
+  githubCliVersion: z.string().optional(),
+  githubMcpAvailable: z.boolean().default(false),
+  githubMcpAuthenticated: z.boolean().default(false),
+  githubMcpVersion: z.string().optional(),
+  githubSdkConnected: z.boolean().default(false),
+  githubSdkVersion: z.string().optional(),
   githubConnected: z.boolean().default(false),
   remoteMatches: z.boolean().default(false),
   defaultBranchVerified: z.boolean().default(false),
+  capabilities: z.array(ProjectCapabilityStatusSchema).default([]),
   validationErrors: z.array(z.string()).default([]),
   lastValidatedAt: z.string().datetime().optional(),
   createdAt: z.string().datetime(),
@@ -197,6 +228,25 @@ export const ProjectConnectionSchema = ProjectConnectionInputSchema.extend({
 });
 
 export type ProjectConnection = z.infer<typeof ProjectConnectionSchema>;
+
+export const ProjectTeamStatusSchema = z.object({
+  projectId: z.string().min(1),
+  repo: z.string().min(1),
+  name: z.string().min(1),
+  active: z.boolean(),
+  status: z.enum(["ready", "attention", "inactive"]),
+  agentsOnline: z.number().int().nonnegative(),
+  agentsTotal: z.number().int().nonnegative(),
+  queueDepth: z.number().int().nonnegative(),
+  activeWorkItems: z.number().int().nonnegative(),
+  maxParallelAgentRuns: z.number().int().positive(),
+  maxConcurrentWorkflows: z.number().int().positive(),
+  maxConcurrentRepoWrites: z.number().int().positive(),
+  memoryNamespace: z.string().min(1),
+  capabilities: z.array(ProjectCapabilityStatusSchema).default([])
+});
+
+export type ProjectTeamStatus = z.infer<typeof ProjectTeamStatusSchema>;
 
 export const RepoCommandSchema = z.object({
   install: z.string().min(1),

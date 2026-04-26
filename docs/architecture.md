@@ -36,7 +36,7 @@ Safe parallelism is enabled inside each loop:
 - Frontend and Backend build in parallel after the contract is locked.
 - Quality can prepare regression/security plans while implementation runs.
 
-By default, `completeLoopBeforeNextWorkItem: true` keeps cross-work-item execution serialized: the scheduler will not start the next `NEW` item while a workflow claim exists or any item is in an active stage. Once the loop reaches `CLOSED` or `BLOCKED` and the workflow claim is released, the next loop can start on the next scheduler tick. Operators can turn this off only for intentionally disjoint work. Repo mutations are intentionally constrained by `maxConcurrentRepoWrites: 1` in v1 so autonomous branches, PR updates, merges, and releases do not conflict.
+By default, `completeLoopBeforeNextWorkItem: true` is enforced per repository: the scheduler will not start the next `NEW` item for a repo while that repo has a workflow claim or an active stage. With `allowParallelWorkItemsWhenDisjoint: true`, other connected repositories may run their own five-agent team loops at the same time, still bounded by durable workflow claims and `maxConcurrentWorkflows`. Repo mutations are intentionally constrained by `maxConcurrentRepoWrites: 1` per team so autonomous branches, PR updates, merges, and releases do not conflict inside a project.
 
 ## GitHub Contract
 
@@ -75,7 +75,9 @@ Memory scopes:
 
 The context builder retrieves relevant non-expired memories and injects them into every agent prompt alongside teammate activity and current artifacts. R&D, contract, and release decisions default to permanent memory; transient build observations stay durable or session-scoped. A successful `CLOSED` artifact also upserts one repo-scoped `latest-loop` memory, giving the next work item a concise record of the latest completed codebase state.
 
-Memory is project-isolated by default. Every connected repository gets a project id and repo key, and repo-scoped memory is selected only when it matches that project/repo. Global memory is disabled by default because autonomous teams should not silently transfer one repository's assumptions into another repository.
+Memory is project-isolated by default. Every connected repository gets a project id, repo key, five-agent team envelope, and repo-scoped memory namespace. Memory is selected only when it matches that project/repo. Global memory is disabled by default because autonomous teams should not silently transfer one repository's assumptions into another repository.
+
+Project connections are persisted in Postgres and mirrored to `.agent-team/projects/<project-id>.yaml`. The worker resolves configs from that per-project file first, then Postgres, then the optional default `agent-team.config.yaml`. This avoids the singleton-config problem when multiple active teams are running.
 
 ## Model Policy
 

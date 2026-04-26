@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -25,7 +25,7 @@ declare const __DASHBOARD_API_BASE__: string | undefined;
 
 type Status = ReturnType<typeof createSampleStatus>;
 type RoutingKey = "frontendNeeded" | "backendNeeded" | "rndNeeded";
-type InsightView = "release" | "team" | "memory" | "events";
+type InsightView = "release" | "team" | "capabilities" | "memory" | "events";
 type RequestType = "feature" | "bug" | "performance" | "security" | "privacy" | "refactor" | "research";
 type Priority = "low" | "medium" | "high" | "urgent";
 type RiskLevel = "low" | "medium" | "high";
@@ -49,6 +49,7 @@ type ProjectDraft = {
   localPath: string;
   webResearchEnabled: boolean;
   githubMcpEnabled: boolean;
+  githubWriteEnabled: boolean;
 };
 
 type ApiState = {
@@ -85,6 +86,7 @@ function createOfflineStatus(): Status {
       emergencyReason: ""
     },
     pipeline: Object.fromEntries(Object.keys(status.pipeline).map((key) => [key, 0])) as Status["pipeline"],
+    projectTeams: [],
     workItems: [],
     artifacts: [],
     releaseReadiness: {
@@ -208,6 +210,7 @@ const flowGroups = [
 const insightOptions: Array<[InsightView, string]> = [
   ["release", "Release gate"],
   ["team", "Team lanes"],
+  ["capabilities", "Capabilities"],
   ["memory", "Memory"],
   ["events", "Events"]
 ];
@@ -228,6 +231,9 @@ export function App() {
   const [activeInsight, setActiveInsight] = useState<InsightView>("release");
   const [memories, setMemories] = useState<MemoryRecord[]>([]);
   const [projects, setProjects] = useState<ProjectConnection[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const selectedProjectIdRef = useRef("");
+  const hydratedProjectIdRef = useRef("");
   const [createError, setCreateError] = useState("");
   const [projectError, setProjectError] = useState("");
   const [workDraft, setWorkDraft] = useState<WorkDraft>({
@@ -247,8 +253,30 @@ export function App() {
     defaultBranch: "main",
     localPath: "",
     webResearchEnabled: true,
-    githubMcpEnabled: true
+    githubMcpEnabled: true,
+    githubWriteEnabled: false
   });
+
+  function selectProjectId(projectId: string) {
+    selectedProjectIdRef.current = projectId;
+    setSelectedProjectId(projectId);
+  }
+
+  function hydrateProjectDraft(project: ProjectConnection, force = false) {
+    if (!force && hydratedProjectIdRef.current === project.id) return;
+    hydratedProjectIdRef.current = project.id;
+    setProjectDraft((draft) => ({
+      ...draft,
+      name: project.name,
+      repoOwner: project.repoOwner,
+      repoName: project.repoName,
+      defaultBranch: project.defaultBranch,
+      localPath: project.localPath,
+      webResearchEnabled: project.webResearchEnabled,
+      githubMcpEnabled: project.githubMcpEnabled,
+      githubWriteEnabled: project.githubWriteEnabled
+    }));
+  }
 
   async function loadStatus(): Promise<boolean> {
     try {
@@ -293,17 +321,13 @@ export function App() {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const nextProjects = await response.json() as ProjectConnection[];
     setProjects(nextProjects);
-    const active = nextProjects.find((project) => project.active) || nextProjects[0];
+    const selectedId = selectedProjectIdRef.current;
+    const active = nextProjects.find((project) => project.id === selectedId) ||
+      nextProjects.find((project) => project.active) ||
+      nextProjects[0];
     if (active) {
-      setProjectDraft((draft) => ({
-        ...draft,
-        repoOwner: draft.repoOwner || active.repoOwner,
-        repoName: draft.repoName || active.repoName,
-        defaultBranch: draft.defaultBranch || active.defaultBranch,
-        localPath: draft.localPath || active.localPath,
-        webResearchEnabled: active.webResearchEnabled,
-        githubMcpEnabled: active.githubMcpEnabled
-      }));
+      selectProjectId(active.id);
+      hydrateProjectDraft(active);
     }
   }
 
@@ -320,8 +344,9 @@ export function App() {
   async function createWorkItem(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setCreateError("");
-    const activeProject = projects.find((project) => project.active);
-    if (!activeProject) {
+    const targetProject = projects.find((project) => project.id === selectedProjectIdRef.current) ||
+      projects.find((project) => project.active);
+    if (!targetProject) {
       setCreateError("Connect a GitHub repo before starting autonomous work.");
       return;
     }
@@ -339,8 +364,8 @@ export function App() {
         frontendNeeded: workDraft.frontendNeeded,
         backendNeeded: workDraft.backendNeeded,
         rndNeeded: workDraft.rndNeeded,
-        projectId: activeProject.projectId,
-        repo: activeProject.repo,
+        projectId: targetProject.projectId,
+        repo: targetProject.repo,
         acceptanceCriteria: workDraft.acceptanceCriteria
           .split(/\r?\n|;/)
           .map((item) => item.trim())
@@ -373,8 +398,10 @@ export function App() {
         localPath: projectDraft.localPath.trim(),
         webResearchEnabled: projectDraft.webResearchEnabled,
         githubMcpEnabled: projectDraft.githubMcpEnabled,
+        githubWriteEnabled: projectDraft.githubWriteEnabled,
         active: true
       }) as ProjectConnection;
+      selectProjectId(project.id);
       await loadProjects();
       await loadStatus();
       if (project.validationErrors.length) {
@@ -392,6 +419,8 @@ export function App() {
     setLoading(true);
     try {
       const project = await postControl(`/api/projects/${encodeURIComponent(projectId)}/activate`) as ProjectConnection;
+      selectProjectId(project.id);
+      hydrateProjectDraft(project, true);
       await loadProjects();
       await loadStatus();
       if (project.validationErrors.length) setProjectError(project.validationErrors[0]);
@@ -440,7 +469,14 @@ export function App() {
   const visibleEvents = status.logs.slice(0, 4);
   const pipeline = status.pipeline as Record<string, number>;
   const activeWorkItems = useMemo(() => status.workItems.filter((item) => item.state !== "CLOSED").slice(0, 5), [status.workItems]);
-  const activeProject = useMemo(() => projects.find((project) => project.active), [projects]);
+  const activeProject = useMemo(
+    () => projects.find((project) => project.id === selectedProjectId) || projects.find((project) => project.active),
+    [projects, selectedProjectId]
+  );
+  const activeTeam = useMemo(
+    () => activeProject ? status.projectTeams.find((team) => team.projectId === activeProject.projectId) : undefined,
+    [status.projectTeams, activeProject]
+  );
   const selected = useMemo(
     () => activeWorkItems.find((item) => item.id === selectedWorkItem) || activeWorkItems[0],
     [selectedWorkItem, activeWorkItems]
@@ -467,6 +503,7 @@ export function App() {
             {systemState.label}
           </span>
           <span>Queue {status.system.queueDepth}</span>
+          <span>{status.projectTeams.length} teams</span>
           <span>{status.system.agentsOnline}/{status.system.agentsTotal} agents</span>
           <span>{status.system.scheduler.maxConcurrentAgentRuns} parallel</span>
           <span>{apiState.connected ? status.system.githubSync : "offline"}</span>
@@ -531,11 +568,13 @@ export function App() {
                     {activeProject ? activeProject.status.replace(/_/g, " ") : "No repo connected"}
                   </span>
                   <strong>{activeProject?.name || "Connect an isolated GitHub repo"}</strong>
-                  <small>{activeProject ? `${activeProject.repo} · ${activeProject.localPath}` : "Each repo gets separate memory, context, MCP tools, and work queue scope."}</small>
+                  <small>{activeProject ? `${activeProject.repo} · ${activeProject.localPath}` : "Each repo gets its own five-agent team, memory namespace, GitHub stack, MCP tools, and work queue scope."}</small>
                   {activeProject && (
                     <div className="project-badges" aria-label="Project capabilities">
-                      <span>{activeProject.ghAuthed ? "gh ready" : "gh auth needed"}</span>
-                      <span>{activeProject.githubMcpEnabled ? "GitHub MCP" : "MCP off"}</span>
+                      <span>{activeProject.ghAuthed ? "CLI ready" : "CLI auth needed"}</span>
+                      <span>{activeProject.githubMcpAuthenticated ? "MCP ready" : activeProject.githubMcpEnabled ? "MCP auth needed" : "MCP off"}</span>
+                      <span>{activeProject.githubSdkConnected ? "SDK ready" : "SDK auth needed"}</span>
+                      <span>{activeTeam ? `${activeTeam.agentsOnline}/${activeTeam.agentsTotal} agents` : "5-agent team"}</span>
                       <span>{activeProject.webResearchEnabled ? "Deep research" : "Research off"}</span>
                     </div>
                   )}
@@ -594,6 +633,14 @@ export function App() {
                   <label>
                     <input
                       type="checkbox"
+                      checked={projectDraft.githubWriteEnabled}
+                      onChange={(event) => setProjectDraft((draft) => ({ ...draft, githubWriteEnabled: event.target.checked }))}
+                    />
+                    <span>MCP writes</span>
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
                       checked={projectDraft.webResearchEnabled}
                       onChange={(event) => setProjectDraft((draft) => ({ ...draft, webResearchEnabled: event.target.checked }))}
                     />
@@ -611,12 +658,16 @@ export function App() {
                       <button
                         type="button"
                         key={project.id}
-                        className={project.active ? "is-active" : ""}
-                        onClick={() => activateProject(project.id)}
-                        disabled={loading || project.active}
+                        className={activeProject?.id === project.id ? "is-active" : ""}
+                        onClick={() => {
+                          selectProjectId(project.id);
+                          hydrateProjectDraft(project, true);
+                          if (!project.active) activateProject(project.id);
+                        }}
+                        disabled={loading}
                       >
                         <span>{project.name}</span>
-                        <small>{project.repo}</small>
+                        <small>{project.repo} · {project.active ? "team enabled" : "inactive"}</small>
                       </button>
                     ))}
                   </div>
@@ -710,7 +761,7 @@ export function App() {
                 </select>
               </label>
             </div>
-            {renderInsight(activeInsight, { agentRows, releaseReady, status, visibleMemories, visibleEvents })}
+            {renderInsight(activeInsight, { agentRows, releaseReady, status, visibleMemories, visibleEvents, activeProject })}
           </aside>
         </div>
       </main>
@@ -726,9 +777,10 @@ function renderInsight(
     status: Status;
     visibleMemories: MemoryRecord[];
     visibleEvents: Status["logs"];
+    activeProject?: ProjectConnection;
   }
 ) {
-  const { agentRows, releaseReady, status, visibleMemories, visibleEvents } = input;
+  const { agentRows, releaseReady, status, visibleMemories, visibleEvents, activeProject } = input;
 
   if (activeInsight === "team") {
     return (
@@ -771,6 +823,42 @@ function renderInsight(
           ))
         ) : (
           <div className="empty-state compact">No stored context yet.</div>
+        )}
+      </div>
+    );
+  }
+
+  if (activeInsight === "capabilities") {
+    const team = activeProject
+      ? status.projectTeams.find((item) => item.projectId === activeProject.projectId)
+      : status.projectTeams[0];
+    const capabilities = team?.capabilities || activeProject?.capabilities || [];
+    return (
+      <div className="capability-list" data-testid="capability-panel">
+        {team && (
+          <div className="team-summary">
+            <strong>{team.name}</strong>
+            <span>{team.agentsOnline}/{team.agentsTotal} agents · {team.queueDepth} queued · {team.activeWorkItems} running</span>
+          </div>
+        )}
+        {capabilities.length ? (
+          capabilities.map((capability) => (
+            <div className="capability-row" key={capability.id}>
+              <span className={`capability-dot ${capability.status}`} />
+              <span>
+                <strong>{capability.label}</strong>
+                <small>{capability.summary}</small>
+                {capability.details.length > 0 && (
+                  <span className="capability-details">
+                    {capability.details.map((detail) => <i key={detail}>{detail}</i>)}
+                  </span>
+                )}
+              </span>
+              <em>{capability.status.replace(/_/g, " ")}</em>
+            </div>
+          ))
+        ) : (
+          <div className="empty-state compact">Connect a project to see tool capabilities.</div>
         )}
       </div>
     );

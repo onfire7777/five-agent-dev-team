@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "description": "Local-first autonomous five-agent software development team controller.",
+  "engines": {
+    "node": ">=22",
+    "npm": ">=10"
+  },
   "scripts": {
     "dev": "concurrently -n controller,worker,dashboard -c blue,green,magenta \"npm:dev:controller\" \"npm:dev:worker\" \"npm:dev:dashboard\"",
     "dev:controller": "tsx watch apps/controller/src/index.ts",

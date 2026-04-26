@@ -20,6 +20,8 @@ RUN apt-get update \
   && find /tmp/github-mcp-server -type f -name github-mcp-server -exec install -m 0755 {} /usr/local/bin/github-mcp-server \; -quit \
   && test -x /usr/local/bin/github-mcp-server \
   && git config --system --add safe.directory /app \
+  && git config --system --add safe.directory /workspace/target-repo \
+  && mkdir -p /workspace/target-repo \
   && rm -rf /var/lib/apt/lists/* /tmp/github-mcp-server /tmp/github-mcp-server.tar.gz
 
 COPY package*.json ./

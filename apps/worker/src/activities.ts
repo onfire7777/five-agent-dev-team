@@ -705,6 +705,8 @@ function createDefaultReleaseConfig(): TargetRepoConfig {
 async function loadReleaseConfig(workItem?: WorkItem): Promise<TargetRepoConfig> {
   const configPath = process.env.AGENT_TEAM_CONFIG || "agent-team.config.yaml";
   try {
+    const projectFileConfig = workItem ? await loadConfigFromProjectFile(workItem) : null;
+    if (projectFileConfig) return projectFileConfig;
     const config = loadTargetRepoConfig(configPath);
     if (!workItem || targetConfigMatchesWorkItem(config, workItem) || (!workItem.projectId && !workItem.repo)) {
       return config;
@@ -737,6 +739,20 @@ async function loadConfigFromProjectConnection(workItem: WorkItem): Promise<Targ
     return connection.projectId === workItem.projectId || connection.repo === workItem.repo;
   });
   return match ? targetRepoConfigFromProjectConnection(match) : null;
+}
+
+async function loadConfigFromProjectFile(workItem: WorkItem): Promise<TargetRepoConfig | null> {
+  if (!workItem.projectId) return null;
+  const projectConfigDir = process.env.AGENT_TEAM_PROJECT_CONFIG_DIR || ".agent-team/projects";
+  const projectConfigPath = path.join(projectConfigDir, `${safeFileSegment(workItem.projectId)}.yaml`);
+  try {
+    const config = loadTargetRepoConfig(projectConfigPath);
+    if (targetConfigMatchesWorkItem(config, workItem)) return config;
+    throw new Error(`Project config ${projectConfigPath} does not match ${workItem.projectId || workItem.repo}.`);
+  } catch (error) {
+    if (error instanceof Error && /does not match/.test(error.message)) throw error;
+    return null;
+  }
 }
 
 function resolveEmergencyStopFile(config?: TargetRepoConfig): string {
@@ -782,4 +798,12 @@ function assertSafeGitRef(value: string, label: string): string {
 
 function uniqueStrings(values: string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function safeFileSegment(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "") || "project";
 }

@@ -60,7 +60,12 @@ export function selectParallelWorkItems(workItems: WorkItem[], policy: Scheduler
   if (!policy.continuous) return [];
   const capacity = Math.max(0, policy.maxConcurrentWorkflows - activeIds.size);
   if (capacity === 0) return [];
-  const sliceCount = policy.completeLoopBeforeNextWorkItem ? 1 : policy.allowParallelWorkItemsWhenDisjoint ? capacity : 1;
+  const allowDisjointProjectLoops = policy.allowParallelWorkItemsWhenDisjoint;
+  const sliceCount = policy.completeLoopBeforeNextWorkItem && !allowDisjointProjectLoops
+    ? 1
+    : allowDisjointProjectLoops
+      ? capacity
+      : 1;
   const activeScopes = new Set(activeWorkItems.map(projectScopeKey).filter(Boolean));
   const selectedScopes = new Set<string>();
   const candidates = workItems

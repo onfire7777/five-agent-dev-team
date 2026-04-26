@@ -30,9 +30,9 @@ npm run dev
 
 ## Configuration
 
-Create `agent-team.config.yaml` from `agent-team.config.example.yaml` and point it at one target repo. The target repo must expose install, lint, typecheck, test, build, security, and release commands. The controller will not guess project-specific commands.
+Connect target repos from the dashboard, or create `agent-team.config.yaml` from `agent-team.config.example.yaml` when you want a file-backed default repo. Each target repo must expose install, lint, typecheck, test, build, security, and release commands. The controller will not guess project-specific commands.
 
-Each connected repo is treated as an isolated project. Work items and permanent memory carry a project/repo scope so one repository's decisions, gotchas, and automation state are not mixed into another repository. Connect a repo explicitly in `agent-team.config.yaml` before starting autonomous work on it.
+Each connected repo is treated as an isolated project. Work items and permanent memory carry a project/repo scope so one repository's decisions, gotchas, and automation state are not mixed into another repository. Dashboard/API connections are stored in Postgres and mirrored to `.agent-team/projects/<project-id>.yaml` so controller and worker processes resolve the same per-project config instead of relying on a single mutable config file.
 
 Autonomous activities fail closed when `agent-team.config.yaml` is missing or invalid. Set `AGENT_TEAM_ALLOW_DEFAULT_CONFIG=true` only for local smoke tests where running against the controller checkout is intentional.
 
@@ -58,9 +58,10 @@ The default `chatgpt_pro_assisted` mode is designed around ChatGPT Pro/Codex-sty
 
 Default parallelism:
 
-- one complete work-item loop at a time by default, so the next loop starts only after the current loop reaches `CLOSED` or `BLOCKED`
-- up to 5 active agent runs
-- 1 serialized repo-write/release lane
+- one complete work-item loop at a time inside each repo, so the next repo-local loop starts only after the current loop reaches `CLOSED` or `BLOCKED`
+- multiple five-agent teams can run across disjoint connected repos, bounded by `MAX_CONCURRENT_WORKFLOWS`
+- up to 5 active agent runs per team loop
+- 1 serialized repo-write/release lane per team policy
 - frontend and backend build stages run in parallel after contract lock
 
 Set `completeLoopBeforeNextWorkItem: false` only when cross-work-item parallelism is intentional and the work is disjoint. Internal stage parallelism remains enabled by default.

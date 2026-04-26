@@ -1,6 +1,58 @@
-import type { StageArtifact, WorkItem } from "./schemas";
+import type { ProjectCapabilityStatus, ProjectTeamStatus, StageArtifact, WorkItem } from "./schemas";
 
 const now = () => new Date().toISOString();
+
+const sampleCapabilities: ProjectCapabilityStatus[] = [
+  {
+    id: "github-cli",
+    label: "GitHub CLI",
+    kind: "github_cli",
+    enabled: true,
+    status: "ready",
+    summary: "gh is available for branch, PR, workflow, release, and sync operations.",
+    details: ["Deterministic local/release path"],
+    projectScoped: true
+  },
+  {
+    id: "github-mcp",
+    label: "GitHub MCP",
+    kind: "github_mcp",
+    enabled: true,
+    status: "ready",
+    summary: "Official GitHub MCP server is available with dynamic toolsets.",
+    details: ["stdio", "dynamic tool discovery", "read-only by default"],
+    projectScoped: true
+  },
+  {
+    id: "github-sdk",
+    label: "GitHub SDK",
+    kind: "github_sdk",
+    enabled: true,
+    status: "ready",
+    summary: "Octokit can read repository metadata for controller coordination.",
+    details: ["@octokit/rest"],
+    projectScoped: true
+  }
+];
+
+const sampleProjectTeams: ProjectTeamStatus[] = [
+  {
+    projectId: "sample-project",
+    repo: "sample/repo",
+    name: "sample/repo",
+    active: true,
+    status: "ready",
+    agentsOnline: 5,
+    agentsTotal: 5,
+    queueDepth: 1,
+    activeWorkItems: 3,
+    maxParallelAgentRuns: 5,
+    maxConcurrentWorkflows: 1,
+    maxConcurrentRepoWrites: 1,
+    memoryNamespace: "sample-project",
+    capabilities: sampleCapabilities
+  }
+];
 
 export function createSampleWorkItems(): WorkItem[] {
   return [
@@ -122,6 +174,7 @@ export function createSampleStatus() {
         parallelVerificationPlanning: true
       }
     },
+    projectTeams: sampleProjectTeams,
     pipeline: {
       NEW: 1,
       INTAKE: 3,

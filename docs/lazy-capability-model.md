@@ -54,11 +54,11 @@ Each project should connect its own GitHub repository explicitly. The recommende
 
 - GitHub's official MCP server for issue/PR/check/release/security context when a stage needs GitHub awareness
 - GitHub CLI for deterministic local operations and CI/release verification
-- existing GitHub API client for controller-owned branch/PR/release coordination
+- Octokit/GitHub REST SDK for controller-owned repository metadata, branch/PR/release coordination, and API-backed verification
 
-Do not let GitHub MCP memory or tool state bleed between repos. Use project-specific tokens or GitHub App installation scopes where possible. For local and container runs, provide GitHub CLI credentials with `GH_TOKEN` or `GITHUB_TOKEN`, or mount the user's `gh` config directory into the runtime as a deliberate project capability.
+Do not let GitHub MCP memory or tool state bleed between repos. Each connected repo gets its own five-agent team envelope, memory namespace, scheduler scope, and capability health report. Use project-specific tokens or GitHub App installation scopes where possible. For local and container runs, provide GitHub CLI credentials with `GH_TOKEN` or `GITHUB_TOKEN`, or mount the user's `gh` config directory into the runtime as a deliberate project capability.
 
-The Docker runtime installs the official `github-mcp-server` binary and configures it as `github-mcp-server stdio --dynamic-toolsets --read-only` by default. Dynamic tool discovery keeps the prompt/tool catalog compact while still allowing the agent to enable any documented GitHub MCP toolset when the work item actually needs it. The runtime mirrors `GH_TOKEN` or `GITHUB_TOKEN` into `GITHUB_PERSONAL_ACCESS_TOKEN` for the official MCP server if the MCP-specific variable is blank. Remove `--read-only` only for project policies that explicitly allow GitHub MCP writes; controller release gates still own tests, GitHub Actions, merge, tag, release, rollback, and local/remote sync.
+The Docker runtime installs the official `github-mcp-server` binary and configures it as `github-mcp-server stdio --dynamic-toolsets --read-only` by default. Dynamic tool discovery keeps the prompt/tool catalog compact while still allowing the agent to enable any documented GitHub MCP toolset when the work item actually needs it. Provide `GH_TOKEN`, `GITHUB_TOKEN`, `GITHUB_PERSONAL_ACCESS_TOKEN`, or a deliberate `GH_CONFIG_DIR` mount for authenticated access. Remove `--read-only` only for project policies that explicitly allow GitHub MCP writes; controller release gates still own tests, GitHub Actions, merge, tag, release, rollback, and local/remote sync.
 
 ## Project Paths And Mounts
 
