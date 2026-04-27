@@ -7,6 +7,7 @@ trigger:
   stages: [RND, CONTRACT]
   keywords: [architecture, adr, decision, tradeoff]
 ---
+
 # ADR Authoring
 
 Purpose: Record important technical decisions with alternatives and consequences.
@@ -17,6 +18,7 @@ Purpose: Record important technical decisions with alternatives and consequences
 4. Include positive and negative consequences.
 
 Checklist:
+
 - One decision only.
 - Alternatives are plausible.
 - Downsides are explicit.

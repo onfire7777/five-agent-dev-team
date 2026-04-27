@@ -25,7 +25,7 @@ commands:
   test: npm test
   build: npm run build
   security: npm audit --audit-level=high
-  release: gh workflow run agent-release.yml --ref main
+  release: gh release create "$AGENT_RELEASE_TAG" --notes-file release/notes.md --verify-tag
 context:
   # Lean AutoMaker-inspired context packs. Put only durable repo rules here:
   # architecture decisions, command conventions, safety rules, and recurring gotchas.

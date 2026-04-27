@@ -6,6 +6,7 @@ priority: 82
 trigger:
   stages: [VERIFY]
 ---
+
 # Verification Plan
 
 Purpose: Prove acceptance criteria and release gates before approval.
@@ -16,6 +17,7 @@ Purpose: Prove acceptance criteria and release gates before approval.
 4. Block if any required proof is missing.
 
 Checklist:
+
 - Every criterion has evidence.
 - Local checks are fresh.
 - Security scan result is recorded.

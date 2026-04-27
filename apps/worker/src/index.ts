@@ -44,7 +44,9 @@ async function main() {
   console.log(`AI Dev Team worker listening on Temporal task queue ${process.env.TEMPORAL_TASK_QUEUE || "agent-team"}`);
   await markReady();
   readyTimer = setInterval(() => {
-    markReady().catch((error) => console.warn(`Worker readiness heartbeat failed: ${error instanceof Error ? error.message : String(error)}`));
+    markReady().catch((error) =>
+      console.warn(`Worker readiness heartbeat failed: ${error instanceof Error ? error.message : String(error)}`)
+    );
   }, 5000);
   process.once("SIGINT", () => {
     cleanupReadyFile().finally(() => process.exit(130));

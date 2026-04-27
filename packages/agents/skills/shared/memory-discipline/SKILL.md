@@ -1,11 +1,19 @@
 ---
 id: memory-discipline
 name: Memory Discipline
-audience: [product-delivery-orchestrator, rnd-architecture-innovation, frontend-ux-engineering, backend-systems-engineering, quality-security-privacy-release]
+audience:
+  [
+    product-delivery-orchestrator,
+    rnd-architecture-innovation,
+    frontend-ux-engineering,
+    backend-systems-engineering,
+    quality-security-privacy-release
+  ]
 priority: 95
 trigger:
   always: true
 ---
+
 # Memory Discipline
 
 Purpose: Write only durable, scoped lessons to memory and keep transient detail in artifacts.
@@ -16,6 +24,7 @@ Purpose: Write only durable, scoped lessons to memory and keep transient detail 
 4. Prefer short, searchable titles and concrete evidence.
 
 Checklist:
+
 - Project and repo scope are present.
 - Memory is useful in a future loop.
 - No secret or personal token is stored.

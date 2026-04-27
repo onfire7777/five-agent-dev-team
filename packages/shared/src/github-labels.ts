@@ -25,4 +25,3 @@ export function nextLabelForStage(stage: string): string {
   if (stage === "BLOCKED") return AGENT_LABELS.blocked;
   return AGENT_LABELS.building;
 }
-

@@ -7,6 +7,7 @@ trigger:
   stages: [BACKEND_BUILD, INTEGRATION]
   keywords: [api, endpoint, schema, controller]
 ---
+
 # API Contract Design
 
 Purpose: Keep controller APIs stable, scoped, and schema-validated.
@@ -17,6 +18,7 @@ Purpose: Keep controller APIs stable, scoped, and schema-validated.
 4. Keep response shapes predictable for the dashboard.
 
 Checklist:
+
 - Input schemas exist.
 - Scope is enforced before reads/writes.
 - Errors fail closed.

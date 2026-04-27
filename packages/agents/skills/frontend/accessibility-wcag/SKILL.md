@@ -7,6 +7,7 @@ trigger:
   stages: [FRONTEND_BUILD, VERIFY]
   keywords: [accessibility, keyboard, mobile, form]
 ---
+
 # Accessibility WCAG
 
 Purpose: Make operator workflows usable by keyboard and screen readers.
@@ -17,6 +18,7 @@ Purpose: Make operator workflows usable by keyboard and screen readers.
 4. Use status text, not color alone.
 
 Checklist:
+
 - Inputs have labels.
 - Button text names the action.
 - Focus is visible.

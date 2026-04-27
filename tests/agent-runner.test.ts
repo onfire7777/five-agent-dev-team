@@ -55,10 +55,12 @@ describe("agent runner", () => {
 
   it("interpolates MCP environment placeholders from process env", () => {
     process.env.TEST_GITHUB_TOKEN = "token-value";
-    expect(resolveMcpEnv({
-      GITHUB_PERSONAL_ACCESS_TOKEN: "${TEST_GITHUB_TOKEN}",
-      STATIC_VALUE: "literal"
-    })).toEqual({
+    expect(
+      resolveMcpEnv({
+        GITHUB_PERSONAL_ACCESS_TOKEN: "${TEST_GITHUB_TOKEN}",
+        STATIC_VALUE: "literal"
+      })
+    ).toEqual({
       GITHUB_PERSONAL_ACCESS_TOKEN: "token-value",
       STATIC_VALUE: "literal"
     });
@@ -73,11 +75,13 @@ describe("agent runner", () => {
     delete process.env.GITHUB_TOKEN;
     delete process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
     try {
-      expect(resolveMcpEnv({
-        GH_TOKEN: "${GH_TOKEN}",
-        GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_PERSONAL_ACCESS_TOKEN}",
-        GITHUB_TOKEN: "${GITHUB_TOKEN}"
-      })).toEqual({
+      expect(
+        resolveMcpEnv({
+          GH_TOKEN: "${GH_TOKEN}",
+          GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_PERSONAL_ACCESS_TOKEN}",
+          GITHUB_TOKEN: "${GITHUB_TOKEN}"
+        })
+      ).toEqual({
         GH_TOKEN: "gh-token-value",
         GITHUB_PERSONAL_ACCESS_TOKEN: "gh-token-value",
         GITHUB_TOKEN: "gh-token-value"

@@ -6,6 +6,7 @@ priority: 70
 trigger:
   stages: [CLOSED]
 ---
+
 # Final Summary
 
 Purpose: Close loops with durable evidence.
@@ -16,6 +17,7 @@ Purpose: Close loops with durable evidence.
 4. Recommend the next loop only when evidence supports it.
 
 Checklist:
+
 - Closure names release or blocker state.
 - Sync and rollback evidence are included when relevant.
 - No future work is hidden as complete.

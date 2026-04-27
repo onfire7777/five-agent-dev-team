@@ -1,11 +1,19 @@
 ---
 id: secure-coding
 name: Secure Coding
-audience: [product-delivery-orchestrator, rnd-architecture-innovation, frontend-ux-engineering, backend-systems-engineering, quality-security-privacy-release]
+audience:
+  [
+    product-delivery-orchestrator,
+    rnd-architecture-innovation,
+    frontend-ux-engineering,
+    backend-systems-engineering,
+    quality-security-privacy-release
+  ]
 priority: 92
 trigger:
   always: true
 ---
+
 # Secure Coding
 
 Purpose: Keep autonomous changes safe by default.
@@ -16,6 +24,7 @@ Purpose: Keep autonomous changes safe by default.
 4. Prefer allowlists for tools, origins, commands, and release gates.
 
 Checklist:
+
 - Inputs are parsed before use.
 - Secrets are not logged.
 - Paths remain scoped.

@@ -22,7 +22,7 @@ const config: TargetRepoConfig = {
     test: "npm test",
     build: "npm run build",
     security: "npm audit --audit-level=high",
-    release: "gh workflow run release.yml"
+    release: 'gh release create "$AGENT_RELEASE_TAG" --notes-file release/notes.md --verify-tag'
   },
   context: {
     includeDefaultContextDir: true,

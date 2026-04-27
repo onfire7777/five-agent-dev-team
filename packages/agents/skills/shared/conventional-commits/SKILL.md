@@ -1,11 +1,19 @@
 ---
 id: conventional-commits
 name: Conventional Commits
-audience: [product-delivery-orchestrator, rnd-architecture-innovation, frontend-ux-engineering, backend-systems-engineering, quality-security-privacy-release]
+audience:
+  [
+    product-delivery-orchestrator,
+    rnd-architecture-innovation,
+    frontend-ux-engineering,
+    backend-systems-engineering,
+    quality-security-privacy-release
+  ]
 priority: 80
 trigger:
   keywords: [commit, release, branch, pr]
 ---
+
 # Conventional Commits
 
 Purpose: Format commits so release and review automation can reason about changes.
@@ -16,6 +24,7 @@ Purpose: Format commits so release and review automation can reason about change
 4. Put evidence and breaking changes in the body.
 
 Checklist:
+
 - Type is valid.
 - Subject names the change.
 - Body includes verification when needed.

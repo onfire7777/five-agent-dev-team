@@ -33,7 +33,7 @@ function configFor(repoPath: string): TargetRepoConfig {
       test: "npm test",
       build: "npm run build",
       security: "npm audit --audit-level=high",
-      release: "gh workflow run release.yml --ref main"
+      release: 'gh release create "$AGENT_RELEASE_TAG" --notes-file release/notes.md --verify-tag'
     },
     context: {
       includeDefaultContextDir: true,
@@ -245,54 +245,57 @@ describe("repo context packs", () => {
       repo: "owner/a"
     };
     const now = new Date().toISOString();
-    const selected = selectRelevantMemories([
-      {
-        id: "same-project",
-        scope: "repo",
-        projectId: "project-a",
-        repo: "owner/a",
-        kind: "preference",
-        title: "Same project",
-        content: "Use npm ci.",
-        tags: ["repo"],
-        confidence: "high",
-        importance: 5,
-        permanence: "permanent",
-        source: "test",
-        createdAt: now,
-        updatedAt: now
-      },
-      {
-        id: "other-project",
-        scope: "repo",
-        projectId: "project-b",
-        repo: "owner/b",
-        kind: "preference",
-        title: "Other project",
-        content: "Use pnpm.",
-        tags: ["repo"],
-        confidence: "high",
-        importance: 5,
-        permanence: "permanent",
-        source: "test",
-        createdAt: now,
-        updatedAt: now
-      },
-      {
-        id: "global",
-        scope: "global",
-        kind: "preference",
-        title: "Global",
-        content: "Do not leak across projects.",
-        tags: ["repo"],
-        confidence: "high",
-        importance: 5,
-        permanence: "permanent",
-        source: "test",
-        createdAt: now,
-        updatedAt: now
-      }
-    ], workItem);
+    const selected = selectRelevantMemories(
+      [
+        {
+          id: "same-project",
+          scope: "repo",
+          projectId: "project-a",
+          repo: "owner/a",
+          kind: "preference",
+          title: "Same project",
+          content: "Use npm ci.",
+          tags: ["repo"],
+          confidence: "high",
+          importance: 5,
+          permanence: "permanent",
+          source: "test",
+          createdAt: now,
+          updatedAt: now
+        },
+        {
+          id: "other-project",
+          scope: "repo",
+          projectId: "project-b",
+          repo: "owner/b",
+          kind: "preference",
+          title: "Other project",
+          content: "Use pnpm.",
+          tags: ["repo"],
+          confidence: "high",
+          importance: 5,
+          permanence: "permanent",
+          source: "test",
+          createdAt: now,
+          updatedAt: now
+        },
+        {
+          id: "global",
+          scope: "global",
+          kind: "preference",
+          title: "Global",
+          content: "Do not leak across projects.",
+          tags: ["repo"],
+          confidence: "high",
+          importance: 5,
+          permanence: "permanent",
+          source: "test",
+          createdAt: now,
+          updatedAt: now
+        }
+      ],
+      workItem
+    );
 
     expect(selected.map((memory) => memory.id)).toEqual(["same-project"]);
   });

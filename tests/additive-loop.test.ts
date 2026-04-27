@@ -120,8 +120,9 @@ describe("additive loop contract", () => {
     await bus.publishMessage(sameLoop);
     await bus.publishMessage(otherProject);
 
-    await expect(bus.listMessages({ projectId: "owner-repo-a", repo: "owner/repo-a" }))
-      .resolves.toMatchObject([{ id: "msg-1", projectId: "owner-repo-a", repo: "owner/repo-a" }]);
+    await expect(bus.listMessages({ projectId: "owner-repo-a", repo: "owner/repo-a" })).resolves.toMatchObject([
+      { id: "msg-1", projectId: "owner-repo-a", repo: "owner/repo-a" }
+    ]);
   });
 
   it("records loop run lifecycle without leaking across projects", async () => {
@@ -172,12 +173,14 @@ describe("additive loop contract", () => {
     expect(proposal.currentStage).toBe("PROPOSAL");
     expect(awaiting.status).toBe("awaiting_acceptance");
     expect(closed.closedAt).toBe("2026-04-26T12:10:00.000Z");
-    await expect(runs.advanceLoopRun(started.id, {
-      projectId: "owner-repo-b",
-      repo: "owner/repo-b",
-      currentStage: "CONTRACT",
-      updatedAt: now
-    })).rejects.toThrow(/project|repo|scope/i);
+    await expect(
+      runs.advanceLoopRun(started.id, {
+        projectId: "owner-repo-b",
+        repo: "owner/repo-b",
+        currentStage: "CONTRACT",
+        updatedAt: now
+      })
+    ).rejects.toThrow(/project|repo|scope/i);
   });
 
   it("persists active direction by project/repo and marks next-loop direction consumed", async () => {
@@ -196,10 +199,16 @@ describe("additive loop contract", () => {
     });
 
     await directions.upsertDirection(nextLoopDirection);
-    await directions.upsertDirection({ ...nextLoopDirection, id: "direction-2", projectId: "owner-repo-b", repo: "owner/repo-b" });
+    await directions.upsertDirection({
+      ...nextLoopDirection,
+      id: "direction-2",
+      projectId: "owner-repo-b",
+      repo: "owner/repo-b"
+    });
 
-    expect(await directions.listActiveDirections({ projectId: "owner-repo-a", repo: "owner/repo-a" }))
-      .toMatchObject([{ id: "direction-1", content: nextLoopDirection.content }]);
+    expect(await directions.listActiveDirections({ projectId: "owner-repo-a", repo: "owner/repo-a" })).toMatchObject([
+      { id: "direction-1", content: nextLoopDirection.content }
+    ]);
 
     const consumed = await directions.markDirectionConsumed("direction-1", "2026-04-26T13:00:00.000Z");
     expect(consumed.active).toBe(false);
@@ -238,15 +247,20 @@ describe("additive loop contract", () => {
       projectId: "owner-repo-b",
       repo: "owner/repo-b"
     });
-    const lowValueScore = api.scoreOpportunityCandidate({ ...base, impact: 1, confidence: 2, urgency: 1, implementationSize: 5 });
+    const lowValueScore = api.scoreOpportunityCandidate({
+      ...base,
+      impact: 1,
+      confidence: 2,
+      urgency: 1,
+      implementationSize: 5
+    });
 
     expect(highValue.score).toBeGreaterThan(lowValueScore);
-    expect(api.dedupeOpportunityCandidates([duplicate, highValue, otherRepo]))
-      .toMatchObject([
-        { id: "opp-1", status: "suggested" },
-        { id: "opp-2", status: "duplicate" },
-        { id: "opp-3", status: "suggested" }
-      ]);
+    expect(api.dedupeOpportunityCandidates([duplicate, highValue, otherRepo])).toMatchObject([
+      { id: "opp-1", status: "suggested" },
+      { id: "opp-2", status: "duplicate" },
+      { id: "opp-3", status: "suggested" }
+    ]);
   });
 
   it("requires human acceptance unless proposal policy explicitly allows auto-accept", async () => {
@@ -280,10 +294,14 @@ describe("additive loop contract", () => {
       autoAcceptEligible: true
     });
 
-    expect(api.evaluateProposalAcceptancePolicy(manualProposal, { githubWriteEnabled: false }))
-      .toMatchObject({ decision: "await_human", status: "awaiting_acceptance" });
-    expect(api.evaluateProposalAcceptancePolicy(autoProposal, { githubWriteEnabled: false }))
-      .toMatchObject({ decision: "auto_accept", status: "auto_accepted" });
+    expect(api.evaluateProposalAcceptancePolicy(manualProposal, { githubWriteEnabled: false })).toMatchObject({
+      decision: "await_human",
+      status: "awaiting_acceptance"
+    });
+    expect(api.evaluateProposalAcceptancePolicy(autoProposal, { githubWriteEnabled: false })).toMatchObject({
+      decision: "auto_accept",
+      status: "auto_accepted"
+    });
   });
 
   it("moves PROPOSAL to AWAITING_ACCEPTANCE, then accepted proposals into CONTRACT", async () => {

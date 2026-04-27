@@ -6,6 +6,7 @@ priority: 82
 trigger:
   stages: [RELEASE]
 ---
+
 # Release Packet Authoring
 
 Purpose: Release only with rollback, sync, CI, and policy proof.
@@ -16,6 +17,7 @@ Purpose: Release only with rollback, sync, CI, and policy proof.
 4. Record release proof and final go/no-go.
 
 Checklist:
+
 - Release policy decision is go.
 - Rollback plan is present.
 - Tag or release proof exists.

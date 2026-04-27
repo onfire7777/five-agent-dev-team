@@ -28,10 +28,11 @@ export function buildSharedContext(
   memories: MemoryRecord[] = [],
   options: SharedContextOptions = {}
 ): SharedContext {
-  const relevant = artifacts.filter((artifact) =>
-    artifact.workItemId === workItem.id &&
-    (!artifact.projectId || !workItem.projectId || artifact.projectId === workItem.projectId) &&
-    (!artifact.repo || !workItem.repo || artifact.repo === workItem.repo)
+  const relevant = artifacts.filter(
+    (artifact) =>
+      artifact.workItemId === workItem.id &&
+      (!artifact.projectId || !workItem.projectId || artifact.projectId === workItem.projectId) &&
+      (!artifact.repo || !workItem.repo || artifact.repo === workItem.repo)
   );
   const teammateActivity: TeammateActivity[] = relevant.map((artifact) => ({
     agent: artifact.ownerAgent,
@@ -75,11 +76,12 @@ export function buildSharedContext(
     }),
     contextNotes: [
       ...memories
-        .filter((memory) =>
-          memory.kind === "preference" ||
-          memory.kind === "handoff" ||
-          memory.kind === "release" ||
-          memory.source.startsWith("context-file:")
+        .filter(
+          (memory) =>
+            memory.kind === "preference" ||
+            memory.kind === "handoff" ||
+            memory.kind === "release" ||
+            memory.source.startsWith("context-file:")
         )
         .map((memory) => `${memory.title}: ${memory.content}`),
       ...capabilityPackNotes(options.targetRepoConfig, {
@@ -93,11 +95,15 @@ export function buildSharedContext(
     openQuestions: [],
     decisions: [
       ...relevant.flatMap((artifact) => artifact.decisions),
-      ...memories.filter((memory) => memory.kind === "decision" || memory.kind === "architecture").map((memory) => memory.content)
+      ...memories
+        .filter((memory) => memory.kind === "decision" || memory.kind === "architecture")
+        .map((memory) => memory.content)
     ],
     risks: [
       ...relevant.flatMap((artifact) => artifact.risks),
-      ...memories.filter((memory) => memory.kind === "risk" || memory.kind === "failure").map((memory) => memory.content)
+      ...memories
+        .filter((memory) => memory.kind === "risk" || memory.kind === "failure")
+        .map((memory) => memory.content)
     ],
     blockers: relevant.filter((artifact) => artifact.status === "blocked").map((artifact) => artifact.summary),
     updatedAt: new Date().toISOString()
@@ -138,7 +144,10 @@ export interface CapabilitySelectionInput {
   agent?: AgentRole;
 }
 
-export function summarizeToolIntegrations(config?: TargetRepoConfig, input: CapabilitySelectionInput = {}): ToolIntegrationContext[] {
+export function summarizeToolIntegrations(
+  config?: TargetRepoConfig,
+  input: CapabilitySelectionInput = {}
+): ToolIntegrationContext[] {
   if (!config) return [];
 
   const integrations: ToolIntegrationContext[] = [];
@@ -156,12 +165,16 @@ export function summarizeToolIntegrations(config?: TargetRepoConfig, input: Capa
         electron.debugPort ? `debugPort=${electron.debugPort}` : "",
         electron.testCommand ? `testCommand=${electron.testCommand}` : "",
         `artifactsDir=${electron.artifactsDir}`
-      ].filter(Boolean).join(", "),
+      ]
+        .filter(Boolean)
+        .join(", "),
       risks: [
         electron.allowRemoteDebugging
           ? "Remote debugging can expose renderer data and should use local-only disposable profiles."
           : "Remote debugging is blocked unless policy explicitly enables it.",
-        electron.requireIsolatedProfile ? "" : "Persistent Electron profiles can leak local session state into agent runs."
+        electron.requireIsolatedProfile
+          ? ""
+          : "Persistent Electron profiles can leak local session state into agent runs."
       ].filter(Boolean),
       notes: electron.notes
     });
@@ -173,9 +186,10 @@ export function summarizeToolIntegrations(config?: TargetRepoConfig, input: Capa
       name: `MCP:${server.name}`,
       kind: "mcp",
       enabled: active,
-      summary: server.transport === "stdio"
-        ? `stdio ${server.command} ${server.args.join(" ")}`.trim()
-        : `streamable_http ${server.url}`,
+      summary:
+        server.transport === "stdio"
+          ? `stdio ${server.command} ${server.args.join(" ")}`.trim()
+          : `streamable_http ${server.url}`,
       risks: [
         server.toolAllowlist.length ? "" : "No tool allowlist configured; expose only trusted MCP servers.",
         Object.keys(server.env).length ? `Environment variables configured: ${Object.keys(server.env).join(", ")}.` : ""
@@ -257,25 +271,37 @@ export function memoryFromArtifact(artifact: StageArtifact): MemoryRecord[] {
   const records: MemoryRecord[] = [];
 
   if (artifact.stage === "RND") {
-    records.push(createMemoryRecord(artifact, {
-      id: `${artifact.workItemId}-${artifact.stage}-research`,
-      kind: "research",
-      title: `${artifact.stage} research`,
-      content: artifact.summary,
-      importance: 5,
-      permanence: "permanent"
-    }, now));
+    records.push(
+      createMemoryRecord(
+        artifact,
+        {
+          id: `${artifact.workItemId}-${artifact.stage}-research`,
+          kind: "research",
+          title: `${artifact.stage} research`,
+          content: artifact.summary,
+          importance: 5,
+          permanence: "permanent"
+        },
+        now
+      )
+    );
   }
 
   if (artifact.stage === "RELEASE") {
-    records.push(createMemoryRecord(artifact, {
-      id: `${artifact.workItemId}-${artifact.stage}-release`,
-      kind: "release",
-      title: `${artifact.stage} release decision`,
-      content: artifact.summary,
-      importance: 5,
-      permanence: "permanent"
-    }, now));
+    records.push(
+      createMemoryRecord(
+        artifact,
+        {
+          id: `${artifact.workItemId}-${artifact.stage}-release`,
+          kind: "release",
+          title: `${artifact.stage} release decision`,
+          content: artifact.summary,
+          importance: 5,
+          permanence: "permanent"
+        },
+        now
+      )
+    );
   }
 
   if (artifact.stage === "CLOSED" && artifact.status === "passed") {
@@ -293,8 +319,12 @@ export function memoryFromArtifact(artifact: StageArtifact): MemoryRecord[] {
         artifact.summary,
         artifact.decisions.length ? `Decisions: ${artifact.decisions.join("; ")}` : "",
         artifact.testsRun.length ? `Tests and gates: ${artifact.testsRun.join("; ")}` : "",
-        artifact.filesChanged.length ? `Files changed: ${artifact.filesChanged.join("; ")}` : "Files changed: none recorded"
-      ].filter(Boolean).join("\n"),
+        artifact.filesChanged.length
+          ? `Files changed: ${artifact.filesChanged.join("; ")}`
+          : "Files changed: none recorded"
+      ]
+        .filter(Boolean)
+        .join("\n"),
       tags: ["latest-loop", "loop-closure", artifact.stage, artifact.ownerAgent],
       confidence: "high",
       importance: 5,
@@ -306,25 +336,37 @@ export function memoryFromArtifact(artifact: StageArtifact): MemoryRecord[] {
   }
 
   if (artifact.status === "blocked" || artifact.status === "failed" || artifact.stage === "BLOCKED") {
-    records.push(createMemoryRecord(artifact, {
-      id: `${artifact.workItemId}-${artifact.stage}-failure`,
-      kind: "failure",
-      title: `${artifact.stage} failure or blocker`,
-      content: artifact.summary,
-      importance: 5,
-      permanence: "permanent"
-    }, now));
+    records.push(
+      createMemoryRecord(
+        artifact,
+        {
+          id: `${artifact.workItemId}-${artifact.stage}-failure`,
+          kind: "failure",
+          title: `${artifact.stage} failure or blocker`,
+          content: artifact.summary,
+          importance: 5,
+          permanence: "permanent"
+        },
+        now
+      )
+    );
   }
 
   if (artifact.nextStage) {
-    records.push(createMemoryRecord(artifact, {
-      id: `${artifact.workItemId}-${artifact.stage}-handoff`,
-      kind: "handoff",
-      title: `${artifact.stage} handoff`,
-      content: artifact.summary,
-      importance: artifact.stage === "CONTRACT" ? 5 : 3,
-      permanence: "durable"
-    }, now));
+    records.push(
+      createMemoryRecord(
+        artifact,
+        {
+          id: `${artifact.workItemId}-${artifact.stage}-handoff`,
+          kind: "handoff",
+          title: `${artifact.stage} handoff`,
+          content: artifact.summary,
+          importance: artifact.stage === "CONTRACT" ? 5 : 3,
+          permanence: "durable"
+        },
+        now
+      )
+    );
   }
 
   for (const [index, decision] of artifact.decisions.entries()) {
@@ -341,7 +383,10 @@ export function memoryFromArtifact(artifact: StageArtifact): MemoryRecord[] {
       tags: [artifact.stage, artifact.ownerAgent],
       confidence: artifact.status === "passed" ? "high" : "medium",
       importance: artifact.stage === "RELEASE" || artifact.stage === "CONTRACT" ? 5 : 3,
-      permanence: artifact.stage === "RND" || artifact.stage === "CONTRACT" || artifact.stage === "RELEASE" ? "permanent" : "durable",
+      permanence:
+        artifact.stage === "RND" || artifact.stage === "CONTRACT" || artifact.stage === "RELEASE"
+          ? "permanent"
+          : "durable",
       source: `${artifact.ownerAgent}:${artifact.stage}`,
       createdAt: now,
       updatedAt: now
@@ -404,16 +449,21 @@ export function selectRelevantMemories(memories: MemoryRecord[], workItem: WorkI
   return memories
     .filter((memory) => !memory.expiresAt || Date.parse(memory.expiresAt) > now)
     .filter((memory) => isMemoryInProjectScope(memory, { projectId, repo, workItemId: workItem.id }))
-    .filter((memory) =>
-      memory.scope === "repo" ||
-      memory.workItemId === workItem.id ||
-      memory.tags.some((tag) => workItem.title.toLowerCase().includes(tag.toLowerCase()))
+    .filter(
+      (memory) =>
+        memory.scope === "repo" ||
+        memory.workItemId === workItem.id ||
+        memory.tags.some((tag) => workItem.title.toLowerCase().includes(tag.toLowerCase()))
     )
     .sort((a, b) => b.importance - a.importance || Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
     .slice(0, limit);
 }
 
-export async function loadRepoContextMemories(config: TargetRepoConfig, workItem: WorkItem, now = new Date().toISOString()): Promise<MemoryRecord[]> {
+export async function loadRepoContextMemories(
+  config: TargetRepoConfig,
+  workItem: WorkItem,
+  now = new Date().toISOString()
+): Promise<MemoryRecord[]> {
   const repoRoot = path.resolve(config.repo.localPath || process.cwd());
   const contextFiles = await discoverContextFiles(config, repoRoot);
   const selected = contextFiles.slice(0, config.context.maxFiles);
@@ -462,7 +512,10 @@ export function scopeWorkItemToProject(workItem: WorkItem, config: TargetRepoCon
   };
 }
 
-function isMemoryInProjectScope(memory: MemoryRecord, scope: { projectId?: string; repo?: string; workItemId?: string }): boolean {
+function isMemoryInProjectScope(
+  memory: MemoryRecord,
+  scope: { projectId?: string; repo?: string; workItemId?: string }
+): boolean {
   if (memory.scope === "global") return false;
   if (memory.workItemId) return memory.workItemId === scope.workItemId;
   if (memory.projectId && scope.projectId) return memory.projectId === scope.projectId;

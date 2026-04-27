@@ -113,6 +113,8 @@ export function createSampleWorkItems(): WorkItem[] {
 export function createSampleArtifacts(): StageArtifact[] {
   return [
     {
+      artifactId: "sample-artifact-rnd-WI-1290",
+      artifactKind: "RnDPacket",
       workItemId: "WI-1290",
       projectId: "sample-project",
       repo: "sample/repo",
@@ -130,9 +132,16 @@ export function createSampleArtifacts(): StageArtifact[] {
       promptHash: "sample-prompt-rnd",
       skillIds: ["adr-authoring"],
       capabilityIds: [],
+      bodyJson: {
+        workItemId: "WI-1290",
+        projectId: "sample-project",
+        recommendation: "Use a narrow preferences API with optimistic client updates."
+      },
       createdAt: now()
     },
     {
+      artifactId: "sample-artifact-verify-WI-1291",
+      artifactKind: "VerificationReport",
       workItemId: "WI-1291",
       projectId: "sample-project",
       repo: "sample/repo",
@@ -150,6 +159,11 @@ export function createSampleArtifacts(): StageArtifact[] {
       promptHash: "sample-prompt-verify",
       skillIds: ["verification-plan"],
       capabilityIds: [],
+      bodyJson: {
+        workItemId: "WI-1291",
+        projectId: "sample-project",
+        recommendation: "no_go"
+      },
       createdAt: now()
     }
   ];

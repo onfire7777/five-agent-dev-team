@@ -7,8 +7,10 @@ import {
   evaluateReleasePolicy,
   loadRepoContextMemories,
   loadTargetRepoConfig,
+  projectIdForConfig,
   scopeWorkItemToProject,
   selectRelevantMemories,
+  ReleasePacketSchema,
   StageArtifactSchema,
   targetConfigMatchesWorkItem,
   targetRepoConfigFromProjectConnection,
@@ -94,10 +96,11 @@ export async function recordLoopStart(workItem: WorkItem): Promise<StageArtifact
   const scopedWorkItem = scopeWorkItemToProject(workItem, config);
   await ensureNotStopped(scopedWorkItem.id, config);
   const store = await getActivityStore();
-  const memories = selectRelevantMemories([
-    ...(await store.listMemories(scopedWorkItem.id)),
-    ...(await loadRepoContextMemories(config, scopedWorkItem))
-  ], scopedWorkItem, 20);
+  const memories = selectRelevantMemories(
+    [...(await store.listMemories(scopedWorkItem.id)), ...(await loadRepoContextMemories(config, scopedWorkItem))],
+    scopedWorkItem,
+    20
+  );
   const latestLoopMemory = memories.find((memory) => memory.tags.includes("latest-loop"));
   const evidence = await collectLoopEvidence(scopedWorkItem, config);
   const blockingRisks = [
@@ -127,17 +130,9 @@ export async function recordLoopStart(workItem: WorkItem): Promise<StageArtifact
       evidence.github.summary,
       "Do not start implementation until this loop owns the workflow claim and every previous loop has reached CLOSED or BLOCKED."
     ],
-    risks: uniqueStrings([
-      ...evidence.git.risks,
-      ...evidence.runtime.risks,
-      ...evidence.github.risks
-    ]),
+    risks: uniqueStrings([...evidence.git.risks, ...evidence.runtime.risks, ...evidence.github.risks]),
     filesChanged: [],
-    testsRun: uniqueStrings([
-      ...evidence.git.tests,
-      ...evidence.runtime.tests,
-      ...evidence.github.tests
-    ]),
+    testsRun: uniqueStrings([...evidence.git.tests, ...evidence.runtime.tests, ...evidence.github.tests]),
     releaseReadiness: "unknown",
     nextStage: blockingRisks.length ? "BLOCKED" : "INTAKE",
     createdAt: new Date().toISOString()
@@ -199,8 +194,8 @@ export async function evaluateProposalGate(input: ProposalGateInput): Promise<St
   const scopedWorkItem = scopeWorkItemToProject(input.workItem, config);
   await ensureNotStopped(scopedWorkItem.id, config);
   const store = await getActivityStore();
-  const githubMcpWriteEnabled = config.integrations.mcpServers.some((server) =>
-    server.name === "github-mcp" && server.transport === "stdio" && !server.args.includes("--read-only")
+  const githubMcpWriteEnabled = config.integrations.mcpServers.some(
+    (server) => server.name === "github-mcp" && server.transport === "stdio" && !server.args.includes("--read-only")
   );
   const autoAccept =
     scopedWorkItem.riskLevel === "low" &&
@@ -220,13 +215,13 @@ export async function evaluateProposalGate(input: ProposalGateInput): Promise<St
       : "Proposal gate is active. Build stages are blocked until the proposal is accepted, revised, or rejected.",
     decisions: autoAccept
       ? [
-        "Auto-accept low-risk, high-confidence proposal.",
-        "Continue to contract before any frontend/backend build starts."
-      ]
+          "Auto-accept low-risk, high-confidence proposal.",
+          "Continue to contract before any frontend/backend build starts."
+        ]
       : [
-        "Pause the loop at AWAITING_ACCEPTANCE.",
-        "Do not start frontend/backend build until a proposal decision signal is received."
-      ],
+          "Pause the loop at AWAITING_ACCEPTANCE.",
+          "Do not start frontend/backend build until a proposal decision signal is received."
+        ],
     risks: autoAccept ? [] : input.proposal.risks,
     filesChanged: [],
     testsRun: [],
@@ -265,7 +260,11 @@ export async function recordProposalDecision(input: WorkflowProposalDecisionInpu
     stage: "AWAITING_ACCEPTANCE",
     ownerAgent: "product-delivery-orchestrator",
     status: accepted || revising ? "passed" : "blocked",
-    title: accepted ? "Proposal accepted" : input.decision === "revise" ? "Proposal revision requested" : "Proposal rejected",
+    title: accepted
+      ? "Proposal accepted"
+      : input.decision === "revise"
+        ? "Proposal revision requested"
+        : "Proposal rejected",
     summary: accepted
       ? "Proposal accepted. The loop may continue into contract and build planning."
       : input.decision === "revise"
@@ -288,12 +287,14 @@ export async function recordProposalDecision(input: WorkflowProposalDecisionInpu
   });
   const scope = strictScopeForWorkItem(scopedWorkItem);
   if (scope) {
-    await store.decideProposal(scope, `proposal-${scopedWorkItem.id}-proposal`, {
-      decision: accepted ? "accept" : input.decision === "revise" ? "revise" : "reject",
-      decidedBy: input.decidedBy || "human",
-      reason: input.feedback || artifact.summary,
-      requestedChanges: input.feedback ? [input.feedback] : []
-    }).catch(() => undefined);
+    await store
+      .decideProposal(scope, `proposal-${scopedWorkItem.id}-proposal`, {
+        decision: accepted ? "accept" : input.decision === "revise" ? "revise" : "reject",
+        decidedBy: input.decidedBy || "human",
+        reason: input.feedback || artifact.summary,
+        requestedChanges: input.feedback ? [input.feedback] : []
+      })
+      .catch(() => undefined);
   }
   await persistArtifact(artifact);
   await updateLoopRun(store, scopedWorkItem, {
@@ -311,7 +312,10 @@ export async function recordProposalDecision(input: WorkflowProposalDecisionInpu
   return artifact;
 }
 
-async function runAgentWithTeamContext(input: StageInput, proposalStage = false): Promise<{
+async function runAgentWithTeamContext(
+  input: StageInput,
+  proposalStage = false
+): Promise<{
   artifact: StageArtifact;
   definition: ReturnType<typeof getAgentDefinition>;
   store: ControllerStore;
@@ -337,14 +341,11 @@ async function runAgentWithTeamContext(input: StageInput, proposalStage = false)
         : `${definition.displayName} started ${input.stage}.`
     });
     const contextMemories = await loadRepoContextMemories(config, scopedWorkItem);
-    const memories = selectRelevantMemories([
-      ...(await store.listMemories(scopedWorkItem.id)),
-      ...contextMemories
-    ], scopedWorkItem);
-    const teamMessages = [
-      ...(await readTeamBusMessages(store, scopedWorkItem.id)),
-      ...(input.teamMessages || [])
-    ];
+    const memories = selectRelevantMemories(
+      [...(await store.listMemories(scopedWorkItem.id)), ...contextMemories],
+      scopedWorkItem
+    );
+    const teamMessages = [...(await readTeamBusMessages(store, scopedWorkItem.id)), ...(input.teamMessages || [])];
     const result = await runRoleAgent(definition, {
       ...input,
       workItem: scopedWorkItem,
@@ -352,14 +353,8 @@ async function runAgentWithTeamContext(input: StageInput, proposalStage = false)
       targetRepoConfig: config,
       proposalStage,
       teamMessages,
-      teamDirection: [
-        ...buildTeamDirection(input, proposalStage),
-        ...(input.teamDirection || [])
-      ],
-      loopContext: [
-        ...buildLoopContext(input.previousArtifacts),
-        ...(input.loopContext || [])
-      ]
+      teamDirection: [...buildTeamDirection(input, proposalStage), ...(input.teamDirection || [])],
+      loopContext: [...buildLoopContext(input.previousArtifacts), ...(input.loopContext || [])]
     });
     return { artifact: result.artifact, definition, store, workItem: scopedWorkItem };
   } finally {
@@ -372,8 +367,8 @@ export async function closeWorkLoop(workItem: WorkItem, previousArtifacts: Stage
   const scopedWorkItem = scopeWorkItemToProject(workItem, config);
   const evidence = await collectLoopEvidence(scopedWorkItem, config);
   const release = [...previousArtifacts].reverse().find((artifact) => artifact.stage === "RELEASE");
-  const priorBlocked = previousArtifacts.some((artifact) =>
-    artifact.stage === "BLOCKED" || artifact.status === "blocked" || artifact.status === "failed"
+  const priorBlocked = previousArtifacts.some(
+    (artifact) => artifact.stage === "BLOCKED" || artifact.status === "blocked" || artifact.status === "failed"
   );
   const releasePassed = release?.status === "passed" && release.releaseReadiness === "ready";
   const gitRequired = config.release.requireCleanWorktree || config.release.requireLocalRemoteSync;
@@ -466,7 +461,10 @@ export async function prepareBuildBranches(workItem: WorkItem): Promise<{ branch
   return { branchPrefix: automationBranchPrefix(scopedWorkItem) };
 }
 
-export async function integrateBranches(workItem: WorkItem, previousArtifacts: StageArtifact[]): Promise<StageArtifact> {
+export async function integrateBranches(
+  workItem: WorkItem,
+  previousArtifacts: StageArtifact[]
+): Promise<StageArtifact> {
   const config = await loadReleaseConfig(workItem);
   const scopedWorkItem = scopeWorkItemToProject(workItem, config);
   await ensureNotStopped(scopedWorkItem.id, config);
@@ -479,7 +477,10 @@ export async function integrateBranches(workItem: WorkItem, previousArtifacts: S
     status: "passed",
     title: "Integration branch prepared",
     summary: "Frontend, backend, R&D, and early quality context are reconciled into a single integration candidate.",
-    decisions: ["Use the integration branch as the single PR/release candidate source.", "Resolve contract deviations before verification."],
+    decisions: [
+      "Use the integration branch as the single PR/release candidate source.",
+      "Resolve contract deviations before verification."
+    ],
     risks: previousArtifacts.flatMap((artifact) => artifact.risks),
     filesChanged: previousArtifacts.flatMap((artifact) => artifact.filesChanged),
     testsRun: [],
@@ -516,15 +517,12 @@ export async function runVerification(workItem: WorkItem, previousArtifacts: Sta
       ? `Verification failed: ${failedChecks.map((check) => check.name).join(", ")}.`
       : "Acceptance, regression, security, privacy, performance, teammate handoffs, and release gates are ready for autonomous release evaluation.",
     decisions: failedChecks.length
-      ? [
-        "Route required fixes back to the owning implementation agent before release.",
-        rollbackDecision
-      ]
+      ? ["Route required fixes back to the owning implementation agent before release.", rollbackDecision]
       : [
-        "Proceed to autonomous release only if local and GitHub gates remain synchronized.",
-        "Use shared context to verify every builder claim against actual release candidate state.",
-        rollbackDecision
-      ],
+          "Proceed to autonomous release only if local and GitHub gates remain synchronized.",
+          "Use shared context to verify every builder claim against actual release candidate state.",
+          rollbackDecision
+        ],
     risks: [
       ...previousArtifacts.flatMap((artifact) => artifact.risks),
       ...failedChecks.map((check) => `${check.name} failed: ${check.summary}`)
@@ -551,7 +549,8 @@ export async function planVerification(workItem: WorkItem, previousArtifacts: St
     ownerAgent: "quality-security-privacy-release",
     status: "pending",
     title: "Verification plan",
-    summary: "Quality prepared acceptance, regression, security, privacy, performance, and release-gate expectations before implementation.",
+    summary:
+      "Quality prepared acceptance, regression, security, privacy, performance, and release-gate expectations before implementation.",
     decisions: ["Use this as planning context only; final verification must run after integration."],
     risks: previousArtifacts.flatMap((artifact) => artifact.risks),
     filesChanged: [],
@@ -572,10 +571,15 @@ export async function planVerification(workItem: WorkItem, previousArtifacts: St
   return artifact;
 }
 
-export async function performAutonomousRelease(workItem: WorkItem, previousArtifacts: StageArtifact[]): Promise<StageArtifact> {
+export async function performAutonomousRelease(
+  workItem: WorkItem,
+  previousArtifacts: StageArtifact[]
+): Promise<StageArtifact> {
   const config = await loadReleaseConfig(workItem);
   const scopedWorkItem = scopeWorkItemToProject(workItem, config);
   await ensureNotStopped(scopedWorkItem.id, config);
+  const releaseTag = releaseTagForWorkItem(scopedWorkItem);
+  const rollback = rollbackPlanForRelease(scopedWorkItem, config, releaseTag);
   const { signal, syncReasons } = await collectReleaseSignal(scopedWorkItem, config, previousArtifacts);
   const preReleaseDecision = evaluateReleasePolicy(config, {
     ...signal,
@@ -585,14 +589,59 @@ export async function performAutonomousRelease(workItem: WorkItem, previousArtif
   if (releaseCommand?.ok) {
     await writeReleaseProof(scopedWorkItem, config, releaseCommand);
   }
-  const releaseProofPresent = signal.releaseProofPresent || Boolean(releaseCommand?.ok) || await hasReleaseProof(scopedWorkItem, config);
+  const postReleaseHealth = releaseCommand?.ok ? await readRuntimeHealthEvidence() : null;
+  const rollbackCommand =
+    postReleaseHealth?.required && !postReleaseHealth.ok
+      ? await runConfiguredCommand(config, "rollback", rollback.command, scopedWorkItem)
+      : null;
+  const releaseProofPresent =
+    signal.releaseProofPresent || Boolean(releaseCommand?.ok) || (await hasReleaseProof(scopedWorkItem, config));
   const decision = evaluateReleasePolicy(config, {
     ...signal,
     releaseProofPresent
   });
-  const releaseAllowed = decision.allowed && (!releaseCommand || releaseCommand.ok);
+  const postReleaseHealthPassed = !postReleaseHealth || !postReleaseHealth.required || postReleaseHealth.ok;
+  const releaseAllowed = decision.allowed && (!releaseCommand || releaseCommand.ok) && postReleaseHealthPassed;
+  const releasePacket = ReleasePacketSchema.parse({
+    workItemId: scopedWorkItem.id,
+    projectId: scopedWorkItem.projectId || projectIdForConfig(config),
+    tag: releaseTag,
+    releaseNotes: releaseAllowed
+      ? `Autonomous release ${releaseTag} passed all configured release gates.`
+      : `Autonomous release ${releaseTag} is blocked pending gate remediation.`,
+    gates: [
+      {
+        name: "release-policy",
+        passed: decision.allowed,
+        evidence: decision.allowed ? "Policy allowed release." : decision.requiredFixes.join("; ")
+      },
+      {
+        name: "release-command",
+        passed: !releaseCommand || releaseCommand.ok,
+        evidence: releaseCommand?.summary || "Release command was not required."
+      },
+      {
+        name: "release-proof",
+        passed: releaseProofPresent,
+        evidence: releaseProofPresent ? "Release proof is present." : "Release proof is missing."
+      },
+      {
+        name: "post-release-health",
+        passed: postReleaseHealthPassed,
+        evidence: postReleaseHealth?.summary || "Post-release health was not required."
+      },
+      {
+        name: "rollback",
+        passed: !rollbackCommand || rollbackCommand.ok,
+        evidence: rollbackCommand?.summary || rollback.verification
+      }
+    ],
+    rollback,
+    recommendation: releaseAllowed ? "go" : "no_go"
+  });
 
   const artifact = StageArtifactSchema.parse({
+    artifactKind: "ReleasePacket",
     workItemId: scopedWorkItem.id,
     projectId: scopedWorkItem.projectId,
     repo: scopedWorkItem.repo,
@@ -604,17 +653,38 @@ export async function performAutonomousRelease(workItem: WorkItem, previousArtif
       ? "Autonomous release gates passed. Merge, tag, release verification, local pull, cleanup, and sync confirmation may proceed."
       : `Release blocked: ${[...decision.requiredFixes, releaseCommand && !releaseCommand.ok ? releaseCommand.summary : ""].filter(Boolean).join("; ")}`,
     decisions: releaseAllowed
-      ? [...decision.reasons, releaseCommand?.summary || "Configured release command completed.", "Release proof recorded after the release command completed."]
-      : [...preReleaseDecision.requiredFixes, ...decision.requiredFixes, releaseCommand && !releaseCommand.ok ? releaseCommand.summary : ""].filter(Boolean),
+      ? [
+          ...decision.reasons,
+          releaseCommand?.summary || "Configured release command completed.",
+          "Release proof recorded after the release command completed."
+        ]
+      : [
+          ...preReleaseDecision.requiredFixes,
+          ...decision.requiredFixes,
+          releaseCommand && !releaseCommand.ok ? releaseCommand.summary : ""
+        ].filter(Boolean),
     risks: [
       ...previousArtifacts.flatMap((artifact) => artifact.risks),
       ...syncReasons,
-      ...(releaseCommand && !releaseCommand.ok ? [releaseCommand.summary] : [])
+      ...(releaseCommand && !releaseCommand.ok ? [releaseCommand.summary] : []),
+      ...(postReleaseHealth && !postReleaseHealth.ok ? [postReleaseHealth.summary] : []),
+      ...(rollbackCommand && !rollbackCommand.ok ? [rollbackCommand.summary] : [])
     ],
     filesChanged: previousArtifacts.flatMap((artifact) => artifact.filesChanged),
-    testsRun: ["local checks", "GitHub Actions", "secret scan", `release-proof:${releaseProofPresent ? "present" : "missing"}`, "release verification", ...(releaseCommand ? [`release:${releaseCommand.ok ? "passed" : "failed"}`] : [])],
+    testsRun: [
+      "local checks",
+      "GitHub Actions",
+      "secret scan",
+      `release-proof:${releaseProofPresent ? "present" : "missing"}`,
+      "release verification",
+      ...(releaseCommand ? [`release:${releaseCommand.ok ? "passed" : "failed"}`] : []),
+      ...(postReleaseHealth ? [`post-release-health:${postReleaseHealth.ok ? "passed" : "failed"}`] : []),
+      ...(rollbackCommand ? [`rollback:${rollbackCommand.ok ? "passed" : "failed"}`] : [])
+    ],
     releaseReadiness: releaseAllowed ? "ready" : "not_ready",
     nextStage: releaseAllowed ? "CLOSED" : "BLOCKED",
+    bodyMd: releasePacket.releaseNotes,
+    bodyJson: releasePacket,
     createdAt: new Date().toISOString()
   });
   await persistArtifact(artifact);
@@ -662,15 +732,13 @@ async function readGitEvidence(workItem: WorkItem, config: TargetRepoConfig): Pr
 async function readRuntimeHealthEvidence(): Promise<EvidenceItem> {
   const required = envFlag("AGENT_REQUIRE_RUNTIME_HEALTH");
   const configuredUrl = process.env.CONTROLLER_HEALTH_URL;
-  const urls = configuredUrl
-    ? [configuredUrl]
-    : ["http://controller:4310/health", "http://127.0.0.1:4310/health"];
+  const urls = configuredUrl ? [configuredUrl] : ["http://controller:4310/health", "http://127.0.0.1:4310/health"];
   const failures: string[] = [];
 
   for (const url of urls) {
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(2500) });
-      const body = await response.json().catch(() => ({})) as Record<string, unknown>;
+      const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
       if (response.ok && body.ok !== false) {
         return {
           name: "docker-runtime-health",
@@ -692,7 +760,9 @@ async function readRuntimeHealthEvidence(): Promise<EvidenceItem> {
     name: "docker-runtime-health",
     ok: !required,
     required,
-    summary: required ? summary : `${summary} Recorded as non-blocking evidence because AGENT_REQUIRE_RUNTIME_HEALTH is not enabled.`,
+    summary: required
+      ? summary
+      : `${summary} Recorded as non-blocking evidence because AGENT_REQUIRE_RUNTIME_HEALTH is not enabled.`,
     tests: [`runtime-health:${required ? "failed" : "unconfirmed"}`],
     risks: required ? [summary] : []
   };
@@ -715,12 +785,15 @@ async function readGitHubActionsEvidence(config: TargetRepoConfig): Promise<Evid
   }
 
   try {
-    const result = await exec(`gh run list --repo ${repo} --branch ${branch} --limit 1 --json status,conclusion,url,workflowName,headSha`, {
-      cwd: repoPath,
-      env: githubAuthEnv(),
-      timeout: 30_000,
-      maxBuffer: 1024 * 1024
-    });
+    const result = await exec(
+      `gh run list --repo ${repo} --branch ${branch} --limit 1 --json status,conclusion,url,workflowName,headSha`,
+      {
+        cwd: repoPath,
+        env: githubAuthEnv(),
+        timeout: 30_000,
+        maxBuffer: 1024 * 1024
+      }
+    );
     const runs = JSON.parse(result.stdout || "[]") as Array<Record<string, unknown>>;
     const latest = runs[0];
     if (!latest) {
@@ -761,15 +834,19 @@ async function readGitHubActionsEvidence(config: TargetRepoConfig): Promise<Evid
   }
 }
 
-async function collectReleaseSignal(workItem: WorkItem, config: TargetRepoConfig, previousArtifacts: StageArtifact[]): Promise<{ signal: VerificationSignal; syncReasons: string[] }> {
+async function collectReleaseSignal(
+  workItem: WorkItem,
+  config: TargetRepoConfig,
+  previousArtifacts: StageArtifact[]
+): Promise<{ signal: VerificationSignal; syncReasons: string[] }> {
   const [gitSyncInput, githubActions] = await Promise.all([
     readGitSyncInput(workItem, config),
     readGitHubActionsEvidence(config)
   ]);
   const sync = evaluateGitSync(gitSyncInput);
   const status = await (await getActivityStore()).getStatus();
-  const verificationPassed = previousArtifacts.some((artifact) =>
-    artifact.stage === "VERIFY" && artifact.status === "passed" && artifact.releaseReadiness === "ready"
+  const verificationPassed = previousArtifacts.some(
+    (artifact) => artifact.stage === "VERIFY" && artifact.status === "passed" && artifact.releaseReadiness === "ready"
   );
   const securityPassed = previousArtifacts.some((artifact) =>
     artifact.testsRun.some((test) => /^security:passed$/i.test(test))
@@ -845,18 +922,30 @@ async function runReleaseCommand(config: TargetRepoConfig, workItem: WorkItem): 
   return runConfiguredCommand(config, "release", config.commands.release, workItem);
 }
 
-async function runConfiguredCommand(config: TargetRepoConfig, name: string, command: string, workItem?: WorkItem): Promise<CommandResult> {
+async function runConfiguredCommand(
+  config: TargetRepoConfig,
+  name: string,
+  command: string,
+  workItem?: WorkItem
+): Promise<CommandResult> {
+  const releaseTag = workItem ? releaseTagForWorkItem(workItem) : "";
+  const rollback = workItem ? rollbackPlanForRelease(workItem, config, releaseTag) : null;
   try {
     await exec(command, {
       cwd: config.repo.localPath || process.cwd(),
       env: {
         ...githubAuthEnv(),
-        ...(workItem ? {
-          AGENT_WORK_ITEM_ID: workItem.id,
-          AGENT_PROJECT_ID: workItem.projectId || "",
-          AGENT_REPO: workItem.repo || `${config.repo.owner}/${config.repo.name}`,
-          AGENT_DEFAULT_BRANCH: config.repo.defaultBranch
-        } : {})
+        ...(workItem
+          ? {
+              AGENT_WORK_ITEM_ID: workItem.id,
+              AGENT_PROJECT_ID: workItem.projectId || "",
+              AGENT_REPO: workItem.repo || `${config.repo.owner}/${config.repo.name}`,
+              AGENT_DEFAULT_BRANCH: config.repo.defaultBranch,
+              AGENT_RELEASE_TAG: releaseTag,
+              AGENT_ROLLBACK_COMMAND: rollback?.command || "",
+              AGENT_ROLLBACK_VERIFICATION: rollback?.verification || ""
+            }
+          : {})
       },
       timeout: Number(process.env.AGENT_COMMAND_TIMEOUT_MS || 300_000),
       maxBuffer: 1024 * 1024 * 8
@@ -878,7 +967,11 @@ async function hasReleaseProof(workItem: WorkItem, config: TargetRepoConfig): Pr
   }
 }
 
-async function writeReleaseProof(workItem: WorkItem, config: TargetRepoConfig, releaseCommand: CommandResult): Promise<void> {
+async function writeReleaseProof(
+  workItem: WorkItem,
+  config: TargetRepoConfig,
+  releaseCommand: CommandResult
+): Promise<void> {
   const proofFile = resolveReleaseProofFile(workItem, config);
   const proof = {
     workItemId: workItem.id,
@@ -912,7 +1005,10 @@ async function getActivityStore(): Promise<ControllerStore> {
   return storePromise;
 }
 
-async function persistArtifact(artifact: StageArtifact, options: { updateWorkItemState?: boolean } = {}): Promise<void> {
+async function persistArtifact(
+  artifact: StageArtifact,
+  options: { updateWorkItemState?: boolean } = {}
+): Promise<void> {
   const store = await getActivityStore();
   await store.addArtifact(artifact);
   await store.addEvent({
@@ -920,12 +1016,18 @@ async function persistArtifact(artifact: StageArtifact, options: { updateWorkIte
     stage: artifact.stage,
     ownerAgent: artifact.ownerAgent,
     level: artifact.status === "blocked" || artifact.status === "failed" ? "error" : "info",
-    type: artifact.stage === "RELEASE" ? "release" : artifact.stage === "VERIFY" ? "verification" : artifact.status === "failed" || artifact.status === "blocked" ? "stage_failed" : "stage_completed",
+    type:
+      artifact.stage === "RELEASE"
+        ? "release"
+        : artifact.stage === "VERIFY"
+          ? "verification"
+          : artifact.status === "failed" || artifact.status === "blocked"
+            ? "stage_failed"
+            : "stage_completed",
     message: artifact.summary
   });
-  const nextState = artifact.status === "blocked" || artifact.status === "failed"
-    ? "BLOCKED"
-    : artifact.nextStage || artifact.stage;
+  const nextState =
+    artifact.status === "blocked" || artifact.status === "failed" ? "BLOCKED" : artifact.nextStage || artifact.stage;
   if (options.updateWorkItemState !== false) {
     await store.updateWorkItemState(artifact.workItemId, nextState);
   }
@@ -960,10 +1062,12 @@ async function readTeamBusMessages(store: ControllerStore, workItemId: string): 
         message: event.message
       }));
   } catch (error) {
-    return [{
-      type: "system",
-      message: `Team bus read unavailable through the current store interface: ${error instanceof Error ? error.message : String(error)}`
-    }];
+    return [
+      {
+        type: "system",
+        message: `Team bus read unavailable through the current store interface: ${error instanceof Error ? error.message : String(error)}`
+      }
+    ];
   }
 }
 
@@ -980,17 +1084,20 @@ async function writeTeamBusMessage(
 ): Promise<void> {
   try {
     if (input.projectId && input.repo) {
-      await store.addTeamBusMessage({ projectId: input.projectId, repo: input.repo }, {
-        workItemId: input.workItemId,
-        from: input.ownerAgent,
-        kind: input.stage === "BLOCKED" ? "blocker" : input.stage === "CLOSED" ? "handoff" : "status",
-        topic: input.stage,
-        body: input.message,
-        payload: {
-          stage: input.stage,
-          ownerAgent: input.ownerAgent
+      await store.addTeamBusMessage(
+        { projectId: input.projectId, repo: input.repo },
+        {
+          workItemId: input.workItemId,
+          from: input.ownerAgent,
+          kind: input.stage === "BLOCKED" ? "blocker" : input.stage === "CLOSED" ? "handoff" : "status",
+          topic: input.stage,
+          body: input.message,
+          payload: {
+            stage: input.stage,
+            ownerAgent: input.ownerAgent
+          }
         }
-      });
+      );
     }
     await store.addEvent({
       workItemId: input.workItemId,
@@ -1025,9 +1132,9 @@ async function persistProposal(
       recommendation: artifact.decisions[0] || artifact.summary,
       acceptanceCriteria: workItem.acceptanceCriteria,
       implementationPlan: artifact.decisions,
-      validationPlan: artifact.testsRun.length ? artifact.testsRun : [
-        "Verify acceptance criteria, regression behavior, release gates, rollback evidence, and local/GitHub sync."
-      ],
+      validationPlan: artifact.testsRun.length
+        ? artifact.testsRun
+        : ["Verify acceptance criteria, regression behavior, release gates, rollback evidence, and local/GitHub sync."],
       risks: artifact.risks,
       status
     });
@@ -1073,9 +1180,7 @@ async function updateLoopRun(
 }
 
 function strictScopeForWorkItem(workItem: Pick<WorkItem, "projectId" | "repo">): StrictProjectScope | null {
-  return workItem.projectId && workItem.repo
-    ? { projectId: workItem.projectId, repo: workItem.repo }
-    : null;
+  return workItem.projectId && workItem.repo ? { projectId: workItem.projectId, repo: workItem.repo } : null;
 }
 
 function loopRunId(workItem: Pick<WorkItem, "id">): string {
@@ -1099,9 +1204,9 @@ function buildLoopContext(previousArtifacts: StageArtifact[]): string[] {
   if (!previousArtifacts.length) {
     return ["No previous artifacts have been produced in this loop."];
   }
-  return previousArtifacts.slice(-8).map((artifact) =>
-    `${artifact.stage}/${artifact.ownerAgent}/${artifact.status}: ${artifact.summary}`
-  );
+  return previousArtifacts
+    .slice(-8)
+    .map((artifact) => `${artifact.stage}/${artifact.ownerAgent}/${artifact.status}: ${artifact.summary}`);
 }
 
 function createDefaultReleaseConfig(): TargetRepoConfig {
@@ -1126,7 +1231,7 @@ function createDefaultReleaseConfig(): TargetRepoConfig {
       test: "npm test --if-present",
       build: "npm run build --if-present",
       security: "npm audit --audit-level=high",
-      release: "gh workflow run release.yml --ref main"
+      release: 'gh release create "$AGENT_RELEASE_TAG" --notes-file release/notes.md --verify-tag'
     },
     context: {
       includeDefaultContextDir: true,
@@ -1197,7 +1302,9 @@ async function loadReleaseConfig(workItem?: WorkItem): Promise<TargetRepoConfig>
     }
     const projectConfig = await loadConfigFromProjectConnection(workItem);
     if (projectConfig) return projectConfig;
-    throw new Error(`Work item ${workItem.id} is scoped to ${workItem.projectId || workItem.repo}, but ${configPath} points to a different project.`);
+    throw new Error(
+      `Work item ${workItem.id} is scoped to ${workItem.projectId || workItem.repo}, but ${configPath} points to a different project.`
+    );
   } catch (error) {
     if (workItem?.projectId || workItem?.repo) {
       const projectConfig = await loadConfigFromProjectConnection(workItem);
@@ -1206,12 +1313,16 @@ async function loadReleaseConfig(workItem?: WorkItem): Promise<TargetRepoConfig>
     if (/^(1|true|yes)$/i.test(process.env.AGENT_TEAM_ALLOW_DEFAULT_CONFIG || "")) {
       return createDefaultReleaseConfig();
     }
-    throw new Error([
-      `Target repo config could not be loaded from ${configPath}.`,
-      "Create agent-team.config.yaml for the repository this team should operate on,",
-      "or set AGENT_TEAM_ALLOW_DEFAULT_CONFIG=true only for local smoke tests.",
-      error instanceof Error ? `Original error: ${error.message}` : ""
-    ].filter(Boolean).join(" "));
+    throw new Error(
+      [
+        `Target repo config could not be loaded from ${configPath}.`,
+        "Create agent-team.config.yaml for the repository this team should operate on,",
+        "or set AGENT_TEAM_ALLOW_DEFAULT_CONFIG=true only for local smoke tests.",
+        error instanceof Error ? `Original error: ${error.message}` : ""
+      ]
+        .filter(Boolean)
+        .join(" ")
+    );
   }
 }
 
@@ -1219,7 +1330,8 @@ async function loadConfigFromProjectConnection(workItem: WorkItem): Promise<Targ
   const store = await getActivityStore();
   const connections = await store.listProjectConnections();
   const match = connections.find((connection) => {
-    if (workItem.projectId && workItem.repo) return connection.projectId === workItem.projectId && connection.repo === workItem.repo;
+    if (workItem.projectId && workItem.repo)
+      return connection.projectId === workItem.projectId && connection.repo === workItem.repo;
     return connection.projectId === workItem.projectId || connection.repo === workItem.repo;
   });
   return match ? targetRepoConfigFromProjectConnection(match) : null;
@@ -1240,7 +1352,8 @@ async function loadConfigFromProjectFile(workItem: WorkItem): Promise<TargetRepo
 }
 
 function resolveEmergencyStopFile(config?: TargetRepoConfig): string {
-  const configured = process.env.EMERGENCY_STOP_FILE || config?.release.emergencyStopFile || ".agent-team/emergency-stop";
+  const configured =
+    process.env.EMERGENCY_STOP_FILE || config?.release.emergencyStopFile || ".agent-team/emergency-stop";
   if (path.isAbsolute(configured)) return configured;
   return path.resolve(config?.repo.localPath || process.cwd(), configured);
 }
@@ -1254,11 +1367,35 @@ function automationBranchPrefix(workItem: WorkItem): string {
   return `agent/${safeId || "work-item"}`;
 }
 
+function releaseTagForWorkItem(workItem: WorkItem): string {
+  const configured = process.env.AGENT_RELEASE_TAG?.trim();
+  if (configured) return assertSafeGitRef(configured, "release tag");
+  const safeId = safeFileSegment(workItem.id).slice(0, 80) || "work-item";
+  return assertSafeGitRef(`agent-${safeId}`, "release tag");
+}
+
+function rollbackPlanForRelease(
+  workItem: WorkItem,
+  config: TargetRepoConfig,
+  releaseTag: string
+): { command: string; verification: string } {
+  const safeTag = assertSafeGitRef(releaseTag, "release tag");
+  const defaultBranch = assertSafeGitRef(config.repo.defaultBranch, "default branch");
+  return {
+    command: process.env.AGENT_ROLLBACK_COMMAND?.trim() || `gh release delete "${safeTag}" --yes --cleanup-tag`,
+    verification:
+      process.env.AGENT_ROLLBACK_VERIFICATION?.trim() ||
+      `Verify gh release view "${safeTag}" fails, git ls-remote --tags origin "refs/tags/${safeTag}" returns no tag, and ${defaultBranch} health gates pass for ${workItem.id}.`
+  };
+}
+
 async function countAutomationBranches(repoPath: string, branchPrefix: string): Promise<number> {
   const patterns = [branchPrefix, `${branchPrefix}-*`];
   const outputs = await Promise.all([
     ...patterns.map((pattern) => execGit(`git branch --list "${pattern}" --format="%(refname:short)"`, repoPath)),
-    ...patterns.map((pattern) => execGit(`git branch --remotes --list "origin/${pattern}" --format="%(refname:short)"`, repoPath))
+    ...patterns.map((pattern) =>
+      execGit(`git branch --remotes --list "origin/${pattern}" --format="%(refname:short)"`, repoPath)
+    )
   ]);
   const branches = new Set(
     outputs
@@ -1285,9 +1422,11 @@ function uniqueStrings(values: string[]): string[] {
 }
 
 function safeFileSegment(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "") || "project";
+  return (
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "") || "project"
+  );
 }

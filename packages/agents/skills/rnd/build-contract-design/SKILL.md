@@ -6,6 +6,7 @@ priority: 80
 trigger:
   stages: [CONTRACT]
 ---
+
 # Build Contract Design
 
 Purpose: Give frontend and backend agents a stable implementation boundary.
@@ -16,6 +17,7 @@ Purpose: Give frontend and backend agents a stable implementation boundary.
 4. Keep the contract small enough to build in one loop.
 
 Checklist:
+
 - Frontend and backend responsibilities are separated.
 - Acceptance criteria map to checks.
 - Risks have owners.

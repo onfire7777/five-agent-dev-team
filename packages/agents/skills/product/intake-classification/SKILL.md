@@ -6,6 +6,7 @@ priority: 70
 trigger:
   stages: [INTAKE]
 ---
+
 # Intake Classification
 
 Purpose: Convert a request into a bounded work item.
@@ -16,6 +17,7 @@ Purpose: Convert a request into a bounded work item.
 4. Push ambiguity into open questions or proposal risks.
 
 Checklist:
+
 - Scope in and out are clear.
 - Acceptance criteria are testable.
 - Routing flags match the work.

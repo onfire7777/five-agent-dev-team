@@ -27,6 +27,19 @@ test.describe("dashboard smoke", () => {
     await expect(page.getByTestId("active-loop")).toBeVisible();
     await expect(page.getByTestId("release-panel")).toBeVisible();
 
+    await page.getByText("Work options").click();
+    await expect(page.getByLabel("Type")).toBeVisible();
+    await expect(page.getByLabel("Priority")).toBeVisible();
+    await expect(page.getByLabel("Risk")).toBeVisible();
+    await expect(page.getByLabel("Acceptance criteria")).toBeVisible();
+    await expect(page.getByLabel("Agent routing")).toBeVisible();
+
+    const insightValues = await page
+      .getByTestId("insight-select")
+      .locator("option")
+      .evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value));
+    expect(insightValues).toEqual(["release", "team", "memory", "events"]);
+
     await page.getByTestId("insight-select").selectOption("team");
     await expect(page.getByTestId("team-panel")).toBeVisible();
 

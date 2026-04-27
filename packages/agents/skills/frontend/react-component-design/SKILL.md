@@ -7,6 +7,7 @@ trigger:
   stages: [FRONTEND_BUILD]
   keywords: [react, ui, dashboard, component]
 ---
+
 # React Component Design
 
 Purpose: Build compact, accessible React UI aligned with the contract.
@@ -17,6 +18,7 @@ Purpose: Build compact, accessible React UI aligned with the contract.
 4. Verify desktop and mobile behavior.
 
 Checklist:
+
 - Components fit existing app conventions.
 - Loading, empty, error, and offline states are real.
 - Controls update state or call APIs.

@@ -62,7 +62,11 @@ export async function deleteStoredGitHubAuth(): Promise<void> {
 
 export function githubTokenSource(): GitHubTokenSource | null {
   if (process.env.GITHUB_PERSONAL_ACCESS_TOKEN) {
-    return { source: "env", sourceName: "GITHUB_PERSONAL_ACCESS_TOKEN", token: process.env.GITHUB_PERSONAL_ACCESS_TOKEN };
+    return {
+      source: "env",
+      sourceName: "GITHUB_PERSONAL_ACCESS_TOKEN",
+      token: process.env.GITHUB_PERSONAL_ACCESS_TOKEN
+    };
   }
   if (process.env.GH_TOKEN) {
     return { source: "env", sourceName: "GH_TOKEN", token: process.env.GH_TOKEN };

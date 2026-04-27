@@ -1,5 +1,12 @@
 import type { AgentDefinition } from "./definitions";
-import type { McpServerConfig, MemoryRecord, StageArtifact, TargetRepoConfig, WorkItem, WorkItemState } from "../../shared/src";
+import type {
+  McpServerConfig,
+  MemoryRecord,
+  StageArtifact,
+  TargetRepoConfig,
+  WorkItem,
+  WorkItemState
+} from "../../shared/src";
 import { assembleCanonicalPrompt } from "./prompt";
 import { loadTriggeredSkills, type LoadedSkill } from "./skills";
 import {
@@ -93,7 +100,11 @@ async function prepareAgentRun(definition: AgentDefinition, context: AgentRunCon
   };
 }
 
-async function runLiveOpenAIAgent(definition: AgentDefinition, context: AgentRunContext, preparation: AgentRunPreparation): Promise<AgentRunResult> {
+async function runLiveOpenAIAgent(
+  definition: AgentDefinition,
+  context: AgentRunContext,
+  preparation: AgentRunPreparation
+): Promise<AgentRunResult> {
   const sdk = await import("@openai/agents");
   const primaryModel = modelForAgent(definition, context.targetRepoConfig);
   const fallbackModel = fallbackModelForAgent(context.targetRepoConfig);
@@ -145,7 +156,9 @@ async function runLiveOpenAIAgentWithModel(
 
     const result = await run(agent, preparation.prompt);
     const rawOutput = String(result?.finalOutput ?? result?.output ?? result ?? "");
-    const artifact = parseLiveArtifact(definition, context, rawOutput, preparation) || createInvalidLiveArtifact(definition, context, rawOutput, preparation);
+    const artifact =
+      parseLiveArtifact(definition, context, rawOutput, preparation) ||
+      createInvalidLiveArtifact(definition, context, rawOutput, preparation);
     return { artifact, rawOutput, live: true };
   } finally {
     await mcpSession?.close();
@@ -168,11 +181,13 @@ function fallbackModelForAgent(config?: TargetRepoConfig): string | null {
 function createConfiguredMcpServers(sdk: any, definition: AgentDefinition, context: AgentRunContext): any[] {
   if (!context.targetRepoConfig) return [];
   return context.targetRepoConfig.integrations.mcpServers
-    .filter((server) => shouldActivateCapability(server.enabled, server.activation, {
-      workItem: context.workItem,
-      stage: context.stage,
-      agent: definition.role
-    }))
+    .filter((server) =>
+      shouldActivateCapability(server.enabled, server.activation, {
+        workItem: context.workItem,
+        stage: context.stage,
+        agent: definition.role
+      })
+    )
     .map((server) => createMcpServer(sdk, server));
 }
 
@@ -192,10 +207,13 @@ function shouldUseHostedWebSearch(definition: AgentDefinition, context: AgentRun
     stage: context.stage,
     agent: definition.role
   };
-  return context.targetRepoConfig.integrations.capabilityPacks.some((pack) =>
-    pack.name === "deep-web-research" && shouldActivateCapability(pack.enabled, pack.activation, input)
-  ) || context.targetRepoConfig.integrations.mcpServers.some((server) =>
-    server.category === "web_search" && shouldActivateCapability(server.enabled, server.activation, input)
+  return (
+    context.targetRepoConfig.integrations.capabilityPacks.some(
+      (pack) => pack.name === "deep-web-research" && shouldActivateCapability(pack.enabled, pack.activation, input)
+    ) ||
+    context.targetRepoConfig.integrations.mcpServers.some(
+      (server) => server.category === "web_search" && shouldActivateCapability(server.enabled, server.activation, input)
+    )
   );
 }
 
@@ -245,10 +263,12 @@ function createMcpServer(sdk: any, server: McpServerConfig): any {
 }
 
 export function resolveMcpEnv(env: Record<string, string>): Record<string, string> {
-  const resolved = Object.fromEntries(Object.entries(env).map(([key, value]) => [
-    key,
-    value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_match, name: string) => process.env[name] || "")
-  ]));
+  const resolved = Object.fromEntries(
+    Object.entries(env).map(([key, value]) => [
+      key,
+      value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_match, name: string) => process.env[name] || "")
+    ])
+  );
 
   if ("GITHUB_PERSONAL_ACCESS_TOKEN" in resolved && !resolved.GITHUB_PERSONAL_ACCESS_TOKEN) {
     resolved.GITHUB_PERSONAL_ACCESS_TOKEN = githubToken();
@@ -328,7 +348,10 @@ function createTemplateArtifact(
     decisions: templateDecisions(definition, context),
     risks: templateRisks(context),
     filesChanged: [],
-    testsRun: context.stage === "VERIFY" || context.stage === "RELEASE" ? ["configured local checks", "GitHub Actions gate"] : [],
+    testsRun:
+      context.stage === "VERIFY" || context.stage === "RELEASE"
+        ? ["configured local checks", "GitHub Actions gate"]
+        : [],
     releaseReadiness: context.stage === "RELEASE" ? "ready" : "unknown",
     nextStage,
     promptHash: preparation.promptHash,
@@ -354,12 +377,8 @@ function createInvalidLiveArtifact(
     status: "failed",
     title: `${definition.shortName} returned invalid output for ${context.stage}`,
     summary: `Live agent output could not be parsed into a valid stage artifact. The workflow is blocked so invalid or incomplete agent output cannot advance implementation.`,
-    decisions: [
-      "Block this stage until the agent returns valid JSON matching the StageArtifact schema."
-    ],
-    risks: [
-      `Invalid live output preview: ${rawOutput.trim().slice(0, 500) || "empty output"}`
-    ],
+    decisions: ["Block this stage until the agent returns valid JSON matching the StageArtifact schema."],
+    risks: [`Invalid live output preview: ${rawOutput.trim().slice(0, 500) || "empty output"}`],
     filesChanged: [],
     testsRun: [],
     releaseReadiness: "not_ready",
@@ -406,7 +425,9 @@ function templateSummary(definition: AgentDefinition, context: AgentRunContext):
 
 function templateDecisions(definition: AgentDefinition, context: AgentRunContext): string[] {
   if (definition.role === "product-delivery-orchestrator") {
-    return [`Route ${context.workItem.id} through ${context.workItem.rndNeeded ? "R&D" : "direct build"} before verification.`];
+    return [
+      `Route ${context.workItem.id} through ${context.workItem.rndNeeded ? "R&D" : "direct build"} before verification.`
+    ];
   }
   if (definition.role === "rnd-architecture-innovation") {
     return ["Use a locked frontend/backend contract before parallel implementation."];
@@ -417,7 +438,9 @@ function templateDecisions(definition: AgentDefinition, context: AgentRunContext
   if (definition.role === "backend-systems-engineering") {
     return ["Implement APIs, data behavior, observability, and backend tests against the contract."];
   }
-  return ["Release can proceed only when local checks, GitHub Actions, security, privacy, rollback, and sync gates pass."];
+  return [
+    "Release can proceed only when local checks, GitHub Actions, security, privacy, rollback, and sync gates pass."
+  ];
 }
 
 function templateRisks(context: AgentRunContext): string[] {

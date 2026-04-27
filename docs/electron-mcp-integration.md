@@ -77,15 +77,15 @@ Candidate module:
 
 Initial tool surface:
 
-| Name | Kind | Controller mapping | Safety |
-| --- | --- | --- | --- |
-| `agent_team_get_status` | read | `GET /api/status` | Safe, structured output. |
-| `agent_team_list_work_items` | read | `GET /api/work-items` | Safe, allow filters later. |
-| `agent_team_list_events` | read | `GET /api/events?limit=n` | Safe, limit and redact. |
-| `agent_team_list_memories` | read | `GET /api/memories` | Safe, optional `workItemId`. |
-| `agent_team_create_work_item` | write | `POST /api/work-items` | Requires explicit user approval in MCP host. Mirrors existing schema. |
-| `agent_team_emergency_stop` | control | `POST /api/emergency-stop` | Sensitive, require reason and explicit approval. |
-| `agent_team_emergency_resume` | control | `POST /api/emergency-resume` | Sensitive, explicit approval. |
+| Name                          | Kind    | Controller mapping           | Safety                                                                |
+| ----------------------------- | ------- | ---------------------------- | --------------------------------------------------------------------- |
+| `agent_team_get_status`       | read    | `GET /api/status`            | Safe, structured output.                                              |
+| `agent_team_list_work_items`  | read    | `GET /api/work-items`        | Safe, allow filters later.                                            |
+| `agent_team_list_events`      | read    | `GET /api/events?limit=n`    | Safe, limit and redact.                                               |
+| `agent_team_list_memories`    | read    | `GET /api/memories`          | Safe, optional `workItemId`.                                          |
+| `agent_team_create_work_item` | write   | `POST /api/work-items`       | Requires explicit user approval in MCP host. Mirrors existing schema. |
+| `agent_team_emergency_stop`   | control | `POST /api/emergency-stop`   | Sensitive, require reason and explicit approval.                      |
+| `agent_team_emergency_resume` | control | `POST /api/emergency-resume` | Sensitive, explicit approval.                                         |
 
 Resources can come after tools prove stable:
 

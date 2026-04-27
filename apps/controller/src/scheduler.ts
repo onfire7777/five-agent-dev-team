@@ -8,15 +8,23 @@ export function createSchedulerPolicy(): SchedulerPolicy {
     mode: (process.env.AGENT_EXECUTION_MODE as any) || DEFAULT_SCHEDULER_POLICY.mode,
     continuous: process.env.SCHEDULER_ENABLED !== "false",
     pollIntervalSeconds: Number(process.env.SCHEDULER_POLL_SECONDS || DEFAULT_SCHEDULER_POLICY.pollIntervalSeconds),
-    maxConcurrentWorkflows: Number(process.env.MAX_CONCURRENT_WORKFLOWS || DEFAULT_SCHEDULER_POLICY.maxConcurrentWorkflows),
-    maxConcurrentAgentRuns: Number(process.env.MAX_CONCURRENT_AGENT_RUNS || DEFAULT_SCHEDULER_POLICY.maxConcurrentAgentRuns),
-    maxConcurrentRepoWrites: Number(process.env.MAX_CONCURRENT_REPO_WRITES || DEFAULT_SCHEDULER_POLICY.maxConcurrentRepoWrites),
-    completeLoopBeforeNextWorkItem: process.env.COMPLETE_LOOP_BEFORE_NEXT_WORK_ITEM === undefined
-      ? DEFAULT_SCHEDULER_POLICY.completeLoopBeforeNextWorkItem
-      : /^(1|true|yes)$/i.test(process.env.COMPLETE_LOOP_BEFORE_NEXT_WORK_ITEM),
-    allowParallelWorkItemsWhenDisjoint: process.env.ALLOW_PARALLEL_DISJOINT_PROJECTS === undefined
-      ? DEFAULT_SCHEDULER_POLICY.allowParallelWorkItemsWhenDisjoint
-      : /^(1|true|yes)$/i.test(process.env.ALLOW_PARALLEL_DISJOINT_PROJECTS)
+    maxConcurrentWorkflows: Number(
+      process.env.MAX_CONCURRENT_WORKFLOWS || DEFAULT_SCHEDULER_POLICY.maxConcurrentWorkflows
+    ),
+    maxConcurrentAgentRuns: Number(
+      process.env.MAX_CONCURRENT_AGENT_RUNS || DEFAULT_SCHEDULER_POLICY.maxConcurrentAgentRuns
+    ),
+    maxConcurrentRepoWrites: Number(
+      process.env.MAX_CONCURRENT_REPO_WRITES || DEFAULT_SCHEDULER_POLICY.maxConcurrentRepoWrites
+    ),
+    completeLoopBeforeNextWorkItem:
+      process.env.COMPLETE_LOOP_BEFORE_NEXT_WORK_ITEM === undefined
+        ? DEFAULT_SCHEDULER_POLICY.completeLoopBeforeNextWorkItem
+        : /^(1|true|yes)$/i.test(process.env.COMPLETE_LOOP_BEFORE_NEXT_WORK_ITEM),
+    allowParallelWorkItemsWhenDisjoint:
+      process.env.ALLOW_PARALLEL_DISJOINT_PROJECTS === undefined
+        ? DEFAULT_SCHEDULER_POLICY.allowParallelWorkItemsWhenDisjoint
+        : /^(1|true|yes)$/i.test(process.env.ALLOW_PARALLEL_DISJOINT_PROJECTS)
   };
 }
 
@@ -38,10 +46,7 @@ export function startSmartScheduler(store: ControllerStore): NodeJS.Timeout | nu
     const durableActiveIds = new Set([...activeIds, ...activeClaims]);
     const activeWork = status.workItems.filter((item) => !["NEW", "CLOSED", "BLOCKED"].includes(item.state));
     const claimedWork = status.workItems.filter((item) => durableActiveIds.has(item.id));
-    const activeIdsForCapacity = new Set([
-      ...durableActiveIds,
-      ...activeWork.map((item) => item.id)
-    ]);
+    const activeIdsForCapacity = new Set([...durableActiveIds, ...activeWork.map((item) => item.id)]);
     const activeScopeItems = [...activeWork, ...claimedWork];
     if (
       policy.completeLoopBeforeNextWorkItem &&
@@ -53,24 +58,26 @@ export function startSmartScheduler(store: ControllerStore): NodeJS.Timeout | nu
 
     const queuedItems = status.workItems.filter((item) => item.state === "NEW");
     const nextItems = selectParallelWorkItems(queuedItems, policy, activeIdsForCapacity, activeScopeItems);
-    await Promise.all(nextItems.map(async (next) => {
-      const claimed = await store.claimWorkItemForWorkflow(next.id);
-      if (!claimed) return;
-      activeIds.add(next.id);
-      try {
-        const workflowId = await startAutonomousWorkflow(next);
-        if (workflowId) {
-          await store.updateWorkItemState(next.id, "INTAKE");
-        } else {
+    await Promise.all(
+      nextItems.map(async (next) => {
+        const claimed = await store.claimWorkItemForWorkflow(next.id);
+        if (!claimed) return;
+        activeIds.add(next.id);
+        try {
+          const workflowId = await startAutonomousWorkflow(next);
+          if (workflowId) {
+            await store.updateWorkItemState(next.id, "INTAKE");
+          } else {
+            await store.releaseWorkItemWorkflowClaim(next.id);
+          }
+        } catch (error) {
           await store.releaseWorkItemWorkflowClaim(next.id);
+          throw error;
+        } finally {
+          activeIds.delete(next.id);
         }
-      } catch (error) {
-        await store.releaseWorkItemWorkflowClaim(next.id);
-        throw error;
-      } finally {
-        activeIds.delete(next.id);
-      }
-    }));
+      })
+    );
   };
 
   const timer = setInterval(() => {

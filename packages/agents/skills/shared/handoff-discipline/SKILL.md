@@ -1,11 +1,19 @@
 ---
 id: handoff-discipline
 name: Handoff Discipline
-audience: [product-delivery-orchestrator, rnd-architecture-innovation, frontend-ux-engineering, backend-systems-engineering, quality-security-privacy-release]
+audience:
+  [
+    product-delivery-orchestrator,
+    rnd-architecture-innovation,
+    frontend-ux-engineering,
+    backend-systems-engineering,
+    quality-security-privacy-release
+  ]
 priority: 98
 trigger:
   always: true
 ---
+
 # Handoff Discipline
 
 Purpose: Produce machine-valid artifacts instead of free-form narration.
@@ -16,6 +24,7 @@ Purpose: Produce machine-valid artifacts instead of free-form narration.
 4. Keep projectId and repo on every artifact when scoped.
 
 Checklist:
+
 - Artifact validates.
 - Decisions are actionable.
 - Risks are honest.

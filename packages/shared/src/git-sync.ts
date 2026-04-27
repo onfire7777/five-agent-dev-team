@@ -20,4 +20,3 @@ export function evaluateGitSync(input: GitSyncInput): GitSyncResult {
   }
   return { synced: reasons.length === 0, reasons };
 }
-

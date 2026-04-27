@@ -35,9 +35,11 @@ export async function initializePlugins(config: TargetRepoConfig): Promise<Loade
 }
 
 export async function disposePlugins(plugins: LoadedPlugin[], cwd: string): Promise<void> {
-  await Promise.all(plugins.map(async ({ plugin }) => {
-    if (plugin.disposeCommand) await runLifecycleCommand(plugin.disposeCommand, cwd);
-  }));
+  await Promise.all(
+    plugins.map(async ({ plugin }) => {
+      if (plugin.disposeCommand) await runLifecycleCommand(plugin.disposeCommand, cwd);
+    })
+  );
 }
 
 export function mergePluginContributions(config: TargetRepoConfig, plugins: LoadedPlugin[]): TargetRepoConfig {
@@ -50,10 +52,7 @@ export function mergePluginContributions(config: TargetRepoConfig, plugins: Load
         ...config.integrations.capabilityPacks,
         ...plugins.flatMap((loaded) => loaded.contribution.capabilities)
       ],
-      mcpServers: [
-        ...config.integrations.mcpServers,
-        ...plugins.flatMap((loaded) => loaded.contribution.mcpServers)
-      ],
+      mcpServers: [...config.integrations.mcpServers, ...plugins.flatMap((loaded) => loaded.contribution.mcpServers)],
       plugins: config.integrations.plugins
     }
   };
@@ -69,4 +68,3 @@ async function runLifecycleCommand(command: string, cwd: string): Promise<void> 
     maxBuffer: 1024 * 1024
   });
 }
-

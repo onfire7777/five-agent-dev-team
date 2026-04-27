@@ -61,9 +61,42 @@ type ControllerStatus = {
   logs: StatusLogEntry[];
   sharedContext: SharedContextSummary;
 };
-type WorkItemCreateInput = Pick<WorkItem, "title" | "priority" | "requestType" | "dependencies" | "acceptanceCriteria" | "riskLevel" | "frontendNeeded" | "backendNeeded" | "rndNeeded"> & Partial<Pick<WorkItem, "projectId" | "repo">>;
+type WorkItemCreateInput = Pick<
+  WorkItem,
+  | "title"
+  | "priority"
+  | "requestType"
+  | "dependencies"
+  | "acceptanceCriteria"
+  | "riskLevel"
+  | "frontendNeeded"
+  | "backendNeeded"
+  | "rndNeeded"
+> &
+  Partial<Pick<WorkItem, "projectId" | "repo">>;
 type ProjectScope = { projectId?: string; repo?: string };
-type ProjectConnectionPersistInput = ProjectConnectionInput & Partial<Pick<ProjectConnection, "remoteUrl" | "ghAvailable" | "ghAuthed" | "githubCliVersion" | "githubMcpAvailable" | "githubMcpAuthenticated" | "githubMcpVersion" | "githubSdkConnected" | "githubSdkVersion" | "githubConnected" | "remoteMatches" | "defaultBranchVerified" | "capabilities" | "validationErrors" | "lastValidatedAt" | "status">>;
+type ProjectConnectionPersistInput = ProjectConnectionInput &
+  Partial<
+    Pick<
+      ProjectConnection,
+      | "remoteUrl"
+      | "ghAvailable"
+      | "ghAuthed"
+      | "githubCliVersion"
+      | "githubMcpAvailable"
+      | "githubMcpAuthenticated"
+      | "githubMcpVersion"
+      | "githubSdkConnected"
+      | "githubSdkVersion"
+      | "githubConnected"
+      | "remoteMatches"
+      | "defaultBranchVerified"
+      | "capabilities"
+      | "validationErrors"
+      | "lastValidatedAt"
+      | "status"
+    >
+  >;
 
 export type StrictProjectScope = { projectId: string; repo: string };
 
@@ -151,27 +184,57 @@ export type Proposal = StrictProjectScope & {
   updatedAt: string;
 };
 
-export type TeamBusMessageInput = Pick<TeamBusMessage, "from" | "kind" | "topic" | "body"> & Partial<Pick<TeamBusMessage, "id" | "workItemId" | "loopRunId" | "to" | "payload">>;
-export type LoopRunInput = Partial<Pick<LoopRun, "id" | "workItemId" | "directionId" | "opportunityId" | "proposalId" | "status" | "summary" | "closedAt">>;
-export type DirectionInput = Pick<Direction, "title" | "summary"> & Partial<Pick<Direction, "id" | "goals" | "constraints" | "acceptanceCriteria">>;
-export type OpportunityInput = Pick<Opportunity, "title" | "summary"> & Partial<Pick<Opportunity, "id" | "workItemId" | "source" | "priority" | "status" | "tags">>;
-export type ProposalInput = Pick<Proposal, "title" | "summary" | "recommendation"> & Partial<Pick<Proposal, "id" | "workItemId" | "loopRunId" | "opportunityId" | "researchFindings" | "options" | "acceptanceCriteria" | "implementationPlan" | "validationPlan" | "risks" | "status">>;
-export type ProposalDecisionInput = Pick<ProposalDecision, "decision" | "decidedBy" | "reason"> & Partial<Pick<ProposalDecision, "requestedChanges">>;
+export type TeamBusMessageInput = Pick<TeamBusMessage, "from" | "kind" | "topic" | "body"> &
+  Partial<Pick<TeamBusMessage, "id" | "workItemId" | "loopRunId" | "to" | "payload">>;
+export type LoopRunInput = Partial<
+  Pick<
+    LoopRun,
+    "id" | "workItemId" | "directionId" | "opportunityId" | "proposalId" | "status" | "summary" | "closedAt"
+  >
+>;
+export type DirectionInput = Pick<Direction, "title" | "summary"> &
+  Partial<Pick<Direction, "id" | "goals" | "constraints" | "acceptanceCriteria">>;
+export type OpportunityInput = Pick<Opportunity, "title" | "summary"> &
+  Partial<Pick<Opportunity, "id" | "workItemId" | "source" | "priority" | "status" | "tags">>;
+export type ProposalInput = Pick<Proposal, "title" | "summary" | "recommendation"> &
+  Partial<
+    Pick<
+      Proposal,
+      | "id"
+      | "workItemId"
+      | "loopRunId"
+      | "opportunityId"
+      | "researchFindings"
+      | "options"
+      | "acceptanceCriteria"
+      | "implementationPlan"
+      | "validationPlan"
+      | "risks"
+      | "status"
+    >
+  >;
+export type ProposalDecisionInput = Pick<ProposalDecision, "decision" | "decidedBy" | "reason"> &
+  Partial<Pick<ProposalDecision, "requestedChanges">>;
 
 export interface ControllerStore {
   init(): Promise<void>;
   getStatus(): Promise<ControllerStatus>;
   listWorkItems(): Promise<WorkItem[]>;
+  getWorkItemWithArtifacts(id: string): Promise<{ workItem: WorkItem; artifacts: StageArtifact[] } | null>;
   createWorkItem(input: WorkItemCreateInput): Promise<WorkItem>;
   updateWorkItemState(id: string, state: WorkItemState): Promise<void>;
   addArtifact(artifact: StageArtifact): Promise<void>;
-  addEvent(event: Omit<AgentEvent, "sequence" | "createdAt"> & Partial<Pick<AgentEvent, "sequence" | "createdAt">>): Promise<AgentEvent>;
+  getArtifact(id: string): Promise<StageArtifact | null>;
+  addEvent(
+    event: Omit<AgentEvent, "sequence" | "createdAt"> & Partial<Pick<AgentEvent, "sequence" | "createdAt">>
+  ): Promise<AgentEvent>;
   listEvents(afterSequence?: number, limit?: number): Promise<AgentEvent[]>;
   listMemories(workItemId?: string): Promise<MemoryRecord[]>;
   addMemories(memories: MemoryRecord[]): Promise<void>;
   listProjectConnections(): Promise<ProjectConnection[]>;
   upsertProjectConnection(input: ProjectConnectionPersistInput): Promise<ProjectConnection>;
   activateProjectConnection(id: string): Promise<ProjectConnection>;
+  deactivateProjectConnection(id: string): Promise<ProjectConnection>;
   listTeamBusMessages(scope: StrictProjectScope): Promise<TeamBusMessage[]>;
   addTeamBusMessage(scope: StrictProjectScope, input: TeamBusMessageInput): Promise<TeamBusMessage>;
   listLoopRuns(scope: StrictProjectScope): Promise<LoopRun[]>;
@@ -225,6 +288,15 @@ export class MemoryStore implements ControllerStore {
     return this.workItems;
   }
 
+  async getWorkItemWithArtifacts(id: string): Promise<{ workItem: WorkItem; artifacts: StageArtifact[] } | null> {
+    const workItem = this.workItems.find((item) => item.id === id);
+    if (!workItem) return null;
+    return {
+      workItem,
+      artifacts: this.artifacts.filter((artifact) => artifact.workItemId === id)
+    };
+  }
+
   async createWorkItem(input: WorkItemCreateInput): Promise<WorkItem> {
     const createdAt = new Date().toISOString();
     const project = await this.resolveProjectScope(input);
@@ -253,11 +325,18 @@ export class MemoryStore implements ControllerStore {
   }
 
   async addArtifact(artifact: StageArtifact): Promise<void> {
-    this.artifacts.unshift(StageArtifactSchema.parse(artifact));
-    await this.addMemories(memoryFromArtifact(artifact));
+    const parsed = StageArtifactSchema.parse(artifact);
+    this.artifacts.unshift(parsed);
+    await this.addMemories(memoryFromArtifact(parsed));
   }
 
-  async addEvent(event: Omit<AgentEvent, "sequence" | "createdAt"> & Partial<Pick<AgentEvent, "sequence" | "createdAt">>): Promise<AgentEvent> {
+  async getArtifact(id: string): Promise<StageArtifact | null> {
+    return this.artifacts.find((artifact) => artifact.artifactId === id) || null;
+  }
+
+  async addEvent(
+    event: Omit<AgentEvent, "sequence" | "createdAt"> & Partial<Pick<AgentEvent, "sequence" | "createdAt">>
+  ): Promise<AgentEvent> {
     const parsed = AgentEventSchema.parse({
       sequence: event.sequence ?? this.nextEventSequence++,
       createdAt: event.createdAt ?? new Date().toISOString(),
@@ -280,9 +359,7 @@ export class MemoryStore implements ControllerStore {
     if (!workItemId) return this.memories;
     const workItem = this.workItems.find((item) => item.id === workItemId);
     if (workItem) return selectRelevantMemories(this.memories, workItem, 100);
-    return this.memories.filter((memory) =>
-      memory.workItemId === workItemId
-    );
+    return this.memories.filter((memory) => memory.workItemId === workItemId);
   }
 
   async addMemories(memories: MemoryRecord[]): Promise<void> {
@@ -333,11 +410,7 @@ export class MemoryStore implements ControllerStore {
       updatedAt: now
     });
 
-    this.projectConnections = [
-      ...this.projectConnections
-        .filter((item) => item.id !== connection.id),
-      connection
-    ];
+    this.projectConnections = [...this.projectConnections.filter((item) => item.id !== connection.id), connection];
     return connection;
   }
 
@@ -351,10 +424,22 @@ export class MemoryStore implements ControllerStore {
       status: current.validationErrors.length ? current.status : "connected",
       updatedAt: now
     });
-    this.projectConnections = this.projectConnections.map((item) =>
-      item.id === id ? activated : item
-    );
+    this.projectConnections = this.projectConnections.map((item) => (item.id === id ? activated : item));
     return activated;
+  }
+
+  async deactivateProjectConnection(id: string): Promise<ProjectConnection> {
+    const now = new Date().toISOString();
+    const current = this.projectConnections.find((item) => item.id === id);
+    if (!current) throw new Error(`Project connection ${id} was not found.`);
+    const deactivated = ProjectConnectionSchema.parse({
+      ...current,
+      active: false,
+      status: "inactive",
+      updatedAt: now
+    });
+    this.projectConnections = this.projectConnections.map((item) => (item.id === id ? deactivated : item));
+    return deactivated;
   }
 
   async listTeamBusMessages(scope: StrictProjectScope): Promise<TeamBusMessage[]> {
@@ -446,7 +531,9 @@ export class MemoryStore implements ControllerStore {
   async upsertOpportunity(scope: StrictProjectScope, input: OpportunityInput): Promise<Opportunity> {
     await this.assertProjectScope(scope);
     const now = nowIso();
-    const existing = input.id ? this.opportunities.find((opportunity) => opportunity.id === input.id && sameScope(opportunity, scope)) : undefined;
+    const existing = input.id
+      ? this.opportunities.find((opportunity) => opportunity.id === input.id && sameScope(opportunity, scope))
+      : undefined;
     const opportunity: Opportunity = {
       id: input.id || createRecordId("opp"),
       ...scope,
@@ -474,7 +561,9 @@ export class MemoryStore implements ControllerStore {
   async upsertProposal(scope: StrictProjectScope, input: ProposalInput): Promise<Proposal> {
     await this.assertProjectScope(scope);
     const now = nowIso();
-    const existing = input.id ? this.proposals.find((proposal) => proposal.id === input.id && sameScope(proposal, scope)) : undefined;
+    const existing = input.id
+      ? this.proposals.find((proposal) => proposal.id === input.id && sameScope(proposal, scope))
+      : undefined;
     const proposal: Proposal = {
       id: input.id || createRecordId("proposal"),
       ...scope,
@@ -565,7 +654,9 @@ export class MemoryStore implements ControllerStore {
 
   protected async assertProjectScope(scope: StrictProjectScope): Promise<void> {
     const connections = await this.listProjectConnections();
-    const project = connections.find((connection) => connection.projectId === scope.projectId && connection.repo === scope.repo);
+    const project = connections.find(
+      (connection) => connection.projectId === scope.projectId && connection.repo === scope.repo
+    );
     if (!project) throw new Error(`Connected project was not found for ${scope.projectId}/${scope.repo}.`);
     if (!project.active) throw new Error(`Project ${scope.repo} is not active.`);
   }
@@ -678,6 +769,21 @@ export class PostgresStore extends MemoryStore {
     return result.rows.map((row) => WorkItemSchema.parse(row.payload));
   }
 
+  override async getWorkItemWithArtifacts(
+    id: string
+  ): Promise<{ workItem: WorkItem; artifacts: StageArtifact[] } | null> {
+    const workItemResult = await this.pool.query("select payload from work_items where id = $1", [id]);
+    if (!workItemResult.rows[0]) return null;
+    const artifactResult = await this.pool.query(
+      "select payload from stage_artifacts where work_item_id = $1 order by created_at desc",
+      [id]
+    );
+    return {
+      workItem: WorkItemSchema.parse(workItemResult.rows[0].payload),
+      artifacts: artifactResult.rows.map((row) => StageArtifactSchema.parse(row.payload))
+    };
+  }
+
   override async getStatus() {
     const workItems = await this.listWorkItems();
     const artifacts = await this.listArtifacts();
@@ -695,10 +801,11 @@ export class PostgresStore extends MemoryStore {
 
   override async createWorkItem(input: WorkItemCreateInput): Promise<WorkItem> {
     const workItem = await super.createWorkItem(input);
-    await this.pool.query(
-      "insert into work_items (id, payload, state) values ($1, $2, $3)",
-      [workItem.id, workItem, workItem.state]
-    );
+    await this.pool.query("insert into work_items (id, payload, state) values ($1, $2, $3)", [
+      workItem.id,
+      workItem,
+      workItem.state
+    ]);
     return workItem;
   }
 
@@ -728,22 +835,33 @@ export class PostgresStore extends MemoryStore {
   }
 
   override async addArtifact(artifact: StageArtifact): Promise<void> {
+    const parsed = StageArtifactSchema.parse(artifact);
     await this.pool.query(`
       alter table stage_artifacts add column if not exists artifact_key text;
       create unique index if not exists stage_artifacts_artifact_key_idx on stage_artifacts (artifact_key) where artifact_key is not null;
     `);
-    const artifactKey = `${artifact.workItemId}:${artifact.stage}:${artifact.ownerAgent}:${slugId(artifact.title)}`;
+    const artifactKey = parsed.artifactId;
     await this.pool.query(
       `insert into stage_artifacts (work_item_id, payload, artifact_key, created_at)
        values ($1, $2, $3, $4)
        on conflict (artifact_key) where artifact_key is not null
        do update set payload = excluded.payload, created_at = excluded.created_at`,
-      [artifact.workItemId, artifact, artifactKey, artifact.createdAt]
+      [parsed.workItemId, parsed, artifactKey, parsed.createdAt]
     );
-    await super.addArtifact(artifact);
+    await super.addArtifact(parsed);
   }
 
-  override async addEvent(event: Omit<AgentEvent, "sequence" | "createdAt"> & Partial<Pick<AgentEvent, "sequence" | "createdAt">>): Promise<AgentEvent> {
+  override async getArtifact(id: string): Promise<StageArtifact | null> {
+    const result = await this.pool.query(
+      "select payload from stage_artifacts where artifact_key = $1 or payload ->> 'artifactId' = $1 limit 1",
+      [id]
+    );
+    return result.rows[0] ? StageArtifactSchema.parse(result.rows[0].payload) : null;
+  }
+
+  override async addEvent(
+    event: Omit<AgentEvent, "sequence" | "createdAt"> & Partial<Pick<AgentEvent, "sequence" | "createdAt">>
+  ): Promise<AgentEvent> {
     const createdAt = event.createdAt ?? new Date().toISOString();
     const result = await this.pool.query(
       `insert into agent_events (work_item_id, payload, created_at)
@@ -791,7 +909,9 @@ export class PostgresStore extends MemoryStore {
   }
 
   override async listMemories(workItemId?: string): Promise<MemoryRecord[]> {
-    const result = await this.pool.query("select payload from memory_records order by importance desc, updated_at desc");
+    const result = await this.pool.query(
+      "select payload from memory_records order by importance desc, updated_at desc"
+    );
     const stored = result.rows.map((row) => MemoryRecordSchema.parse(row.payload));
     if (!workItemId) return stored.length ? stored : super.listMemories();
 
@@ -816,7 +936,9 @@ export class PostgresStore extends MemoryStore {
   }
 
   override async listProjectConnections(): Promise<ProjectConnection[]> {
-    const result = await this.pool.query("select payload from project_connections order by active desc, updated_at desc");
+    const result = await this.pool.query(
+      "select payload from project_connections order by active desc, updated_at desc"
+    );
     const stored = result.rows.map((row) => ProjectConnectionSchema.parse(row.payload));
     return stored.length ? stored : super.listProjectConnections();
   }
@@ -853,6 +975,27 @@ export class PostgresStore extends MemoryStore {
     return activated;
   }
 
+  override async deactivateProjectConnection(id: string): Promise<ProjectConnection> {
+    const connections = await this.listProjectConnections();
+    const current = connections.find((item) => item.id === id);
+    if (!current) throw new Error(`Project connection ${id} was not found.`);
+    const now = new Date().toISOString();
+    const deactivated = ProjectConnectionSchema.parse({
+      ...current,
+      active: false,
+      status: "inactive",
+      updatedAt: now
+    });
+    await this.pool.query(
+      `insert into project_connections (id, payload, active)
+       values ($1, $2, false)
+       on conflict (id) do update set payload = excluded.payload, active = false, updated_at = now()`,
+      [deactivated.id, deactivated]
+    );
+    await super.upsertProjectConnection(deactivated);
+    return deactivated;
+  }
+
   override async listTeamBusMessages(scope: StrictProjectScope): Promise<TeamBusMessage[]> {
     await this.assertProjectScope(scope);
     const result = await this.pool.query(
@@ -885,9 +1028,7 @@ export class PostgresStore extends MemoryStore {
   override async upsertLoopRun(scope: StrictProjectScope, input: LoopRunInput): Promise<LoopRun> {
     await this.assertProjectScope(scope);
     const now = nowIso();
-    const existing = input.id
-      ? (await this.listLoopRuns(scope)).find((run) => run.id === input.id)
-      : undefined;
+    const existing = input.id ? (await this.listLoopRuns(scope)).find((run) => run.id === input.id) : undefined;
     const run: LoopRun = {
       id: input.id || createRecordId("loop"),
       ...scope,
@@ -912,11 +1053,11 @@ export class PostgresStore extends MemoryStore {
 
   override async getDirection(scope: StrictProjectScope): Promise<Direction | null> {
     await this.assertProjectScope(scope);
-    const result = await this.pool.query(
-      "select payload from project_directions where project_id = $1 and repo = $2",
-      [scope.projectId, scope.repo]
-    );
-    return result.rows[0] ? result.rows[0].payload as Direction : null;
+    const result = await this.pool.query("select payload from project_directions where project_id = $1 and repo = $2", [
+      scope.projectId,
+      scope.repo
+    ]);
+    return result.rows[0] ? (result.rows[0].payload as Direction) : null;
   }
 
   override async upsertDirection(scope: StrictProjectScope, input: DirectionInput): Promise<Direction> {
@@ -970,7 +1111,11 @@ export class PostgresStore extends MemoryStore {
     return proposal;
   }
 
-  override async decideProposal(scope: StrictProjectScope, proposalId: string, input: ProposalDecisionInput): Promise<Proposal> {
+  override async decideProposal(
+    scope: StrictProjectScope,
+    proposalId: string,
+    input: ProposalDecisionInput
+  ): Promise<Proposal> {
     const existing = await this.listProposals(scope);
     const proposal = existing.find((item) => item.id === proposalId);
     if (!proposal) {
@@ -1071,7 +1216,10 @@ function buildControllerStatus(input: {
       agentsOnline: agentTotals.online,
       agentsTotal: agentTotals.total,
       githubSync: projectTeams.length ? "release-gated" : "connect-repo",
-      systemLoad: Math.min(100, input.workItems.filter((item) => item.state !== "CLOSED" && item.state !== "BLOCKED").length * 12),
+      systemLoad: Math.min(
+        100,
+        input.workItems.filter((item) => item.state !== "CLOSED" && item.state !== "BLOCKED").length * 12
+      ),
       executionMode: "ChatGPT Pro assisted",
       emergencyReason: input.emergencyReason,
       scheduler: DEFAULT_SCHEDULER_POLICY
@@ -1109,10 +1257,8 @@ function countRunnableWorkItems(workItems: WorkItem[]): number {
 }
 
 function countRunnableProjectWorkItems(workItems: WorkItem[], project: ProjectConnection): number {
-  return workItems.filter((item) =>
-    item.state === "NEW" &&
-    dependenciesSatisfied(item, workItems) &&
-    workItemMatchesProject(item, project)
+  return workItems.filter(
+    (item) => item.state === "NEW" && dependenciesSatisfied(item, workItems) && workItemMatchesProject(item, project)
   ).length;
 }
 
@@ -1124,14 +1270,17 @@ function buildProjectTeams(projects: ProjectConnection[], workItems: WorkItem[])
   return projects
     .filter((project) => project.active)
     .map((project) => {
-      const activeWorkItems = workItems.filter((item) =>
-        !["NEW", "CLOSED", "BLOCKED"].includes(item.state) &&
-        workItemMatchesProject(item, project)
+      const activeWorkItems = workItems.filter(
+        (item) => !["NEW", "CLOSED", "BLOCKED"].includes(item.state) && workItemMatchesProject(item, project)
       ).length;
-      const capabilityStatuses = project.capabilities.length ? project.capabilities : fallbackProjectCapabilities(project);
-      const hasAttention = project.status !== "connected" || capabilityStatuses.some((capability) =>
-        capability.enabled && ["needs_auth", "missing", "error"].includes(capability.status)
-      );
+      const capabilityStatuses = project.capabilities.length
+        ? project.capabilities
+        : fallbackProjectCapabilities(project);
+      const hasAttention =
+        project.status !== "connected" ||
+        capabilityStatuses.some(
+          (capability) => capability.enabled && ["needs_auth", "missing", "error"].includes(capability.status)
+        );
       return ProjectTeamStatusSchema.parse({
         projectId: project.projectId,
         repo: project.repo,
@@ -1165,8 +1314,10 @@ function fallbackProjectCapabilities(project: ProjectConnection) {
       label: "GitHub CLI",
       kind: "github_cli",
       enabled: true,
-      status: project.ghAvailable ? project.ghAuthed ? "ready" : "needs_auth" : "missing",
-      summary: project.ghAvailable ? "gh is installed for deterministic GitHub operations." : "gh is not available in this runtime.",
+      status: project.ghAvailable ? (project.ghAuthed ? "ready" : "needs_auth") : "missing",
+      summary: project.ghAvailable
+        ? "gh is installed for deterministic GitHub operations."
+        : "gh is not available in this runtime.",
       details: project.githubCliVersion ? [project.githubCliVersion] : []
     }),
     ProjectCapabilityStatusSchema.parse({
@@ -1174,8 +1325,16 @@ function fallbackProjectCapabilities(project: ProjectConnection) {
       label: "GitHub MCP",
       kind: "github_mcp",
       enabled: project.githubMcpEnabled,
-      status: !project.githubMcpEnabled ? "disabled" : project.githubMcpAvailable ? project.githubMcpAuthenticated ? "ready" : "needs_auth" : "missing",
-      summary: project.githubMcpEnabled ? "Official GitHub MCP server is configured for on-demand toolsets." : "GitHub MCP is disabled for this project.",
+      status: !project.githubMcpEnabled
+        ? "disabled"
+        : project.githubMcpAvailable
+          ? project.githubMcpAuthenticated
+            ? "ready"
+            : "needs_auth"
+          : "missing",
+      summary: project.githubMcpEnabled
+        ? "Official GitHub MCP server is configured for on-demand toolsets."
+        : "GitHub MCP is disabled for this project.",
       details: project.githubMcpVersion ? [project.githubMcpVersion] : []
     }),
     ProjectCapabilityStatusSchema.parse({
@@ -1184,7 +1343,9 @@ function fallbackProjectCapabilities(project: ProjectConnection) {
       kind: "github_sdk",
       enabled: true,
       status: project.githubSdkConnected ? "ready" : "needs_auth",
-      summary: project.githubSdkConnected ? "Octokit can read this repository." : "Octokit needs a token that can read this repository.",
+      summary: project.githubSdkConnected
+        ? "Octokit can read this repository."
+        : "Octokit needs a token that can read this repository.",
       details: project.githubSdkVersion ? [project.githubSdkVersion] : ["@octokit/rest"]
     }),
     ProjectCapabilityStatusSchema.parse({
@@ -1208,7 +1369,12 @@ function buildReleaseReadiness(artifacts: StageArtifact[]): ReleaseReadinessSumm
     checks: [
       ["Tests", testsRun.length ? `${testsRun.length} configured/run` : "No runs yet"],
       ["Security Scan", testsRun.some((test) => test.toLowerCase().includes("security")) ? "Recorded" : "Pending"],
-      ["Privacy Review", artifacts.some((artifact) => artifact.risks.some((risk) => risk.toLowerCase().includes("privacy"))) ? "Review required" : "No findings"],
+      [
+        "Privacy Review",
+        artifacts.some((artifact) => artifact.risks.some((risk) => risk.toLowerCase().includes("privacy")))
+          ? "Review required"
+          : "No findings"
+      ],
       ["GitHub Actions", "Pending remote PR"],
       ["Local/Remote Sync", "Checked by release gate"]
     ]
@@ -1217,22 +1383,27 @@ function buildReleaseReadiness(artifacts: StageArtifact[]): ReleaseReadinessSumm
 
 function buildStatusLogs(events: AgentEvent[], artifacts: StageArtifact[]): StatusLogEntry[] {
   if (events.length) {
-    return events.slice(-10).reverse().map((event) => [
-      new Date(event.createdAt).toLocaleTimeString("en-US", { hour12: false }),
-      event.level.toUpperCase(),
-      event.ownerAgent || "system",
-      event.message,
-      event.workItemId || "-"
-    ]);
+    return events
+      .slice(-10)
+      .reverse()
+      .map((event) => [
+        new Date(event.createdAt).toLocaleTimeString("en-US", { hour12: false }),
+        event.level.toUpperCase(),
+        event.ownerAgent || "system",
+        event.message,
+        event.workItemId || "-"
+      ]);
   }
 
-  return artifacts.slice(0, 10).map((artifact) => [
-    new Date(artifact.createdAt).toLocaleTimeString("en-US", { hour12: false }),
-    artifact.status === "blocked" || artifact.status === "failed" ? "ERROR" : "INFO",
-    artifact.ownerAgent,
-    artifact.summary,
-    artifact.workItemId
-  ]);
+  return artifacts
+    .slice(0, 10)
+    .map((artifact) => [
+      new Date(artifact.createdAt).toLocaleTimeString("en-US", { hour12: false }),
+      artifact.status === "blocked" || artifact.status === "failed" ? "ERROR" : "INFO",
+      artifact.ownerAgent,
+      artifact.summary,
+      artifact.workItemId
+    ]);
 }
 
 function buildSharedContextSummary(workItems: WorkItem[], artifacts: StageArtifact[]): SharedContextSummary {
@@ -1276,7 +1447,8 @@ function readConfiguredProjectConnection(): ProjectConnection | null {
       defaultBranch: config.repo.defaultBranch,
       localPath: config.repo.localPath,
       githubUrl: `https://github.com/${repo}`,
-      webResearchEnabled: config.integrations.capabilityPacks.some((pack) => pack.name === "deep-web-research" && pack.enabled) ||
+      webResearchEnabled:
+        config.integrations.capabilityPacks.some((pack) => pack.name === "deep-web-research" && pack.enabled) ||
         config.integrations.mcpServers.some((server) => server.category === "web_search" && server.enabled),
       githubMcpEnabled: config.integrations.mcpServers.some((server) => server.category === "github" && server.enabled),
       githubWriteEnabled: false,
@@ -1284,10 +1456,9 @@ function readConfiguredProjectConnection(): ProjectConnection | null {
       memoryNamespace: config.project.isolation.memoryNamespace || projectId,
       contextDir: config.context.defaultContextDir,
       status: "connected",
-      githubMcpAvailable: config.integrations.mcpServers.some((server) =>
-        server.category === "github" &&
-        server.transport === "stdio" &&
-        server.command === "github-mcp-server"
+      githubMcpAvailable: config.integrations.mcpServers.some(
+        (server) =>
+          server.category === "github" && server.transport === "stdio" && server.command === "github-mcp-server"
       ),
       githubMcpAuthenticated: Boolean(githubToken()),
       githubSdkConnected: false,
@@ -1300,14 +1471,19 @@ function readConfiguredProjectConnection(): ProjectConnection | null {
 }
 
 function slugId(input: string): string {
-  return input
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "") || "project";
+  return (
+    input
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "") || "project"
+  );
 }
 
-function resolveProjectScopeFromConnections(input: ProjectScope, connections: ProjectConnection[]): ProjectScope | null {
+function resolveProjectScopeFromConnections(
+  input: ProjectScope,
+  connections: ProjectConnection[]
+): ProjectScope | null {
   if (!connections.length) return null;
   if (input.projectId || input.repo) {
     const match = connections.find((connection) => {
@@ -1342,10 +1518,7 @@ function sameScope(value: StrictProjectScope, scope: StrictProjectScope): boolea
 }
 
 function upsertByScopedId<T extends StrictProjectScope & { id: string }>(items: T[], item: T): T[] {
-  return [
-    ...items.filter((existing) => existing.id !== item.id || !sameScope(existing, item)),
-    item
-  ];
+  return [...items.filter((existing) => existing.id !== item.id || !sameScope(existing, item)), item];
 }
 
 function loopStatusForProposalDecision(decision: ProposalDecision["decision"]): LoopRun["status"] {
@@ -1358,5 +1531,7 @@ function scopedDbId(scope: StrictProjectScope, id: string): string {
 }
 
 function sortProjectConnections(connections: ProjectConnection[]): ProjectConnection[] {
-  return [...connections].sort((a, b) => Number(b.active) - Number(a.active) || Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+  return [...connections].sort(
+    (a, b) => Number(b.active) - Number(a.active) || Date.parse(b.updatedAt) - Date.parse(a.updatedAt)
+  );
 }

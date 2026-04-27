@@ -42,8 +42,8 @@ const MAX_SKILL_BODY_BYTES = 4_096;
 export async function loadTriggeredSkills(input: SkillActivationInput): Promise<SkillLoadResult> {
   const root = path.resolve(process.cwd(), "packages/agents/skills");
   const files = await findSkillFiles(root);
-  const candidates = (await Promise.all(files.map(readSkillFile))).filter((skill): skill is LoadedSkill & { trigger?: SkillFrontmatter["trigger"] } =>
-    Boolean(skill)
+  const candidates = (await Promise.all(files.map(readSkillFile))).filter(
+    (skill): skill is LoadedSkill & { trigger?: SkillFrontmatter["trigger"] } => Boolean(skill)
   );
 
   const active = candidates
@@ -69,18 +69,22 @@ export async function loadTriggeredSkills(input: SkillActivationInput): Promise<
 async function findSkillFiles(root: string): Promise<string[]> {
   try {
     const entries = await fs.readdir(root, { withFileTypes: true });
-    const nested = await Promise.all(entries.map(async (entry) => {
-      const fullPath = path.join(root, entry.name);
-      if (entry.isDirectory()) return findSkillFiles(fullPath);
-      return entry.isFile() && entry.name === "SKILL.md" ? [fullPath] : [];
-    }));
+    const nested = await Promise.all(
+      entries.map(async (entry) => {
+        const fullPath = path.join(root, entry.name);
+        if (entry.isDirectory()) return findSkillFiles(fullPath);
+        return entry.isFile() && entry.name === "SKILL.md" ? [fullPath] : [];
+      })
+    );
     return nested.flat();
   } catch {
     return [];
   }
 }
 
-async function readSkillFile(filePath: string): Promise<(LoadedSkill & { trigger?: SkillFrontmatter["trigger"] }) | null> {
+async function readSkillFile(
+  filePath: string
+): Promise<(LoadedSkill & { trigger?: SkillFrontmatter["trigger"] }) | null> {
   const raw = await fs.readFile(filePath, "utf8");
   const parsed = parseSkill(raw, filePath);
   if (!parsed) return null;
@@ -125,7 +129,9 @@ function shouldActivateSkill(trigger: SkillFrontmatter["trigger"], input: SkillA
     input.workItem.priority,
     input.workItem.riskLevel,
     ...(input.workItem.acceptanceCriteria || [])
-  ].join("\n").toLowerCase();
+  ]
+    .join("\n")
+    .toLowerCase();
   return Boolean(trigger.keywords?.some((keyword) => haystack.includes(keyword.toLowerCase())));
 }
 
@@ -133,4 +139,3 @@ function stripTrigger(skill: LoadedSkill & { trigger?: SkillFrontmatter["trigger
   const { trigger: _trigger, ...loaded } = skill;
   return loaded;
 }
-

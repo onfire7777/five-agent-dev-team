@@ -1,12 +1,20 @@
 ---
 id: code-review
 name: Code Review
-audience: [product-delivery-orchestrator, rnd-architecture-innovation, frontend-ux-engineering, backend-systems-engineering, quality-security-privacy-release]
+audience:
+  [
+    product-delivery-orchestrator,
+    rnd-architecture-innovation,
+    frontend-ux-engineering,
+    backend-systems-engineering,
+    quality-security-privacy-release
+  ]
 priority: 85
 trigger:
   stages: [VERIFY, RELEASE, BLOCKED]
   keywords: [review, diff, pr, quality]
 ---
+
 # Code Review
 
 Purpose: Review changed behavior before release decisions.
@@ -17,6 +25,7 @@ Purpose: Review changed behavior before release decisions.
 4. Require verification evidence for fixes.
 
 Checklist:
+
 - Findings cite exact files.
 - Tests cover changed behavior.
 - No release claim lacks evidence.

@@ -1,14 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import {
-  Bot,
-  CircleStop,
-  Github,
-  PlayCircle,
-  RefreshCw,
-  ShieldCheck,
-  type LucideIcon
-} from "lucide-react";
-import type { AgentRole, MemoryRecord, ProjectConnection, ProjectTeamStatus, StageArtifact, WorkItem } from "../../../packages/shared/src";
+import { Bot, CircleStop, Github, PlayCircle, RefreshCw, ShieldCheck, type LucideIcon } from "lucide-react";
+import type {
+  AgentRole,
+  MemoryRecord,
+  ProjectConnection,
+  ProjectTeamStatus,
+  StageArtifact,
+  WorkItem
+} from "../../../packages/shared/src";
 
 declare const __DASHBOARD_API_BASE__: string | undefined;
 
@@ -46,7 +45,16 @@ type Status = {
     research: string[];
   };
 };
-type InsightView = "release" | "direction" | "ideas" | "teamMessages" | "loopHistory" | "team" | "capabilities" | "memory" | "events";
+type InsightView =
+  | "release"
+  | "direction"
+  | "ideas"
+  | "teamMessages"
+  | "loopHistory"
+  | "team"
+  | "capabilities"
+  | "memory"
+  | "events";
 type RequestType = "feature" | "bug" | "performance" | "security" | "privacy" | "refactor" | "research";
 type Priority = "low" | "medium" | "high" | "urgent";
 type RiskLevel = "low" | "medium" | "high";
@@ -226,7 +234,10 @@ type LoopRun = {
   updatedAt?: string;
 };
 
-const API_BASE = typeof __DASHBOARD_API_BASE__ === "string" && __DASHBOARD_API_BASE__ ? __DASHBOARD_API_BASE__ : "http://127.0.0.1:4310";
+const API_BASE =
+  typeof __DASHBOARD_API_BASE__ === "string" && __DASHBOARD_API_BASE__
+    ? __DASHBOARD_API_BASE__
+    : "http://127.0.0.1:4310";
 
 const pipelineStates = [
   "NEW",
@@ -376,7 +387,9 @@ export function App() {
     message: ""
   });
   const [directionState, setDirectionState] = useState<DirectionDetailState>(() => createDirectionState());
-  const [opportunitiesState, setOpportunitiesState] = useState<DetailListState<OpportunityCandidate>>(() => createListState());
+  const [opportunitiesState, setOpportunitiesState] = useState<DetailListState<OpportunityCandidate>>(() =>
+    createListState()
+  );
   const [teamMessagesState, setTeamMessagesState] = useState<DetailListState<AgentMessage>>(() => createListState());
   const [loopRunsState, setLoopRunsState] = useState<DetailListState<LoopRun>>(() => createListState());
   const [proposalState, setProposalState] = useState<ProposalDetailState>(() => createProposalState());
@@ -439,7 +452,8 @@ export function App() {
       setStatus(await response.json());
       setApiState({ connected: true, lastError: "" });
       try {
-        await loadMemories();
+        const projectId = activeProjectIdFromState(projects, selectedProjectIdRef.current);
+        await loadMemories(undefined, projectId || undefined);
       } catch {
         setMemories([]);
       }
@@ -467,9 +481,10 @@ export function App() {
     }
   }
 
-  async function loadMemories(workItemId?: string) {
+  async function loadMemories(workItemId?: string, projectId?: string) {
     const url = new URL(`${API_BASE}/api/memories`);
     if (workItemId) url.searchParams.set("workItemId", workItemId);
+    if (projectId) url.searchParams.set("projectId", projectId);
     const response = await fetch(url);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     setMemories(await response.json());
@@ -478,7 +493,7 @@ export function App() {
   async function loadGithubAccount() {
     const response = await fetch(`${API_BASE}/api/github/account`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const account = await response.json() as GitHubAccount;
+    const account = (await response.json()) as GitHubAccount;
     setGithubAccount(account);
     return account;
   }
@@ -486,10 +501,11 @@ export function App() {
   async function loadProjects() {
     const response = await fetch(`${API_BASE}/api/projects`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const nextProjects = await response.json() as ProjectConnection[];
+    const nextProjects = (await response.json()) as ProjectConnection[];
     setProjects(nextProjects);
     const selectedId = selectedProjectIdRef.current;
-    const active = nextProjects.find((project) => project.id === selectedId) ||
+    const active =
+      nextProjects.find((project) => project.id === selectedId) ||
       nextProjects.find((project) => project.active) ||
       nextProjects[0];
     if (active) {
@@ -662,7 +678,8 @@ export function App() {
   }
 
   async function saveDirection(mode: "next_loop" | "standing") {
-    const active = projects.find((project) => project.id === selectedProjectIdRef.current) ||
+    const active =
+      projects.find((project) => project.id === selectedProjectIdRef.current) ||
       projects.find((project) => project.active);
     if (!active || !directionDraft.trim()) return;
     setPendingAction(`direction-${mode}`);
@@ -775,7 +792,7 @@ export function App() {
     setGithubAccountError("");
     setGithubConnect({ status: "starting", message: "Starting GitHub connection..." });
     try {
-      const session = await postControl("/api/github/device/start") as GitHubDeviceSession;
+      const session = (await postControl("/api/github/device/start")) as GitHubDeviceSession;
       setGithubConnect({
         status: "pending",
         message: "Approve this app in GitHub, then this screen will finish automatically.",
@@ -811,14 +828,13 @@ export function App() {
     if (activeInsight === "direction") {
       await loadDirection(projectId);
     } else if (activeInsight === "ideas") {
-      await Promise.all([
-        loadOpportunities(projectId),
-        loadProposal(selectedWorkItem || undefined)
-      ]);
+      await Promise.all([loadOpportunities(projectId), loadProposal(selectedWorkItem || undefined)]);
     } else if (activeInsight === "teamMessages") {
       await loadTeamMessages(projectId);
     } else if (activeInsight === "loopHistory") {
       await loadLoopRuns(projectId);
+    } else if (activeInsight === "memory") {
+      await loadMemories(undefined, projectId);
     }
   }
 
@@ -830,7 +846,8 @@ export function App() {
   async function createWorkItem(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setCreateError("");
-    const targetProject = projects.find((project) => project.id === selectedProjectIdRef.current) ||
+    const targetProject =
+      projects.find((project) => project.id === selectedProjectIdRef.current) ||
       projects.find((project) => project.active);
     if (!targetProject) {
       setCreateError("Connect a GitHub repo before starting autonomous work.");
@@ -876,7 +893,7 @@ export function App() {
     }
     setLoading(true);
     try {
-      const project = await postControl("/api/projects", {
+      const project = (await postControl("/api/projects", {
         name: projectDraft.name.trim() || `${projectDraft.repoOwner.trim()}/${projectDraft.repoName.trim()}`,
         repoOwner: projectDraft.repoOwner.trim(),
         repoName: projectDraft.repoName.trim(),
@@ -886,7 +903,7 @@ export function App() {
         githubMcpEnabled: projectDraft.githubMcpEnabled,
         githubWriteEnabled: projectDraft.githubWriteEnabled,
         active: true
-      }) as ProjectConnection;
+      })) as ProjectConnection;
       selectProjectId(project.id);
       await loadProjects();
       await refreshAll();
@@ -904,7 +921,9 @@ export function App() {
     setProjectError("");
     setLoading(true);
     try {
-      const project = await postControl(`/api/projects/${encodeURIComponent(projectId)}/activate`) as ProjectConnection;
+      const project = (await postControl(
+        `/api/projects/${encodeURIComponent(projectId)}/activate`
+      )) as ProjectConnection;
       selectProjectId(project.id);
       hydrateProjectDraft(project, true);
       await loadProjects();
@@ -921,7 +940,7 @@ export function App() {
     setLoading(true);
     try {
       const path = status.system.emergencyStop ? "/api/emergency-resume" : "/api/emergency-stop";
-      await postControl(path, { reason: "Operator dashboard stop" });
+      await postControl(path, { scope: "global", reason: "Operator dashboard control" });
       await refreshAll();
     } catch {
       setApiState({
@@ -936,64 +955,72 @@ export function App() {
   useEffect(() => {
     refreshAll();
     loadGithubAccount().catch(() => setGithubAccount(defaultGitHubAccount));
-    const timer = window.setInterval(refreshAll, 10000);
+    const timer = window.setInterval(refreshAll, 5000);
     return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
     if (githubConnect.status !== "pending" || !githubConnect.session) return undefined;
-    const timer = window.setTimeout(async () => {
-      try {
-        const result = await postControl("/api/github/device/poll", {
-          sessionId: githubConnect.session?.sessionId
-        }) as {
-          status: "pending" | "connected" | "expired" | "denied" | "failed";
-          interval?: number;
-          message?: string;
-          account?: GitHubAccount;
-        };
-        if (result.status === "connected" && result.account) {
-          setGithubAccount(result.account);
+    const timer = window.setTimeout(
+      async () => {
+        try {
+          const result = (await postControl("/api/github/device/poll", {
+            sessionId: githubConnect.session?.sessionId
+          })) as {
+            status: "pending" | "connected" | "expired" | "denied" | "failed";
+            interval?: number;
+            message?: string;
+            account?: GitHubAccount;
+          };
+          if (result.status === "connected" && result.account) {
+            setGithubAccount(result.account);
+            setGithubConnect({
+              status: "connected",
+              message: "GitHub account connected. Repo checks now use the same account."
+            });
+            await refreshAll();
+            return;
+          }
+          if (result.status === "pending") {
+            setGithubConnect((current) => ({
+              ...current,
+              message: result.message || current.message,
+              session: current.session
+                ? {
+                    ...current.session,
+                    interval: result.interval || current.session.interval
+                  }
+                : current.session
+            }));
+            return;
+          }
           setGithubConnect({
-            status: "connected",
-            message: "GitHub account connected. Repo checks now use the same account."
+            status: "failed",
+            message: result.message || "GitHub connection did not complete."
           });
-          await refreshAll();
-          return;
+        } catch (error) {
+          setGithubConnect({
+            status: "failed",
+            message: error instanceof Error ? error.message : "GitHub polling failed."
+          });
         }
-        if (result.status === "pending") {
-          setGithubConnect((current) => ({
-            ...current,
-            message: result.message || current.message,
-            session: current.session ? {
-              ...current.session,
-              interval: result.interval || current.session.interval
-            } : current.session
-          }));
-          return;
-        }
-        setGithubConnect({
-          status: "failed",
-          message: result.message || "GitHub connection did not complete."
-        });
-      } catch (error) {
-        setGithubConnect({
-          status: "failed",
-          message: error instanceof Error ? error.message : "GitHub polling failed."
-        });
-      }
-    }, Math.max(githubConnect.session.interval, 5) * 1000);
+      },
+      Math.max(githubConnect.session.interval, 5) * 1000
+    );
     return () => window.clearTimeout(timer);
   }, [githubConnect]);
 
   useEffect(() => {
     if (!("EventSource" in window)) return undefined;
-    const source = new EventSource(`${API_BASE}/api/events/stream`);
+    const projectId = activeProjectIdFromState(projects, selectedProjectIdRef.current);
+    const url = new URL(`${API_BASE}/api/events/stream`);
+    if (projectId) url.searchParams.set("projectId", projectId);
+    const source = new EventSource(url);
     source.addEventListener("agent-event", () => {
       refreshAll();
     });
     return () => source.close();
-  }, []);
+  }, [projects, selectedProjectId]);
 
   const agentRows = useMemo(() => deriveAgentRows(status, apiState.connected), [status, apiState.connected]);
   const releaseReady = apiState.connected && status.releaseReadiness.status === "ready";
@@ -1004,14 +1031,19 @@ export function App() {
     () => projects.find((project) => project.id === selectedProjectId) || projects.find((project) => project.active),
     [projects, selectedProjectId]
   );
-  const activeWorkItems = useMemo(() => status.workItems
-    .filter((item) =>
-      item.state !== "CLOSED" &&
-      (!activeProject || item.projectId === activeProject.projectId || item.repo === activeProject.repo)
-    )
-    .slice(0, 5), [status.workItems, activeProject]);
+  const activeWorkItems = useMemo(
+    () =>
+      status.workItems
+        .filter(
+          (item) =>
+            item.state !== "CLOSED" &&
+            (!activeProject || item.projectId === activeProject.projectId || item.repo === activeProject.repo)
+        )
+        .slice(0, 5),
+    [status.workItems, activeProject]
+  );
   const activeTeam = useMemo(
-    () => activeProject ? status.projectTeams.find((team) => team.projectId === activeProject.projectId) : undefined,
+    () => (activeProject ? status.projectTeams.find((team) => team.projectId === activeProject.projectId) : undefined),
     [status.projectTeams, activeProject]
   );
   const selected = useMemo(
@@ -1020,8 +1052,8 @@ export function App() {
   );
   const systemState = systemPresentation(status, apiState);
   const apiMessage = apiNotice(apiState);
-  const connectedGithubUtilities = githubAccount.utilities.filter((utility) =>
-    utility.status === "ready" || utility.status === "available"
+  const connectedGithubUtilities = githubAccount.utilities.filter(
+    (utility) => utility.status === "ready" || utility.status === "available"
   );
   const githubUtilityPreview = connectedGithubUtilities.slice(0, 5);
 
@@ -1060,13 +1092,21 @@ export function App() {
           </span>
           <span>Queue {status.system.queueDepth}</span>
           <span>{status.projectTeams.length} teams</span>
-          <span>{status.system.agentsOnline}/{status.system.agentsTotal} agents</span>
+          <span>
+            {status.system.agentsOnline}/{status.system.agentsTotal} agents
+          </span>
           <span>{status.system.scheduler.maxConcurrentAgentRuns} parallel</span>
           <span>{apiState.connected ? status.system.githubSync : "offline"}</span>
         </div>
 
         <div className="header-actions">
-          <button className="icon-button" onClick={refreshAll} disabled={loading} data-testid="refresh-state" aria-label="Refresh">
+          <button
+            className="icon-button"
+            onClick={refreshAll}
+            disabled={loading}
+            data-testid="refresh-state"
+            aria-label="Refresh"
+          >
             <RefreshCw size={16} />
             <span>Refresh</span>
           </button>
@@ -1092,7 +1132,9 @@ export function App() {
         )}
 
         <section className="command-panel" aria-labelledby="create-work-title" data-testid="work-intake">
-          <h2 className="sr-only" id="create-work-title">Create work</h2>
+          <h2 className="sr-only" id="create-work-title">
+            Create work
+          </h2>
           <div className="section-label">
             <span>Command</span>
             <strong>{activeProject ? activeProject.repo : "Connect project first"}</strong>
@@ -1101,7 +1143,7 @@ export function App() {
           <form className="command-form" onSubmit={createWorkItem}>
             <label className="field command-title">
               <span>Work item</span>
-              <input
+              <textarea
                 value={workDraft.title}
                 onChange={(event) => setWorkDraft((draft) => ({ ...draft, title: event.target.value }))}
                 placeholder="Describe the work to run..."
@@ -1110,10 +1152,103 @@ export function App() {
                 aria-describedby={createError ? "work-title-error" : undefined}
               />
             </label>
-            <button className="primary-button" type="submit" disabled={loading || !apiState.connected || !activeProject} data-testid="start-loop">
+            <button
+              className="primary-button"
+              type="submit"
+              disabled={loading || !apiState.connected || !activeProject}
+              data-testid="start-loop"
+            >
               <PlayCircle size={16} />
               Start
             </button>
+
+            <details className="options-menu">
+              <summary>Work options</summary>
+              <div className="options-grid">
+                <label className="field">
+                  <span>Type</span>
+                  <select
+                    value={workDraft.requestType}
+                    onChange={(event) =>
+                      setWorkDraft((draft) => ({ ...draft, requestType: event.target.value as RequestType }))
+                    }
+                  >
+                    <option value="feature">Feature</option>
+                    <option value="bug">Bug</option>
+                    <option value="performance">Performance</option>
+                    <option value="security">Security</option>
+                    <option value="privacy">Privacy</option>
+                    <option value="refactor">Refactor</option>
+                    <option value="research">Research</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Priority</span>
+                  <select
+                    value={workDraft.priority}
+                    onChange={(event) =>
+                      setWorkDraft((draft) => ({ ...draft, priority: event.target.value as Priority }))
+                    }
+                  >
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                    <option value="urgent">Urgent</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Risk</span>
+                  <select
+                    value={workDraft.riskLevel}
+                    onChange={(event) =>
+                      setWorkDraft((draft) => ({ ...draft, riskLevel: event.target.value as RiskLevel }))
+                    }
+                  >
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                  </select>
+                </label>
+                <label className="field criteria-field">
+                  <span>Acceptance criteria</span>
+                  <textarea
+                    value={workDraft.acceptanceCriteria}
+                    onChange={(event) =>
+                      setWorkDraft((draft) => ({ ...draft, acceptanceCriteria: event.target.value }))
+                    }
+                    placeholder="One criterion per line or semicolon..."
+                  />
+                </label>
+                <div className="route-toggles" aria-label="Agent routing">
+                  <label className="route-toggle">
+                    <input
+                      type="checkbox"
+                      checked={workDraft.frontendNeeded}
+                      onChange={(event) =>
+                        setWorkDraft((draft) => ({ ...draft, frontendNeeded: event.target.checked }))
+                      }
+                    />
+                    <span>Frontend</span>
+                  </label>
+                  <label className="route-toggle">
+                    <input
+                      type="checkbox"
+                      checked={workDraft.backendNeeded}
+                      onChange={(event) => setWorkDraft((draft) => ({ ...draft, backendNeeded: event.target.checked }))}
+                    />
+                    <span>Backend</span>
+                  </label>
+                  <label className="route-toggle">
+                    <input
+                      type="checkbox"
+                      checked={workDraft.rndNeeded}
+                      onChange={(event) => setWorkDraft((draft) => ({ ...draft, rndNeeded: event.target.checked }))}
+                    />
+                    <span>R&D</span>
+                  </label>
+                </div>
+              </div>
+            </details>
 
             <details className="options-menu">
               <summary>Project</summary>
@@ -1133,19 +1268,34 @@ export function App() {
                     {activeProject ? activeProject.status.replace(/_/g, " ") : "No repo connected"}
                   </span>
                   <strong>{activeProject?.name || "Connect an isolated GitHub repo"}</strong>
-                  <small>{activeProject ? `${activeProject.repo} · ${activeProject.localPath}` : "Each repo gets its own five-agent team, memory namespace, GitHub stack, MCP tools, and work queue scope."}</small>
+                  <small>
+                    {activeProject
+                      ? `${activeProject.repo} · ${activeProject.localPath}`
+                      : "Each repo gets its own five-agent team, memory namespace, GitHub stack, MCP tools, and work queue scope."}
+                  </small>
                   {activeProject && (
                     <div className="project-badges" aria-label="Project capabilities">
                       <span>{activeProject.ghAuthed ? "CLI ready" : "CLI auth needed"}</span>
-                      <span>{activeProject.githubMcpAuthenticated ? "MCP ready" : activeProject.githubMcpEnabled ? "MCP auth needed" : "MCP off"}</span>
+                      <span>
+                        {activeProject.githubMcpAuthenticated
+                          ? "MCP ready"
+                          : activeProject.githubMcpEnabled
+                            ? "MCP auth needed"
+                            : "MCP off"}
+                      </span>
                       <span>{activeProject.githubSdkConnected ? "SDK ready" : "SDK auth needed"}</span>
-                      <span>{activeTeam ? `${activeTeam.agentsOnline}/${activeTeam.agentsTotal} agents` : "5-agent team"}</span>
+                      <span>
+                        {activeTeam ? `${activeTeam.agentsOnline}/${activeTeam.agentsTotal} agents` : "5-agent team"}
+                      </span>
                       <span>{activeProject.webResearchEnabled ? "Deep research" : "Research off"}</span>
                     </div>
                   )}
                 </div>
 
-                <div className={`github-account-card ${githubAccount.connected ? "ready" : "attention"}`} data-testid="github-account-card">
+                <div
+                  className={`github-account-card ${githubAccount.connected ? "ready" : "attention"}`}
+                  data-testid="github-account-card"
+                >
                   <div className="github-account-main">
                     {githubAccount.avatarUrl ? (
                       <img className="github-account-avatar" src={githubAccount.avatarUrl} alt="" />
@@ -1155,7 +1305,9 @@ export function App() {
                       </span>
                     )}
                     <span>
-                      <strong>{githubAccount.connected ? `GitHub: ${githubAccount.login}` : "Connect GitHub account"}</strong>
+                      <strong>
+                        {githubAccount.connected ? `GitHub: ${githubAccount.login}` : "Connect GitHub account"}
+                      </strong>
                       <small>
                         {githubAccount.connected
                           ? `${githubAccount.source === "local" ? "Dashboard OAuth" : githubAccount.sourceName || "Environment"} powers ${connectedGithubUtilities.length || "GitHub"} utilities.`
@@ -1163,7 +1315,9 @@ export function App() {
                       </small>
                       {githubUtilityPreview.length > 0 && (
                         <span className="github-utility-preview" aria-label="Connected GitHub utilities">
-                          {githubUtilityPreview.map((utility) => <i key={utility.id}>{utility.label}</i>)}
+                          {githubUtilityPreview.map((utility) => (
+                            <i key={utility.id}>{utility.label}</i>
+                          ))}
                         </span>
                       )}
                     </span>
@@ -1171,7 +1325,9 @@ export function App() {
                   <div className="github-account-actions">
                     {githubConnect.status === "pending" && githubConnect.session ? (
                       <>
-                        <span className="github-connect-code" aria-label="GitHub verification code">{githubConnect.session.userCode}</span>
+                        <span className="github-connect-code" aria-label="GitHub verification code">
+                          {githubConnect.session.userCode}
+                        </span>
                         <a
                           className="secondary-link"
                           href={githubConnect.session.verificationUriComplete || githubConnect.session.verificationUri}
@@ -1184,7 +1340,12 @@ export function App() {
                       </>
                     ) : githubAccount.connected ? (
                       githubAccount.source === "local" ? (
-                        <button className="secondary-button" type="button" onClick={disconnectGithubAccount} disabled={loading}>
+                        <button
+                          className="secondary-button"
+                          type="button"
+                          onClick={disconnectGithubAccount}
+                          disabled={loading}
+                        >
                           <CircleStop size={15} />
                           Disconnect
                         </button>
@@ -1196,7 +1357,12 @@ export function App() {
                         className="secondary-button"
                         type="button"
                         onClick={startGithubConnection}
-                        disabled={loading || githubConnect.status === "starting" || !apiState.connected || !githubAccount.clientIdConfigured}
+                        disabled={
+                          loading ||
+                          githubConnect.status === "starting" ||
+                          !apiState.connected ||
+                          !githubAccount.clientIdConfigured
+                        }
                       >
                         <Github size={15} />
                         {githubAccount.clientIdConfigured ? "Connect GitHub" : "OAuth setup needed"}
@@ -1204,7 +1370,13 @@ export function App() {
                     )}
                   </div>
                   {(githubConnect.message || githubAccountError) && (
-                    <small className={githubConnect.status === "failed" || githubAccountError ? "github-account-message error" : "github-account-message"}>
+                    <small
+                      className={
+                        githubConnect.status === "failed" || githubAccountError
+                          ? "github-account-message error"
+                          : "github-account-message"
+                      }
+                    >
                       {githubAccountError || githubConnect.message}
                     </small>
                   )}
@@ -1269,7 +1441,9 @@ export function App() {
                     <input
                       type="checkbox"
                       checked={projectDraft.githubMcpEnabled}
-                      onChange={(event) => setProjectDraft((draft) => ({ ...draft, githubMcpEnabled: event.target.checked }))}
+                      onChange={(event) =>
+                        setProjectDraft((draft) => ({ ...draft, githubMcpEnabled: event.target.checked }))
+                      }
                     />
                     <span>GitHub MCP</span>
                   </label>
@@ -1277,7 +1451,9 @@ export function App() {
                     <input
                       type="checkbox"
                       checked={projectDraft.githubWriteEnabled}
-                      onChange={(event) => setProjectDraft((draft) => ({ ...draft, githubWriteEnabled: event.target.checked }))}
+                      onChange={(event) =>
+                        setProjectDraft((draft) => ({ ...draft, githubWriteEnabled: event.target.checked }))
+                      }
                     />
                     <span>MCP writes</span>
                   </label>
@@ -1285,11 +1461,18 @@ export function App() {
                     <input
                       type="checkbox"
                       checked={projectDraft.webResearchEnabled}
-                      onChange={(event) => setProjectDraft((draft) => ({ ...draft, webResearchEnabled: event.target.checked }))}
+                      onChange={(event) =>
+                        setProjectDraft((draft) => ({ ...draft, webResearchEnabled: event.target.checked }))
+                      }
                     />
                     <span>Deep research</span>
                   </label>
-                  <button className="secondary-button" type="button" onClick={connectProject} disabled={loading || !apiState.connected}>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={connectProject}
+                    disabled={loading || !apiState.connected}
+                  >
                     <Github size={15} />
                     Connect
                   </button>
@@ -1310,7 +1493,9 @@ export function App() {
                         disabled={loading}
                       >
                         <span>{project.name}</span>
-                        <small>{project.repo} · {project.active ? "team enabled" : "inactive"}</small>
+                        <small>
+                          {project.repo} · {project.active ? "team enabled" : "inactive"}
+                        </small>
                       </button>
                     ))}
                   </div>
@@ -1318,8 +1503,16 @@ export function App() {
               </div>
             </details>
           </form>
-          {createError && <p className="form-error" id="work-title-error" role="alert">{createError}</p>}
-          {projectError && <p className="form-error" role="alert">{projectError}</p>}
+          {createError && (
+            <p className="form-error" id="work-title-error" role="alert">
+              {createError}
+            </p>
+          )}
+          {projectError && (
+            <p className="form-error" role="alert">
+              {projectError}
+            </p>
+          )}
         </section>
 
         <div className="workspace-grid">
@@ -1395,7 +1588,11 @@ export function App() {
               </div>
               <label className="insight-select">
                 <span className="sr-only">Insight view</span>
-                <select value={activeInsight} onChange={(event) => setActiveInsight(event.target.value as InsightView)} data-testid="insight-select">
+                <select
+                  value={activeInsight}
+                  onChange={(event) => setActiveInsight(event.target.value as InsightView)}
+                  data-testid="insight-select"
+                >
                   {insightOptions.map(([value, label]) => (
                     <option value={value} key={value}>
                       {label}
@@ -1492,7 +1689,9 @@ function renderInsight(
     return (
       <div className="direction-panel" data-testid="direction-panel">
         <div className="insight-inline-header">
-          <span className="insight-kicker"><ShieldCheck size={14} /> Project steering</span>
+          <span className="insight-kicker">
+            <ShieldCheck size={14} /> Project steering
+          </span>
           <small>{activeProject?.repo || "No project"}</small>
         </div>
         {activeProject ? (
@@ -1500,7 +1699,12 @@ function renderInsight(
             {direction ? (
               <div className="direction-current">
                 <strong>{direction.summary || direction.currentPriority || "Current direction"}</strong>
-                <p>{direction.standingDirection || direction.nextLoopDirection || direction.focus || "Direction exists, but no summary was provided."}</p>
+                <p>
+                  {direction.standingDirection ||
+                    direction.nextLoopDirection ||
+                    direction.focus ||
+                    "Direction exists, but no summary was provided."}
+                </p>
                 <div className="micro-meta">
                   {direction.currentPriority && <span>Priority: {direction.currentPriority}</span>}
                   {direction.focus && <span>Focus: {direction.focus}</span>}
@@ -1510,7 +1714,11 @@ function renderInsight(
                 {direction.avoid?.length ? (
                   <details className="compact-disclosure">
                     <summary>Avoid</summary>
-                    <ul>{direction.avoid.map((item) => <li key={item}>{item}</li>)}</ul>
+                    <ul>
+                      {direction.avoid.map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ul>
                   </details>
                 ) : null}
               </div>
@@ -1535,11 +1743,21 @@ function renderInsight(
               <span>Pause new loops after this one</span>
             </label>
             <div className="compact-actions">
-              <button className="secondary-button" type="button" disabled={!directionDraft.trim() || Boolean(pendingAction)} onClick={() => onSaveDirection("next_loop")}>
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={!directionDraft.trim() || Boolean(pendingAction)}
+                onClick={() => onSaveDirection("next_loop")}
+              >
                 <PlayCircle size={14} />
                 Use for next loop
               </button>
-              <button className="secondary-button" type="button" disabled={!directionDraft.trim() || Boolean(pendingAction)} onClick={() => onSaveDirection("standing")}>
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={!directionDraft.trim() || Boolean(pendingAction)}
+                onClick={() => onSaveDirection("standing")}
+              >
                 <RefreshCw size={14} />
                 Save standing direction
               </button>
@@ -1553,14 +1771,25 @@ function renderInsight(
   }
 
   if (activeInsight === "ideas") {
-    const suggested = opportunitiesState.items.filter((item) => !/accepted|promoted|dismissed|rejected/i.test(item.status || "")).slice(0, 3);
-    const recentlyAccepted = opportunitiesState.items.filter((item) => /accepted|promoted/i.test(item.status || "")).slice(0, 3);
+    const suggested = opportunitiesState.items
+      .filter((item) => !/accepted|promoted|dismissed|rejected/i.test(item.status || ""))
+      .slice(0, 3);
+    const recentlyAccepted = opportunitiesState.items
+      .filter((item) => /accepted|promoted/i.test(item.status || ""))
+      .slice(0, 3);
     const proposal = proposalState.proposal;
     return (
       <div className="ideas-panel" data-testid="ideas-panel">
         <div className="insight-inline-header">
-          <span className="insight-kicker"><Bot size={14} /> Autonomous ideation</span>
-          <button className="text-button" type="button" disabled={!activeProject || opportunitiesState.status === "loading" || Boolean(pendingAction)} onClick={onScanOpportunities}>
+          <span className="insight-kicker">
+            <Bot size={14} /> Autonomous ideation
+          </span>
+          <button
+            className="text-button"
+            type="button"
+            disabled={!activeProject || opportunitiesState.status === "loading" || Boolean(pendingAction)}
+            onClick={onScanOpportunities}
+          >
             Scan
           </button>
         </div>
@@ -1572,11 +1801,22 @@ function renderInsight(
                 <article className="opportunity-row" key={item.id}>
                   <span>
                     <strong>{item.title || "Untitled opportunity"}</strong>
-                    <small>{compactMeta([item.source, item.risk && `risk ${item.risk}`, item.score !== undefined && `score ${item.score}`])}</small>
+                    <small>
+                      {compactMeta([
+                        item.source,
+                        item.risk && `risk ${item.risk}`,
+                        item.score !== undefined && `score ${item.score}`
+                      ])}
+                    </small>
                   </span>
                   <p>{item.summary || "No summary provided yet."}</p>
                   <div className="compact-actions inline">
-                    <button className="secondary-button" type="button" disabled={Boolean(pendingAction)} onClick={() => onPromoteOpportunity(item.id)}>
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      disabled={Boolean(pendingAction)}
+                      onClick={() => onPromoteOpportunity(item.id)}
+                    >
                       Promote
                     </button>
                   </div>
@@ -1595,17 +1835,43 @@ function renderInsight(
               <div className="proposal-title">
                 <span>
                   <strong>{proposal.title || proposal.problem || "Proposal for selected work"}</strong>
-                  <small>{compactMeta([proposal.status, proposal.version !== undefined && `v${proposal.version}`, proposal.autoAcceptEligible ? "auto-eligible" : "reviewable"])}</small>
+                  <small>
+                    {compactMeta([
+                      proposal.status,
+                      proposal.version !== undefined && `v${proposal.version}`,
+                      proposal.autoAcceptEligible ? "auto-eligible" : "reviewable"
+                    ])}
+                  </small>
                 </span>
               </div>
               <p>{proposal.recommendedApproach || proposal.researchSummary || "Proposal details are available."}</p>
               <details className="compact-disclosure">
                 <summary>Plan details</summary>
                 <dl className="proposal-details">
-                  {proposal.problem && <><dt>Problem</dt><dd>{proposal.problem}</dd></>}
-                  {proposal.researchSummary && <><dt>Research</dt><dd>{proposal.researchSummary}</dd></>}
-                  {proposal.validationPlan && <><dt>Validation</dt><dd>{proposal.validationPlan}</dd></>}
-                  {proposal.rollbackPlan && <><dt>Rollback</dt><dd>{proposal.rollbackPlan}</dd></>}
+                  {proposal.problem && (
+                    <>
+                      <dt>Problem</dt>
+                      <dd>{proposal.problem}</dd>
+                    </>
+                  )}
+                  {proposal.researchSummary && (
+                    <>
+                      <dt>Research</dt>
+                      <dd>{proposal.researchSummary}</dd>
+                    </>
+                  )}
+                  {proposal.validationPlan && (
+                    <>
+                      <dt>Validation</dt>
+                      <dd>{proposal.validationPlan}</dd>
+                    </>
+                  )}
+                  {proposal.rollbackPlan && (
+                    <>
+                      <dt>Rollback</dt>
+                      <dd>{proposal.rollbackPlan}</dd>
+                    </>
+                  )}
                 </dl>
                 <InlineList title="Tasks" items={proposal.tasks} />
                 <InlineList title="Risks" items={proposal.risks} />
@@ -1618,9 +1884,30 @@ function renderInsight(
                   placeholder="Optional feedback for request changes..."
                 />
                 <div className="compact-actions">
-                  <button className="secondary-button" type="button" disabled={Boolean(pendingAction) || !isProposalActionable(proposal)} onClick={() => onProposalDecision("accept")}>Accept</button>
-                  <button className="secondary-button" type="button" disabled={Boolean(pendingAction) || !isProposalActionable(proposal)} onClick={() => onProposalDecision("revise")}>Request changes</button>
-                  <button className="secondary-button danger" type="button" disabled={Boolean(pendingAction) || !isProposalActionable(proposal)} onClick={() => onProposalDecision("reject")}>Reject</button>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    disabled={Boolean(pendingAction) || !isProposalActionable(proposal)}
+                    onClick={() => onProposalDecision("accept")}
+                  >
+                    Accept
+                  </button>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    disabled={Boolean(pendingAction) || !isProposalActionable(proposal)}
+                    onClick={() => onProposalDecision("revise")}
+                  >
+                    Request changes
+                  </button>
+                  <button
+                    className="secondary-button danger"
+                    type="button"
+                    disabled={Boolean(pendingAction) || !isProposalActionable(proposal)}
+                    onClick={() => onProposalDecision("reject")}
+                  >
+                    Reject
+                  </button>
                 </div>
               </details>
             </article>
@@ -1652,7 +1939,9 @@ function renderInsight(
     return (
       <div className="team-message-list" data-testid="team-messages-panel">
         <div className="insight-inline-header">
-          <span className="insight-kicker"><Bot size={14} /> Agent communication</span>
+          <span className="insight-kicker">
+            <Bot size={14} /> Agent communication
+          </span>
           <small>{teamMessagesState.items.length ? `${teamMessagesState.items.length} messages` : "Quiet"}</small>
         </div>
         {teamMessagesState.items.length ? (
@@ -1660,7 +1949,14 @@ function renderInsight(
             <article className="team-message-row" key={message.id || `${message.createdAt}-${index}`}>
               <div>
                 <strong>{message.title || readableToken(message.type || "team message")}</strong>
-                <span>{compactMeta([readableToken(message.ownerAgent || message.agent), message.stage, message.workItemId, formatDate(message.createdAt || message.updatedAt)])}</span>
+                <span>
+                  {compactMeta([
+                    readableToken(message.ownerAgent || message.agent),
+                    message.stage,
+                    message.workItemId,
+                    formatDate(message.createdAt || message.updatedAt)
+                  ])}
+                </span>
               </div>
               <p>{message.summary || message.message || "No message body provided."}</p>
             </article>
@@ -1676,7 +1972,9 @@ function renderInsight(
     return (
       <div className="loop-history-list" data-testid="loop-history-panel">
         <div className="insight-inline-header">
-          <span className="insight-kicker"><RefreshCw size={14} /> Loop history</span>
+          <span className="insight-kicker">
+            <RefreshCw size={14} /> Loop history
+          </span>
           <small>{loopRunsState.items.length ? `${loopRunsState.items.length} runs` : "No runs"}</small>
         </div>
         {loopRunsState.items.length ? (
@@ -1689,13 +1987,20 @@ function renderInsight(
                 </span>
                 {run.blockingReason ? <em>Blocked</em> : null}
               </div>
-              <p>{run.closureSummary || run.blockingReason || run.nextRecommendedLoop || "Loop is waiting for its first closure summary."}</p>
+              <p>
+                {run.closureSummary ||
+                  run.blockingReason ||
+                  run.nextRecommendedLoop ||
+                  "Loop is waiting for its first closure summary."}
+              </p>
               <div className="micro-meta">
                 {run.activeAgents?.length ? <span>{run.activeAgents.length} agents</span> : null}
                 {run.startRepoSha && <span>{shortSha(run.startRepoSha)} start</span>}
                 {run.endRepoSha && <span>{shortSha(run.endRepoSha)} end</span>}
                 {run.releaseState && <span>{run.releaseState}</span>}
-                {(run.closedAt || run.updatedAt || run.startedAt) && <span>{formatDate(run.closedAt || run.updatedAt || run.startedAt)}</span>}
+                {(run.closedAt || run.updatedAt || run.startedAt) && (
+                  <span>{formatDate(run.closedAt || run.updatedAt || run.startedAt)}</span>
+                )}
               </div>
             </article>
           ))
@@ -1732,7 +2037,9 @@ function renderInsight(
           visibleMemories.map((memory) => (
             <article key={memory.id}>
               <strong>{memory.title}</strong>
-              <span>{memory.kind} · {memory.permanence}</span>
+              <span>
+                {memory.kind} · {memory.permanence}
+              </span>
               <p>{memory.content}</p>
             </article>
           ))
@@ -1753,7 +2060,9 @@ function renderInsight(
         {team && (
           <div className="team-summary">
             <strong>{team.name}</strong>
-            <span>{team.agentsOnline}/{team.agentsTotal} agents · {team.queueDepth} queued · {team.activeWorkItems} running</span>
+            <span>
+              {team.agentsOnline}/{team.agentsTotal} agents · {team.queueDepth} queued · {team.activeWorkItems} running
+            </span>
           </div>
         )}
         {capabilities.length ? (
@@ -1765,7 +2074,9 @@ function renderInsight(
                 <small>{capability.summary}</small>
                 {capability.details.length > 0 && (
                   <span className="capability-details">
-                    {capability.details.map((detail) => <i key={detail}>{detail}</i>)}
+                    {capability.details.map((detail) => (
+                      <i key={detail}>{detail}</i>
+                    ))}
                   </span>
                 )}
               </span>
@@ -1859,7 +2170,9 @@ function deriveAgentRows(status: Status, connected: boolean): AgentLane[] {
   }
   return roleLanes.map((lane) => {
     const latestArtifact = [...status.artifacts].reverse().find((artifact) => artifact.ownerAgent === lane.agentRole);
-    const workItem = latestArtifact ? status.workItems.find((item) => item.id === latestArtifact.workItemId) : undefined;
+    const workItem = latestArtifact
+      ? status.workItems.find((item) => item.id === latestArtifact.workItemId)
+      : undefined;
     const agentStatus = statusForAgent(latestArtifact, workItem?.state);
     return {
       icon: lane.icon,
@@ -1882,15 +2195,26 @@ function statusForAgent(artifact: StageArtifact | undefined, state?: string): st
 }
 
 function progressForStage(stage: string): number {
-  const order = ["NEW", "INTAKE", "RND", "PROPOSAL", "AWAITING_ACCEPTANCE", "CONTRACT", "FRONTEND_BUILD", "BACKEND_BUILD", "INTEGRATION", "VERIFY", "RELEASE", "CLOSED"];
+  const order = [
+    "NEW",
+    "INTAKE",
+    "RND",
+    "PROPOSAL",
+    "AWAITING_ACCEPTANCE",
+    "CONTRACT",
+    "FRONTEND_BUILD",
+    "BACKEND_BUILD",
+    "INTEGRATION",
+    "VERIFY",
+    "RELEASE",
+    "CLOSED"
+  ];
   const index = order.indexOf(stage);
   return index === -1 ? 0 : Math.round(((index + 1) / order.length) * 100);
 }
 
 function DetailEmpty(input: { state: { status: DetailFetchStatus; message: string }; fallback: string }) {
-  const copy = input.state.status === "loading"
-    ? "Loading..."
-    : input.state.message || input.fallback;
+  const copy = input.state.status === "loading" ? "Loading..." : input.state.message || input.fallback;
   return <div className="empty-state compact">{copy}</div>;
 }
 
@@ -1899,7 +2223,11 @@ function InlineList(input: { title: string; items?: string[] }) {
   return (
     <div className="inline-list">
       <strong>{input.title}</strong>
-      <ul>{input.items.map((item) => <li key={item}>{item}</li>)}</ul>
+      <ul>
+        {input.items.map((item) => (
+          <li key={item}>{item}</li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -1917,11 +2245,14 @@ async function readResponseJson(response: Response): Promise<unknown> {
 async function readErrorMessage(response: Response): Promise<string> {
   const payload = await readResponseJson(response);
   const record = asRecord(payload);
-  const message = record && typeof record.error === "string"
-    ? record.error
-    : record && typeof record.message === "string"
-      ? record.message
-      : "";
+  const message =
+    record && typeof record.error === "string"
+      ? record.error
+      : record && typeof record.detail === "string"
+        ? record.detail
+        : record && typeof record.message === "string"
+          ? record.message
+          : "";
   return message || `HTTP ${response.status}`;
 }
 
@@ -1946,7 +2277,7 @@ function extractObject<T>(payload: unknown, keys: string[]): T | undefined {
     if (nested) return nested as T;
   }
   if (sawKnownKey) return undefined;
-  return Object.keys(record).length ? record as T : undefined;
+  return Object.keys(record).length ? (record as T) : undefined;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -1955,9 +2286,11 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 function activeProjectIdFromState(projects: ProjectConnection[], selectedProjectId: string): string {
-  return projects.find((project) => project.id === selectedProjectId)?.projectId ||
+  return (
+    projects.find((project) => project.id === selectedProjectId)?.projectId ||
     projects.find((project) => project.active)?.projectId ||
-    "";
+    ""
+  );
 }
 
 function isProposalActionable(proposal: ProposalArtifact): boolean {
@@ -1966,7 +2299,10 @@ function isProposalActionable(proposal: ProposalArtifact): boolean {
 
 function compactMeta(values: Array<string | number | false | null | undefined>): string {
   return values
-    .filter((value): value is string | number => value !== false && value !== null && value !== undefined && String(value).trim().length > 0)
+    .filter(
+      (value): value is string | number =>
+        value !== false && value !== null && value !== undefined && String(value).trim().length > 0
+    )
     .map((value) => String(value))
     .join(" · ");
 }

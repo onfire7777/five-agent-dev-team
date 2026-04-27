@@ -34,15 +34,7 @@ describe("agent prompt and skills", () => {
     });
 
     const blocks = [...result.prompt.matchAll(/<<< BLOCK: ([a-z_]+) >>>/g)].map((match) => match[1]);
-    expect(blocks).toEqual([
-      "identity",
-      "nonnegotiables",
-      "context",
-      "skills",
-      "tools",
-      "task",
-      "output_contract"
-    ]);
+    expect(blocks).toEqual(["identity", "nonnegotiables", "context", "skills", "tools", "task", "output_contract"]);
     expect(result.promptHash).toMatch(/^[a-f0-9]{64}$/);
   });
 
