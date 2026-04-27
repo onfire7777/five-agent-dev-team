@@ -9,8 +9,16 @@ export async function checkTemporalConnection(): Promise<boolean> {
   const address = process.env.TEMPORAL_ADDRESS;
   if (!address) return true;
 
-  const connection = await Connection.connect({ address });
-  await connection.close();
+  let connection: Connection | null = null;
+  try {
+    connection = await withTimeout(
+      Connection.connect({ address }),
+      Number(process.env.TEMPORAL_HEALTH_TIMEOUT_MS || 2000),
+      `Temporal connection timed out for ${address}.`
+    );
+  } finally {
+    await connection?.close().catch(() => undefined);
+  }
   return true;
 }
 
@@ -66,5 +74,19 @@ export async function signalProposalDecision(
     return false;
   } finally {
     await connection?.close().catch(() => undefined);
+  }
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
   }
 }
