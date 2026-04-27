@@ -94,6 +94,41 @@ describe("release activities", () => {
     expect(store.updatedStates).toEqual([{ id: "WI-RELEASE", state: "BLOCKED" }]);
   });
 
+  it("runs rollback and does not reuse stale proof when release command fails", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-release-failed-"));
+    const configPath = path.join(tempDir, "agent-team.config.yaml");
+    const proofPath = path.join(tempDir, "release-proof.json");
+    const releaseCommand =
+      "node -e \"require('fs').writeFileSync('release.marker',process.env.AGENT_RELEASE_TAG||''); process.exit(1)\"";
+    await fs.writeFile(configPath, configYaml(tempDir, releaseCommand), "utf8");
+    await fs.writeFile(proofPath, JSON.stringify({ tag: "agent-old-attempt" }), "utf8");
+    const store = fakeStore();
+    const { performAutonomousRelease } = await loadActivities(store);
+
+    process.env.AGENT_TEAM_CONFIG = configPath;
+    process.env.AGENT_LOCAL_CHECKS_PASSED = "true";
+    process.env.AGENT_GITHUB_ACTIONS_PASSED = "true";
+    process.env.AGENT_SECRET_SCAN_PASSED = "true";
+    process.env.AGENT_ROLLBACK_PLAN_PRESENT = "true";
+    process.env.AGENT_REQUIRE_RUNTIME_HEALTH = "false";
+    delete process.env.AGENT_RELEASE_TAG;
+    process.env.AGENT_ROLLBACK_COMMAND =
+      "node -e \"require('fs').writeFileSync('rollback.marker',process.env.AGENT_RELEASE_TAG||'')\"";
+    process.env.AGENT_COMMAND_TIMEOUT_MS = "10000";
+    process.env.RELEASE_PROOF_FILE = proofPath;
+
+    const artifact = await performAutonomousRelease(workItem(), [verificationArtifact()]);
+
+    const releaseTag = await fs.readFile(path.join(tempDir, "release.marker"), "utf8");
+    const rollbackTag = await fs.readFile(path.join(tempDir, "rollback.marker"), "utf8");
+    expect(rollbackTag).toBe(releaseTag);
+    expect(artifact.status).toBe("blocked");
+    expect(artifact.testsRun).toContain("release:failed");
+    expect(artifact.testsRun).toContain("rollback:passed");
+    expect(artifact.testsRun).toContain("release-proof:missing");
+    expect(store.updatedStates).toEqual([{ id: "WI-RELEASE", state: "BLOCKED" }]);
+  });
+
   it("detects write-capable GitHub integrations by category", async () => {
     const { hasGithubWriteIntegration } = await loadActivities(fakeStore());
     const config = targetRepoConfig(process.cwd());
@@ -229,7 +264,10 @@ function verificationArtifact(): StageArtifact {
   };
 }
 
-function configYaml(repoPath: string): string {
+function configYaml(
+  repoPath: string,
+  releaseCommand = "node -e \"require('fs').writeFileSync('release.marker',process.env.AGENT_RELEASE_TAG||'')\""
+): string {
   return `
 repo:
   owner: owner
@@ -248,7 +286,7 @@ commands:
   test: "node -e \\"process.exit(0)\\""
   build: "node -e \\"process.exit(0)\\""
   security: "node -e \\"process.exit(0)\\""
-  release: "node -e \\"require('fs').writeFileSync('release.marker',process.env.AGENT_RELEASE_TAG||'')\\""
+  release: ${JSON.stringify(releaseCommand)}
 context:
   includeDefaultContextDir: true
   defaultContextDir: .agent-team/context

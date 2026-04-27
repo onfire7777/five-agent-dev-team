@@ -586,7 +586,7 @@ export async function performAutonomousRelease(
   await ensureNotStopped(scopedWorkItem.id, config);
   const releaseTag = releaseTagForWorkItem(scopedWorkItem);
   const rollback = rollbackPlanForRelease(scopedWorkItem, config, releaseTag);
-  const { signal, syncReasons } = await collectReleaseSignal(scopedWorkItem, config, previousArtifacts);
+  const { signal, syncReasons } = await collectReleaseSignal(scopedWorkItem, config, previousArtifacts, releaseTag);
   const preReleaseDecision = evaluateReleasePolicy(config, {
     ...signal,
     releaseProofPresent: signal.releaseProofPresent || Boolean(config.commands.release.trim())
@@ -595,15 +595,19 @@ export async function performAutonomousRelease(
     ? await runReleaseCommand(config, scopedWorkItem, releaseTag)
     : null;
   if (releaseCommand?.ok) {
-    await writeReleaseProof(scopedWorkItem, config, releaseCommand);
+    await writeReleaseProof(scopedWorkItem, config, releaseCommand, releaseTag);
   }
   const postReleaseHealth = releaseCommand?.ok ? await readRuntimeHealthEvidence() : null;
-  const rollbackCommand =
-    postReleaseHealth?.required && !postReleaseHealth.ok
-      ? await runConfiguredCommand(config, "rollback", rollback.command, scopedWorkItem, releaseTag)
-      : null;
+  const rollbackNeeded = Boolean(
+    (releaseCommand && !releaseCommand.ok) || (postReleaseHealth?.required && !postReleaseHealth.ok)
+  );
+  const rollbackCommand = rollbackNeeded
+    ? await runConfiguredCommand(config, "rollback", rollback.command, scopedWorkItem, releaseTag)
+    : null;
   const releaseProofPresent =
-    signal.releaseProofPresent || Boolean(releaseCommand?.ok) || (await hasReleaseProof(scopedWorkItem, config));
+    signal.releaseProofPresent ||
+    Boolean(releaseCommand?.ok) ||
+    (await hasReleaseProof(scopedWorkItem, config, releaseTag));
   const decision = evaluateReleasePolicy(config, {
     ...signal,
     releaseProofPresent
@@ -845,7 +849,8 @@ async function readGitHubActionsEvidence(config: TargetRepoConfig): Promise<Evid
 async function collectReleaseSignal(
   workItem: WorkItem,
   config: TargetRepoConfig,
-  previousArtifacts: StageArtifact[]
+  previousArtifacts: StageArtifact[],
+  releaseTag?: string
 ): Promise<{ signal: VerificationSignal; syncReasons: string[] }> {
   const [gitSyncInput, githubActions] = await Promise.all([
     readGitSyncInput(workItem, config),
@@ -870,7 +875,7 @@ async function collectReleaseSignal(
       localRemoteSynced: sync.synced,
       secretScanPassed: envFlag("AGENT_SECRET_SCAN_PASSED") || securityPassed,
       rollbackPlanPresent: envFlag("AGENT_ROLLBACK_PLAN_PRESENT") || rollbackPlanPresent,
-      releaseProofPresent: await hasReleaseProof(workItem, config),
+      releaseProofPresent: await hasReleaseProof(workItem, config, releaseTag),
       emergencyStopActive: status.system.emergencyStop,
       riskLevel: workItem.riskLevel
     },
@@ -970,11 +975,11 @@ async function runConfiguredCommand(
   }
 }
 
-async function hasReleaseProof(workItem: WorkItem, config: TargetRepoConfig): Promise<boolean> {
-  const proofFile = resolveReleaseProofFile(workItem, config);
+async function hasReleaseProof(workItem: WorkItem, config: TargetRepoConfig, releaseTag?: string): Promise<boolean> {
+  const proofFile = resolveReleaseProofFile(workItem, config, releaseTag);
   try {
-    await fs.access(proofFile);
-    return true;
+    const proof = JSON.parse(await fs.readFile(proofFile, "utf8")) as { tag?: unknown };
+    return releaseTag ? proof.tag === releaseTag : true;
   } catch {
     return false;
   }
@@ -983,13 +988,15 @@ async function hasReleaseProof(workItem: WorkItem, config: TargetRepoConfig): Pr
 async function writeReleaseProof(
   workItem: WorkItem,
   config: TargetRepoConfig,
-  releaseCommand: CommandResult
+  releaseCommand: CommandResult,
+  releaseTag: string
 ): Promise<void> {
-  const proofFile = resolveReleaseProofFile(workItem, config);
+  const proofFile = resolveReleaseProofFile(workItem, config, releaseTag);
   const proof = {
     workItemId: workItem.id,
     projectId: workItem.projectId,
     repo: workItem.repo || `${config.repo.owner}/${config.repo.name}`,
+    tag: releaseTag,
     command: "release",
     summary: releaseCommand.summary,
     createdAt: new Date().toISOString()
@@ -998,10 +1005,11 @@ async function writeReleaseProof(
   await fs.writeFile(proofFile, JSON.stringify(proof, null, 2), "utf8");
 }
 
-function resolveReleaseProofFile(workItem: WorkItem, config: TargetRepoConfig): string {
+function resolveReleaseProofFile(workItem: WorkItem, config: TargetRepoConfig, releaseTag?: string): string {
   const configuredProof = process.env.RELEASE_PROOF_FILE;
   if (!configuredProof) {
-    return path.join(process.env.AGENT_RUNTIME_DIR || "/tmp/agent-team", `release-proof-${workItem.id}.json`);
+    const proofId = safeFileSegment(releaseTag || workItem.id);
+    return path.join(process.env.AGENT_RUNTIME_DIR || "/tmp/agent-team", `release-proof-${proofId}.json`);
   }
   return path.isAbsolute(configuredProof)
     ? configuredProof

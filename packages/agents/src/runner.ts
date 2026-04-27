@@ -219,13 +219,8 @@ function shouldUseHostedWebSearch(definition: AgentDefinition, context: AgentRun
     stage: context.stage,
     agent: definition.role
   };
-  return (
-    context.targetRepoConfig.integrations.capabilityPacks.some(
-      (pack) => pack.name === "deep-web-research" && shouldActivateCapability(pack.enabled, pack.activation, input)
-    ) ||
-    context.targetRepoConfig.integrations.mcpServers.some(
-      (server) => server.category === "web_search" && shouldActivateCapability(server.enabled, server.activation, input)
-    )
+  return context.targetRepoConfig.integrations.capabilityPacks.some(
+    (pack) => pack.name === "hosted-search" && shouldActivateCapability(pack.enabled, pack.activation, input)
   );
 }
 
@@ -360,11 +355,8 @@ function createTemplateArtifact(
     decisions: templateDecisions(definition, context),
     risks: templateRisks(context),
     filesChanged: [],
-    testsRun:
-      context.stage === "VERIFY" || context.stage === "RELEASE"
-        ? ["configured local checks", "GitHub Actions gate"]
-        : [],
-    releaseReadiness: context.stage === "RELEASE" ? "ready" : "unknown",
+    testsRun: [],
+    releaseReadiness: "unknown",
     nextStage,
     promptHash: preparation.promptHash,
     skillIds: preparation.skills.map((skill) => skill.id),

@@ -5,7 +5,8 @@ import { TargetRepoConfigSchema, type WorkItem } from "../packages/shared/src";
 
 const liveAgentMock = vi.hoisted(() => ({
   models: [] as string[],
-  prompts: [] as string[]
+  prompts: [] as string[],
+  hostedSearchCalls: 0
 }));
 
 vi.mock("@openai/agents", () => {
@@ -40,7 +41,16 @@ vi.mock("@openai/agents", () => {
     MCPServers: {
       open: vi.fn()
     },
-    webSearchTool: vi.fn(() => ({}))
+    MCPServerStdio: class {
+      constructor(_options: unknown) {}
+    },
+    MCPServerStreamableHttp: class {
+      constructor(_options: unknown) {}
+    },
+    webSearchTool: vi.fn(() => {
+      liveAgentMock.hostedSearchCalls += 1;
+      return {};
+    })
   };
 });
 
@@ -141,6 +151,7 @@ describe("agent runner", () => {
     const originalAgentModel = process.env.AGENT_MODEL;
     liveAgentMock.models.length = 0;
     liveAgentMock.prompts.length = 0;
+    liveAgentMock.hostedSearchCalls = 0;
     process.env.AGENT_LIVE_MODE = "true";
     process.env.OPENAI_API_KEY = "test-key";
     delete process.env.AGENT_MODEL;
@@ -165,9 +176,64 @@ describe("agent runner", () => {
       restoreEnv("AGENT_MODEL", originalAgentModel);
     }
   });
+
+  it("does not mount hosted search just because a web search MCP server is active", async () => {
+    const originalLiveMode = process.env.AGENT_LIVE_MODE;
+    const originalOpenAiKey = process.env.OPENAI_API_KEY;
+    const originalAgentModel = process.env.AGENT_MODEL;
+    liveAgentMock.models.length = 0;
+    liveAgentMock.prompts.length = 0;
+    liveAgentMock.hostedSearchCalls = 0;
+    process.env.AGENT_LIVE_MODE = "true";
+    process.env.OPENAI_API_KEY = "test-key";
+    delete process.env.AGENT_MODEL;
+    try {
+      await runRoleAgent(getAgentDefinition("frontend-ux-engineering"), {
+        workItem,
+        stage: "FRONTEND_BUILD",
+        previousArtifacts: [],
+        targetRepoConfig: liveTargetConfig({
+          mcpServers: [
+            {
+              name: "web-search-mcp",
+              category: "web_search",
+              enabled: true,
+              transport: "stdio",
+              command: "web-search",
+              args: [],
+              activation: { mode: "always", stages: [], agents: [], keywords: [] },
+              env: {},
+              timeoutSeconds: 30,
+              cacheToolsList: true,
+              toolAllowlist: [],
+              notes: []
+            }
+          ]
+        })
+      });
+
+      expect(liveAgentMock.hostedSearchCalls).toBe(0);
+    } finally {
+      restoreEnv("AGENT_LIVE_MODE", originalLiveMode);
+      restoreEnv("OPENAI_API_KEY", originalOpenAiKey);
+      restoreEnv("AGENT_MODEL", originalAgentModel);
+    }
+  });
+
+  it("does not claim verification checks on template artifacts", async () => {
+    const result = await runRoleAgent(getAgentDefinition("quality-security-privacy-release"), {
+      workItem: { ...workItem, state: "VERIFY" },
+      stage: "VERIFY",
+      previousArtifacts: []
+    });
+
+    expect(result.live).toBe(false);
+    expect(result.artifact.testsRun).toEqual([]);
+    expect(result.artifact.releaseReadiness).toBe("unknown");
+  });
 });
 
-function liveTargetConfig() {
+function liveTargetConfig(overrides: { mcpServers?: unknown[]; capabilityPacks?: unknown[] } = {}) {
   return TargetRepoConfigSchema.parse({
     repo: {
       owner: "owner",
@@ -185,8 +251,8 @@ function liveTargetConfig() {
       release: 'gh release create "$AGENT_RELEASE_TAG" --notes-file release/notes.md --verify-tag'
     },
     integrations: {
-      mcpServers: [],
-      capabilityPacks: [],
+      mcpServers: overrides.mcpServers || [],
+      capabilityPacks: overrides.capabilityPacks || [],
       plugins: []
     },
     models: {

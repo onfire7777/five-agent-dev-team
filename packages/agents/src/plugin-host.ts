@@ -100,17 +100,20 @@ export function parseLifecycleCommand(command: string): string[] {
   const args: string[] = [];
   let current = "";
   let quote: "'" | '"' | null = null;
+  let tokenStarted = false;
 
   for (let index = 0; index < command.length; index += 1) {
     const char = command[index];
 
     if (quote === "'") {
+      tokenStarted = true;
       if (char === "'") quote = null;
       else current += char;
       continue;
     }
 
     if (quote === '"') {
+      tokenStarted = true;
       if (char === '"') {
         quote = null;
         continue;
@@ -130,22 +133,25 @@ export function parseLifecycleCommand(command: string): string[] {
     }
 
     if (char === "'" || char === '"') {
+      tokenStarted = true;
       quote = char;
       continue;
     }
 
     if (/\s/.test(char)) {
-      if (current) {
+      if (tokenStarted) {
         args.push(current);
         current = "";
+        tokenStarted = false;
       }
       continue;
     }
 
+    tokenStarted = true;
     current += char;
   }
 
   if (quote) throw new Error("Unterminated quoted lifecycle command.");
-  if (current) args.push(current);
+  if (tokenStarted) args.push(current);
   return args;
 }

@@ -210,6 +210,15 @@ describe("plugin host", () => {
     ]);
   });
 
+  it("preserves intentionally empty quoted lifecycle command arguments", () => {
+    expect(parseLifecycleCommand('node scripts/init-plugin.mjs "" --flag')).toEqual([
+      "node",
+      "scripts/init-plugin.mjs",
+      "",
+      "--flag"
+    ]);
+  });
+
   it("disposes initialized plugins when a later plugin fails", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "plugin-rollback-"));
     try {
