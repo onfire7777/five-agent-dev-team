@@ -14,6 +14,25 @@ const CANONICAL_STAGES = new Set([
   "janitor",
 ]);
 const MODES = new Set(["no-op", "mutated", "blocked", "verified", "routed", "merged", "cleanup"]);
+const V1_REQUIRED_KEYS = [
+  "schemaVersion",
+  "project",
+  "cycleId",
+  "stage",
+  "stageOrder",
+  "mode",
+  "claimId",
+  "baseSha",
+  "headSha",
+  "branch",
+  "pr",
+  "filesTouched",
+  "checksRun",
+  "checksPassed",
+  "blockers",
+  "handoff",
+  "writtenAt",
+];
 const strict = process.argv.includes("--strict");
 const verbose = process.argv.includes("--verbose");
 const legacyWarnings = process.argv.includes("--legacy-warnings");
@@ -133,7 +152,7 @@ function validateReceiptShape(receipt, context, { warnLegacy }) {
   const legacy = receipt.schemaVersion === undefined;
   const requiredKeys = legacy
     ? ["cycleId", "stage"]
-    : ["cycleId", "stage", "mode", "filesTouched", "checksRun", "blockers", "handoff", "writtenAt"];
+    : V1_REQUIRED_KEYS;
 
   for (const key of requiredKeys) {
     if (!(key in receipt)) errors.push(`${context} missing ${key}`);
@@ -152,9 +171,15 @@ function validateReceiptShape(receipt, context, { warnLegacy }) {
 
   if (!CANONICAL_STAGES.has(receipt.stage)) {
     const message = `${context} uses legacy or invalid stage name: ${receipt.stage}`;
-    if (legacy && !legacyWarnings) legacyRecords.add(context);
-    else if (warnLegacy) warnings.push(message);
-    else errors.push(message);
+    if (!legacy) {
+      errors.push(message);
+    } else if (!legacyWarnings) {
+      legacyRecords.add(context);
+    } else if (warnLegacy) {
+      warnings.push(message);
+    } else {
+      errors.push(message);
+    }
   }
 
   if (receipt.mode && !MODES.has(receipt.mode)) {

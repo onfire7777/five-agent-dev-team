@@ -26,9 +26,11 @@ const STAGES = new Map([
   ["docs-alignment", { id: "docs-alignment", order: 5 }],
   ["6", { id: "captain", order: 6 }],
   ["captain", { id: "captain", order: 6 }],
+  ["7", { id: "meta-health", order: 7 }],
   ["meta", { id: "meta-health", order: 7 }],
   ["meta-health", { id: "meta-health", order: 7 }],
   ["automation-health", { id: "meta-health", order: 7 }],
+  ["8", { id: "janitor", order: 8 }],
   ["janitor", { id: "janitor", order: 8 }],
   ["ops-janitor", { id: "janitor", order: 8 }],
 ]);
@@ -47,12 +49,13 @@ if (!MODES.has(mode)) {
 const stateDir = join(homedir(), ".codex", "state");
 const runDir = join(stateDir, "runs", cycleId);
 mkdirSync(runDir, { recursive: true });
+const localRepo = await maybeGit(["rev-parse", "--show-toplevel"]) || process.cwd();
 
 const receipt = {
   schemaVersion: 1,
   project: {
     name: "five-agent-dev-team",
-    localRepo: "C:\\Users\\burni\\Desktop\\five-agent-dev-team",
+    localRepo,
     githubRepo: "onfire7777/five-agent-dev-team",
   },
   cycleId,
