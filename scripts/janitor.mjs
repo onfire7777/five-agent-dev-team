@@ -8,18 +8,21 @@ const worktrees = parseWorktrees(await capture("git", ["worktree", "list", "--po
 const results = [];
 
 for (const tree of worktrees) {
-  if (!tree.path || tree.bare || tree.detached) continue;
-  const normalizedPath = tree.path.replaceAll("/", "\\");
+  const treePath = tree.path || tree.worktree;
+  if (!treePath || tree.bare) continue;
+  const normalizedPath = treePath.replaceAll("/", "\\");
   if (!normalizedPath.toLowerCase().includes("\\.codex\\worktrees\\")) continue;
 
-  const status = (await capture("git", ["-C", tree.path, "status", "--porcelain"])).trim();
-  const mtime = statSync(tree.path).mtimeMs;
-  const openPr = tree.branch ? await hasOpenPr(tree.branch.replace(/^refs\/heads\//, "")) : true;
-  const safe = !status && !openPr && mtime < cutoff;
+  const status = (await capture("git", ["-C", treePath, "status", "--porcelain"])).trim();
+  const mtime = statSync(treePath).mtimeMs;
+  const branch = tree.branch ? tree.branch.replace(/^refs\/heads\//, "") : null;
+  const openPr = branch ? await hasOpenPr(branch) : false;
+  const stale = mtime < cutoff;
+  const safe = !status && !openPr && stale;
 
-  results.push({ path: tree.path, branch: tree.branch, dirty: Boolean(status), openPr, stale: mtime < cutoff, safe });
+  results.push({ path: treePath, branch, detached: Boolean(tree.detached), dirty: Boolean(status), openPr, stale, safe });
   if (safe && apply) {
-    await run("git", ["worktree", "remove", tree.path]);
+    await run("git", ["worktree", "remove", treePath]);
   }
 }
 
