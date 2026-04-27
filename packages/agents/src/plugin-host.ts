@@ -30,8 +30,8 @@ export async function initializePlugins(config: TargetRepoConfig): Promise<Loade
         throw new Error(`Plugin ${plugin.name} is scoped to another repo.`);
       }
       assertNoUnsupportedContributions(plugin);
-      if (plugin.initCommand) await runLifecycleCommand(plugin.initCommand, config.repo.localPath);
       loaded.push({ plugin, contribution: plugin.contributions });
+      if (plugin.initCommand) await runLifecycleCommand(plugin.initCommand, config.repo.localPath);
     }
   } catch (error) {
     await disposePlugins(loaded, config.repo.localPath).catch(() => undefined);

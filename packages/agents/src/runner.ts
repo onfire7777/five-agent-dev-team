@@ -52,6 +52,16 @@ type AgentRunPreparation = {
   capabilityIds: string[];
 };
 
+type ConfiguredMcpServer = {
+  id: string;
+  server: any;
+};
+
+type ConfiguredHostedTool = {
+  id: string;
+  tool: any;
+};
+
 export async function runRoleAgent(definition: AgentDefinition, context: AgentRunContext): Promise<AgentRunResult> {
   const policy = {
     ...DEFAULT_SCHEDULER_POLICY,
@@ -60,7 +70,7 @@ export async function runRoleAgent(definition: AgentDefinition, context: AgentRu
   const preparation = await prepareAgentRun(definition, context);
 
   if ((process.env.AGENT_LIVE_MODE === "true" || shouldUseLiveApi(policy)) && process.env.OPENAI_API_KEY) {
-    return runLiveOpenAIAgent(definition, context, preparation);
+    return runLiveOpenAIAgent(definition, context);
   }
 
   const artifact = createTemplateArtifact(definition, context, preparation);
@@ -70,7 +80,8 @@ export async function runRoleAgent(definition: AgentDefinition, context: AgentRu
 async function prepareAgentRun(
   definition: AgentDefinition,
   context: AgentRunContext,
-  selectedModelOverride?: string
+  selectedModelOverride?: string,
+  capabilityIdsOverride?: string[]
 ): Promise<AgentRunPreparation> {
   const selectedModel = selectedModelOverride || modelForAgent(definition, context.targetRepoConfig);
   const skillLoad = await loadTriggeredSkills({
@@ -79,7 +90,7 @@ async function prepareAgentRun(
     agent: definition.role,
     targetRepoConfig: context.targetRepoConfig
   });
-  const capabilityIds = activeCapabilityIds(definition, context);
+  const capabilityIds = capabilityIdsOverride || activeCapabilityIds(definition, context);
   const prompt = assembleCanonicalPrompt({
     definition,
     workItem: context.workItem,
@@ -105,27 +116,16 @@ async function prepareAgentRun(
   };
 }
 
-async function runLiveOpenAIAgent(
-  definition: AgentDefinition,
-  context: AgentRunContext,
-  preparation: AgentRunPreparation
-): Promise<AgentRunResult> {
+async function runLiveOpenAIAgent(definition: AgentDefinition, context: AgentRunContext): Promise<AgentRunResult> {
   const sdk = await import("@openai/agents");
   const primaryModel = modelForAgent(definition, context.targetRepoConfig);
   const fallbackModel = fallbackModelForAgent(context.targetRepoConfig);
   try {
-    return await runLiveOpenAIAgentWithModel(sdk, definition, context, primaryModel, preparation);
+    return await runLiveOpenAIAgentWithModel(sdk, definition, context, primaryModel);
   } catch (error) {
     if (!fallbackModel || fallbackModel === primaryModel) throw error;
     try {
-      const fallbackPreparation = await prepareAgentRun(definition, context, fallbackModel);
-      const fallbackResult = await runLiveOpenAIAgentWithModel(
-        sdk,
-        definition,
-        context,
-        fallbackModel,
-        fallbackPreparation
-      );
+      const fallbackResult = await runLiveOpenAIAgentWithModel(sdk, definition, context, fallbackModel);
       return {
         ...fallbackResult,
         rawOutput: `Primary model ${primaryModel} failed; fallback ${fallbackModel} succeeded.\n${fallbackResult.rawOutput}`
@@ -140,22 +140,26 @@ async function runLiveOpenAIAgentWithModel(
   sdk: any,
   definition: AgentDefinition,
   context: AgentRunContext,
-  model: string,
-  preparation: AgentRunPreparation
+  model: string
 ): Promise<AgentRunResult> {
   const AgentCtor = (sdk as any).Agent;
   const run = (sdk as any).run;
-  const mcpServers = createConfiguredMcpServers(sdk, definition, context);
-  const tools = createHostedTools(sdk, definition, context);
-  const mcpSession = mcpServers.length
-    ? await sdk.MCPServers.open(mcpServers, {
-        connectTimeoutMs: Number(process.env.AGENT_MCP_CONNECT_TIMEOUT_MS || 10_000),
-        closeTimeoutMs: Number(process.env.AGENT_MCP_CLOSE_TIMEOUT_MS || 5_000),
-        connectInParallel: true,
-        dropFailed: true,
-        strict: /^(1|true|yes)$/i.test(process.env.AGENT_MCP_STRICT || "")
-      })
+  const configuredMcpServers = createConfiguredMcpServers(sdk, definition, context);
+  const hostedTools = createHostedTools(sdk, definition, context);
+  const mcpSession = configuredMcpServers.length
+    ? await sdk.MCPServers.open(
+        configuredMcpServers.map(({ server }) => server),
+        {
+          connectTimeoutMs: Number(process.env.AGENT_MCP_CONNECT_TIMEOUT_MS || 10_000),
+          closeTimeoutMs: Number(process.env.AGENT_MCP_CLOSE_TIMEOUT_MS || 5_000),
+          connectInParallel: true,
+          dropFailed: true,
+          strict: /^(1|true|yes)$/i.test(process.env.AGENT_MCP_STRICT || "")
+        }
+      )
     : null;
+  const capabilityIds = runtimeCapabilityIds(configuredMcpServers, mcpSession?.active || [], hostedTools);
+  const preparation = await prepareAgentRun(definition, context, model, capabilityIds);
 
   try {
     const agent = new AgentCtor({
@@ -163,7 +167,7 @@ async function runLiveOpenAIAgentWithModel(
       instructions: definition.instructions,
       model,
       mcpServers: mcpSession?.active || [],
-      tools
+      tools: hostedTools.map(({ tool }) => tool)
     });
 
     const result = await run(agent, preparation.prompt);
@@ -173,7 +177,13 @@ async function runLiveOpenAIAgentWithModel(
       createInvalidLiveArtifact(definition, context, rawOutput, preparation);
     return { artifact, rawOutput, live: true };
   } finally {
-    await mcpSession?.close();
+    try {
+      await mcpSession?.close();
+    } catch {
+      process.emitWarning("MCP session close failed; preserving completed agent result.", {
+        code: "AGENT_MCP_CLOSE_FAILED"
+      });
+    }
   }
 }
 
@@ -190,7 +200,11 @@ function fallbackModelForAgent(config?: TargetRepoConfig): string | null {
   return config.models.fallbackModel;
 }
 
-function createConfiguredMcpServers(sdk: any, definition: AgentDefinition, context: AgentRunContext): any[] {
+function createConfiguredMcpServers(
+  sdk: any,
+  definition: AgentDefinition,
+  context: AgentRunContext
+): ConfiguredMcpServer[] {
   if (!context.targetRepoConfig) return [];
   return context.targetRepoConfig.integrations.mcpServers
     .filter((server) =>
@@ -200,15 +214,33 @@ function createConfiguredMcpServers(sdk: any, definition: AgentDefinition, conte
         agent: definition.role
       })
     )
-    .map((server) => createMcpServer(sdk, server));
+    .map((server) => ({
+      id: `mcp:${server.name}`,
+      server: createMcpServer(sdk, server)
+    }));
 }
 
-function createHostedTools(sdk: any, definition: AgentDefinition, context: AgentRunContext): any[] {
+function createHostedTools(sdk: any, definition: AgentDefinition, context: AgentRunContext): ConfiguredHostedTool[] {
   if (!shouldUseHostedWebSearch(definition, context) || typeof sdk.webSearchTool !== "function") return [];
   return [
-    sdk.webSearchTool({
-      searchContextSize: "medium"
-    })
+    {
+      id: "hosted:hosted-search",
+      tool: sdk.webSearchTool({
+        searchContextSize: "medium"
+      })
+    }
+  ];
+}
+
+function runtimeCapabilityIds(
+  configuredMcpServers: ConfiguredMcpServer[],
+  activeMcpServers: any[],
+  hostedTools: ConfiguredHostedTool[]
+): string[] {
+  const active = new Set(activeMcpServers);
+  return [
+    ...configuredMcpServers.filter(({ server }) => active.has(server)).map(({ id }) => id),
+    ...hostedTools.map(({ id }) => id)
   ];
 }
 

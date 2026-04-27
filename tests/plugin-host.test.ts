@@ -247,6 +247,29 @@ describe("plugin host", () => {
     }
   });
 
+  it("disposes a plugin when its own init command fails after side effects", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "plugin-init-rollback-"));
+    try {
+      const config = configWithPlugins(
+        [
+          {
+            ...contributionPlugin,
+            name: "partial-init-plugin",
+            initCommand: "node -e \"require('fs').writeFileSync('partial.txt','1'); process.exit(2)\"",
+            disposeCommand: "node -e \"require('fs').writeFileSync('disposed.txt','1')\""
+          }
+        ],
+        tempDir
+      );
+
+      await expect(initializePlugins(config)).rejects.toThrow();
+      expect(existsSync(join(tempDir, "partial.txt"))).toBe(true);
+      expect(existsSync(join(tempDir, "disposed.txt"))).toBe(true);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("reports dispose command failures when disposing plugins directly", async () => {
     await expect(
       disposePlugins(

@@ -42,10 +42,18 @@ vi.mock("@openai/agents", () => {
       open: vi.fn()
     },
     MCPServerStdio: class {
-      constructor(_options: unknown) {}
+      name: string;
+
+      constructor(options: { name: string }) {
+        this.name = options.name;
+      }
     },
     MCPServerStreamableHttp: class {
-      constructor(_options: unknown) {}
+      name: string;
+
+      constructor(options: { name: string }) {
+        this.name = options.name;
+      }
     },
     webSearchTool: vi.fn(() => {
       liveAgentMock.hostedSearchCalls += 1;
@@ -220,6 +228,90 @@ describe("agent runner", () => {
     }
   });
 
+  it("advertises only connected MCP capabilities in live artifacts", async () => {
+    const originalLiveMode = process.env.AGENT_LIVE_MODE;
+    const originalOpenAiKey = process.env.OPENAI_API_KEY;
+    const originalAgentModel = process.env.AGENT_MODEL;
+    const agents = await import("@openai/agents");
+    liveAgentMock.models.length = 0;
+    liveAgentMock.prompts.length = 0;
+    liveAgentMock.hostedSearchCalls = 0;
+    process.env.AGENT_LIVE_MODE = "true";
+    process.env.OPENAI_API_KEY = "test-key";
+    process.env.AGENT_MODEL = "gpt-fallback";
+    try {
+      vi.mocked(agents.MCPServers.open).mockImplementationOnce(
+        async (servers: any[]) =>
+          ({
+            active: [servers[0]],
+            close: vi.fn()
+          }) as any
+      );
+
+      const result = await runRoleAgent(getAgentDefinition("frontend-ux-engineering"), {
+        workItem,
+        stage: "FRONTEND_BUILD",
+        previousArtifacts: [],
+        targetRepoConfig: liveTargetConfig({
+          mcpServers: [mcpServerConfig("connected-mcp"), mcpServerConfig("dropped-mcp")]
+        })
+      });
+
+      expect(result.artifact.capabilityIds).toEqual(["mcp:connected-mcp"]);
+      expect(liveAgentMock.prompts.at(-1)).toContain("mcp:connected-mcp");
+      expect(liveAgentMock.prompts.at(-1)).not.toContain("mcp:dropped-mcp");
+    } finally {
+      vi.mocked(agents.MCPServers.open).mockReset();
+      restoreEnv("AGENT_LIVE_MODE", originalLiveMode);
+      restoreEnv("OPENAI_API_KEY", originalOpenAiKey);
+      restoreEnv("AGENT_MODEL", originalAgentModel);
+    }
+  });
+
+  it("preserves successful agent results when MCP close fails", async () => {
+    const originalLiveMode = process.env.AGENT_LIVE_MODE;
+    const originalOpenAiKey = process.env.OPENAI_API_KEY;
+    const originalAgentModel = process.env.AGENT_MODEL;
+    const agents = await import("@openai/agents");
+    const warningSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => true as any);
+    process.env.AGENT_LIVE_MODE = "true";
+    process.env.OPENAI_API_KEY = "test-key";
+    process.env.AGENT_MODEL = "gpt-fallback";
+    try {
+      vi.mocked(agents.MCPServers.open).mockImplementationOnce(
+        async (servers: any[]) =>
+          ({
+            active: [servers[0]],
+            close: vi.fn(async () => {
+              throw new Error("close failed");
+            })
+          }) as any
+      );
+
+      const result = await runRoleAgent(getAgentDefinition("frontend-ux-engineering"), {
+        workItem,
+        stage: "FRONTEND_BUILD",
+        previousArtifacts: [],
+        targetRepoConfig: liveTargetConfig({
+          mcpServers: [mcpServerConfig("unstable-close-mcp")]
+        })
+      });
+
+      expect(result.live).toBe(true);
+      expect(result.artifact.status).toBe("passed");
+      expect(warningSpy).toHaveBeenCalledWith(
+        "MCP session close failed; preserving completed agent result.",
+        expect.objectContaining({ code: "AGENT_MCP_CLOSE_FAILED" })
+      );
+    } finally {
+      warningSpy.mockRestore();
+      vi.mocked(agents.MCPServers.open).mockReset();
+      restoreEnv("AGENT_LIVE_MODE", originalLiveMode);
+      restoreEnv("OPENAI_API_KEY", originalOpenAiKey);
+      restoreEnv("AGENT_MODEL", originalAgentModel);
+    }
+  });
+
   it("does not claim verification checks on template artifacts", async () => {
     const result = await runRoleAgent(getAgentDefinition("quality-security-privacy-release"), {
       workItem: { ...workItem, state: "VERIFY" },
@@ -266,4 +358,21 @@ function liveTargetConfig(overrides: { mcpServers?: unknown[]; capabilityPacks?:
       mode: "autonomous"
     }
   });
+}
+
+function mcpServerConfig(name: string) {
+  return {
+    name,
+    category: "github",
+    enabled: true,
+    transport: "stdio",
+    command: name,
+    args: [],
+    activation: { mode: "always", stages: [], agents: [], keywords: [] },
+    env: {},
+    timeoutSeconds: 30,
+    cacheToolsList: true,
+    toolAllowlist: [],
+    notes: []
+  };
 }
