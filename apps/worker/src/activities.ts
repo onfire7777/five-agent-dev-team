@@ -331,11 +331,11 @@ async function runAgentWithTeamContext(
   const definition = getAgentDefinition(role);
   const store = await getActivityStore();
   const baseConfig = await loadReleaseConfig(input.workItem);
+  const scopedWorkItem = scopeWorkItemToProject(input.workItem, baseConfig);
+  await ensureNotStopped(scopedWorkItem.id, baseConfig);
   const loadedPlugins = await initializePlugins(baseConfig);
   const config = mergePluginContributions(baseConfig, loadedPlugins);
-  const scopedWorkItem = scopeWorkItemToProject(input.workItem, config);
   try {
-    await ensureNotStopped(scopedWorkItem.id, config);
     await store.addEvent({
       workItemId: scopedWorkItem.id,
       stage: input.stage,
@@ -591,14 +591,16 @@ export async function performAutonomousRelease(
     ...signal,
     releaseProofPresent: signal.releaseProofPresent || Boolean(config.commands.release.trim())
   });
-  const releaseCommand = preReleaseDecision.allowed ? await runReleaseCommand(config, scopedWorkItem) : null;
+  const releaseCommand = preReleaseDecision.allowed
+    ? await runReleaseCommand(config, scopedWorkItem, releaseTag)
+    : null;
   if (releaseCommand?.ok) {
     await writeReleaseProof(scopedWorkItem, config, releaseCommand);
   }
   const postReleaseHealth = releaseCommand?.ok ? await readRuntimeHealthEvidence() : null;
   const rollbackCommand =
     postReleaseHealth?.required && !postReleaseHealth.ok
-      ? await runConfiguredCommand(config, "rollback", rollback.command, scopedWorkItem)
+      ? await runConfiguredCommand(config, "rollback", rollback.command, scopedWorkItem, releaseTag)
       : null;
   const releaseProofPresent =
     signal.releaseProofPresent || Boolean(releaseCommand?.ok) || (await hasReleaseProof(scopedWorkItem, config));
@@ -924,17 +926,22 @@ async function runConfiguredChecks(config: TargetRepoConfig, names: CommandName[
   return results;
 }
 
-async function runReleaseCommand(config: TargetRepoConfig, workItem: WorkItem): Promise<CommandResult> {
-  return runConfiguredCommand(config, "release", config.commands.release, workItem);
+async function runReleaseCommand(
+  config: TargetRepoConfig,
+  workItem: WorkItem,
+  releaseTag: string
+): Promise<CommandResult> {
+  return runConfiguredCommand(config, "release", config.commands.release, workItem, releaseTag);
 }
 
 async function runConfiguredCommand(
   config: TargetRepoConfig,
   name: string,
   command: string,
-  workItem?: WorkItem
+  workItem?: WorkItem,
+  releaseTagOverride?: string
 ): Promise<CommandResult> {
-  const releaseTag = workItem ? releaseTagForWorkItem(workItem) : "";
+  const releaseTag = workItem ? releaseTagOverride || releaseTagForWorkItem(workItem) : "";
   const rollback = workItem ? rollbackPlanForRelease(workItem, config, releaseTag) : null;
   try {
     await exec(command, {
@@ -1378,7 +1385,8 @@ function releaseTagForWorkItem(workItem: WorkItem): string {
   const configured = process.env.AGENT_RELEASE_TAG?.trim();
   if (configured) return assertSafeGitRef(configured, "release tag");
   const safeId = safeFileSegment(workItem.id).slice(0, 80) || "work-item";
-  return assertSafeGitRef(`agent-${safeId}`, "release tag");
+  const attempt = new Date().toISOString().replace(/[:.]/g, "-");
+  return assertSafeGitRef(`agent-${safeId}-${attempt}`, "release tag");
 }
 
 function rollbackPlanForRelease(

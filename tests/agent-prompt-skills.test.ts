@@ -43,6 +43,8 @@ describe("agent prompt and skills", () => {
     const blocks = [...result.prompt.matchAll(/<<< BLOCK: ([a-z_]+) >>>/g)].map((match) => match[1]);
     expect(blocks).toEqual(["identity", "nonnegotiables", "context", "skills", "tools", "task", "output_contract"]);
     expect(result.prompt).toContain("API contract is ready for frontend consumption.");
+    expect(result.prompt).not.toContain("accompanying Markdown");
+    expect(result.prompt).not.toContain("Markdown body: required");
     expect(result.promptHash).toMatch(/^[a-f0-9]{64}$/);
   });
 

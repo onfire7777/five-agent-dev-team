@@ -12,6 +12,7 @@ const envKeys = [
   "AGENT_ROLLBACK_PLAN_PRESENT",
   "AGENT_REQUIRE_RUNTIME_HEALTH",
   "CONTROLLER_HEALTH_URL",
+  "AGENT_RELEASE_TAG",
   "AGENT_ROLLBACK_COMMAND",
   "AGENT_COMMAND_TIMEOUT_MS",
   "RELEASE_PROOF_FILE"
@@ -72,14 +73,18 @@ describe("release activities", () => {
     process.env.AGENT_ROLLBACK_PLAN_PRESENT = "true";
     process.env.AGENT_REQUIRE_RUNTIME_HEALTH = "true";
     process.env.CONTROLLER_HEALTH_URL = "http://127.0.0.1:1/health";
-    process.env.AGENT_ROLLBACK_COMMAND = "node -e \"require('fs').writeFileSync('rollback.marker','rolled-back')\"";
+    delete process.env.AGENT_RELEASE_TAG;
+    process.env.AGENT_ROLLBACK_COMMAND =
+      "node -e \"require('fs').writeFileSync('rollback.marker',process.env.AGENT_RELEASE_TAG||'')\"";
     process.env.AGENT_COMMAND_TIMEOUT_MS = "10000";
     process.env.RELEASE_PROOF_FILE = proofPath;
 
     const artifact = await performAutonomousRelease(workItem(), [verificationArtifact()]);
 
-    await expect(fs.readFile(path.join(tempDir, "release.marker"), "utf8")).resolves.toBe("released");
-    await expect(fs.readFile(path.join(tempDir, "rollback.marker"), "utf8")).resolves.toBe("rolled-back");
+    const releaseTag = await fs.readFile(path.join(tempDir, "release.marker"), "utf8");
+    const rollbackTag = await fs.readFile(path.join(tempDir, "rollback.marker"), "utf8");
+    expect(releaseTag).toMatch(/^agent-wi-release-\d{4}-\d{2}-\d{2}T/);
+    expect(rollbackTag).toBe(releaseTag);
     expect(artifact.status).toBe("blocked");
     expect(artifact.releaseReadiness).toBe("not_ready");
     expect(artifact.nextStage).toBe("BLOCKED");
@@ -243,7 +248,7 @@ commands:
   test: "node -e \\"process.exit(0)\\""
   build: "node -e \\"process.exit(0)\\""
   security: "node -e \\"process.exit(0)\\""
-  release: "node -e \\"require('fs').writeFileSync('release.marker','released')\\""
+  release: "node -e \\"require('fs').writeFileSync('release.marker',process.env.AGENT_RELEASE_TAG||'')\\""
 context:
   includeDefaultContextDir: true
   defaultContextDir: .agent-team/context

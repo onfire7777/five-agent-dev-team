@@ -1,6 +1,48 @@
-import { describe, expect, it } from "vitest";
+import crypto from "node:crypto";
+import { describe, expect, it, vi } from "vitest";
 import { getAgentDefinition, resolveMcpEnv, runRoleAgent } from "../packages/agents/src";
-import type { WorkItem } from "../packages/shared/src";
+import { TargetRepoConfigSchema, type WorkItem } from "../packages/shared/src";
+
+const liveAgentMock = vi.hoisted(() => ({
+  models: [] as string[],
+  prompts: [] as string[]
+}));
+
+vi.mock("@openai/agents", () => {
+  class Agent {
+    model: string;
+
+    constructor(options: { model: string }) {
+      this.model = options.model;
+      liveAgentMock.models.push(options.model);
+    }
+  }
+
+  return {
+    Agent,
+    run: vi.fn(async (agent: Agent, prompt: string) => {
+      liveAgentMock.prompts.push(prompt);
+      if (agent.model === "gpt-primary") throw new Error("primary failed");
+      return {
+        finalOutput: JSON.stringify({
+          status: "passed",
+          title: "Fallback completed",
+          summary: "Fallback model completed the stage.",
+          decisions: ["Used fallback model."],
+          risks: [],
+          filesChanged: [],
+          testsRun: [],
+          releaseReadiness: "unknown",
+          nextStage: "CONTRACT"
+        })
+      };
+    }),
+    MCPServers: {
+      open: vi.fn()
+    },
+    webSearchTool: vi.fn(() => ({}))
+  };
+});
 
 const workItem: WorkItem = {
   id: "WI-2000",
@@ -92,4 +134,70 @@ describe("agent runner", () => {
       restoreEnv("GITHUB_PERSONAL_ACCESS_TOKEN", originalPersonalToken);
     }
   });
+
+  it("recomputes prompt metadata when live mode falls back to another model", async () => {
+    const originalLiveMode = process.env.AGENT_LIVE_MODE;
+    const originalOpenAiKey = process.env.OPENAI_API_KEY;
+    const originalAgentModel = process.env.AGENT_MODEL;
+    liveAgentMock.models.length = 0;
+    liveAgentMock.prompts.length = 0;
+    process.env.AGENT_LIVE_MODE = "true";
+    process.env.OPENAI_API_KEY = "test-key";
+    delete process.env.AGENT_MODEL;
+    try {
+      const result = await runRoleAgent(getAgentDefinition("frontend-ux-engineering"), {
+        workItem,
+        stage: "FRONTEND_BUILD",
+        previousArtifacts: [],
+        targetRepoConfig: liveTargetConfig()
+      });
+
+      expect(liveAgentMock.models).toEqual(["gpt-primary", "gpt-fallback"]);
+      expect(liveAgentMock.prompts[0]).toContain("gpt-primary selected for this run.");
+      expect(liveAgentMock.prompts[1]).toContain("gpt-fallback selected for this run.");
+      expect(result.live).toBe(true);
+      expect(result.artifact.promptHash).toBe(
+        crypto.createHash("sha256").update(liveAgentMock.prompts[1]).digest("hex")
+      );
+    } finally {
+      restoreEnv("AGENT_LIVE_MODE", originalLiveMode);
+      restoreEnv("OPENAI_API_KEY", originalOpenAiKey);
+      restoreEnv("AGENT_MODEL", originalAgentModel);
+    }
+  });
 });
+
+function liveTargetConfig() {
+  return TargetRepoConfigSchema.parse({
+    repo: {
+      owner: "owner",
+      name: "repo",
+      defaultBranch: "main",
+      localPath: process.cwd()
+    },
+    commands: {
+      install: "npm ci",
+      lint: "npm run lint",
+      typecheck: "npm run typecheck",
+      test: "npm test",
+      build: "npm run build",
+      security: "npm audit --audit-level=high",
+      release: 'gh release create "$AGENT_RELEASE_TAG" --notes-file release/notes.md --verify-tag'
+    },
+    integrations: {
+      mcpServers: [],
+      capabilityPacks: [],
+      plugins: []
+    },
+    models: {
+      primaryCodingModel: "gpt-primary",
+      researchModel: "gpt-research",
+      reviewModel: "gpt-review",
+      fallbackModel: "gpt-fallback",
+      useBestAvailable: true
+    },
+    release: {
+      mode: "autonomous"
+    }
+  });
+}

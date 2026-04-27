@@ -29,26 +29,37 @@ export async function initializePlugins(config: TargetRepoConfig): Promise<Loade
       if (plugin.repo && plugin.repo !== `${config.repo.owner}/${config.repo.name}`) {
         throw new Error(`Plugin ${plugin.name} is scoped to another repo.`);
       }
+      assertNoUnsupportedContributions(plugin);
       if (plugin.initCommand) await runLifecycleCommand(plugin.initCommand, config.repo.localPath);
       loaded.push({ plugin, contribution: plugin.contributions });
     }
   } catch (error) {
-    await disposePlugins(loaded, config.repo.localPath);
+    await disposePlugins(loaded, config.repo.localPath).catch(() => undefined);
     throw error;
   }
   return loaded;
 }
 
 export async function disposePlugins(plugins: LoadedPlugin[], cwd: string): Promise<void> {
-  await Promise.all(
+  const results = await Promise.allSettled(
     plugins.map(async ({ plugin }) => {
       if (plugin.disposeCommand) await runLifecycleCommand(plugin.disposeCommand, cwd);
     })
   );
+  const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+  if (failures.length) {
+    throw new AggregateError(
+      failures.map((failure) => failure.reason),
+      `Failed to dispose ${failures.length} plugin(s).`
+    );
+  }
 }
 
 export function mergePluginContributions(config: TargetRepoConfig, plugins: LoadedPlugin[]): TargetRepoConfig {
   if (!plugins.length) return config;
+  for (const loaded of plugins) {
+    assertNoUnsupportedContributions(loaded.plugin);
+  }
   return {
     ...config,
     integrations: {
@@ -61,6 +72,17 @@ export function mergePluginContributions(config: TargetRepoConfig, plugins: Load
       plugins: config.integrations.plugins
     }
   };
+}
+
+function assertNoUnsupportedContributions(plugin: AgentTeamPlugin): void {
+  const unsupported = [
+    plugin.contributions.skills.length ? "skills" : null,
+    plugin.contributions.tools.length ? "tools" : null,
+    plugin.contributions.releaseGates.length ? "releaseGates" : null
+  ].filter((value): value is string => Boolean(value));
+  if (unsupported.length) {
+    throw new Error(`Plugin ${plugin.name} declares unsupported contributions: ${unsupported.join(", ")}.`);
+  }
 }
 
 async function runLifecycleCommand(command: string, cwd: string): Promise<void> {

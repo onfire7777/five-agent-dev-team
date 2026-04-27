@@ -2,7 +2,12 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { initializePlugins, mergePluginContributions, parseLifecycleCommand } from "../packages/agents/src";
+import {
+  disposePlugins,
+  initializePlugins,
+  mergePluginContributions,
+  parseLifecycleCommand
+} from "../packages/agents/src";
 import { type AgentTeamPlugin, TargetRepoConfigSchema, type TargetRepoConfig } from "../packages/shared/src";
 
 function configWithPlugins(plugins: AgentTeamPlugin[], localPath = process.cwd()): TargetRepoConfig {
@@ -174,6 +179,22 @@ describe("plugin host", () => {
     expect(merged.integrations.plugins).toHaveLength(1);
   });
 
+  it("rejects unsupported plugin contributions instead of silently dropping them", async () => {
+    const config = configWithPlugins([
+      {
+        ...contributionPlugin,
+        contributions: {
+          ...contributionPlugin.contributions,
+          skills: [{ id: "browser-smoke", relativePath: "skills/browser-smoke/SKILL.md" }],
+          tools: [{ name: "browser.screenshot", description: "Capture a browser screenshot." }],
+          releaseGates: [{ id: "browser-smoke-gate", command: "npm run browser:smoke", required: true }]
+        }
+      }
+    ]);
+
+    await expect(initializePlugins(config)).rejects.toThrow(/unsupported contributions: skills, tools, releaseGates/);
+  });
+
   it("preserves quoted lifecycle command arguments", () => {
     expect(
       parseLifecycleCommand(
@@ -215,5 +236,23 @@ describe("plugin host", () => {
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("reports dispose command failures when disposing plugins directly", async () => {
+    await expect(
+      disposePlugins(
+        [
+          {
+            plugin: {
+              ...contributionPlugin,
+              name: "dispose-fails",
+              disposeCommand: 'node -e "process.exit(2)"'
+            },
+            contribution: contributionPlugin.contributions
+          }
+        ],
+        process.cwd()
+      )
+    ).rejects.toThrow(/Failed to dispose 1 plugin/);
   });
 });

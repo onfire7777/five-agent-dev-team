@@ -67,8 +67,12 @@ export async function runRoleAgent(definition: AgentDefinition, context: AgentRu
   return { artifact, rawOutput: artifact.summary, live: false };
 }
 
-async function prepareAgentRun(definition: AgentDefinition, context: AgentRunContext): Promise<AgentRunPreparation> {
-  const selectedModel = modelForAgent(definition, context.targetRepoConfig);
+async function prepareAgentRun(
+  definition: AgentDefinition,
+  context: AgentRunContext,
+  selectedModelOverride?: string
+): Promise<AgentRunPreparation> {
+  const selectedModel = selectedModelOverride || modelForAgent(definition, context.targetRepoConfig);
   const skillLoad = await loadTriggeredSkills({
     workItem: context.workItem,
     stage: context.stage,
@@ -114,7 +118,14 @@ async function runLiveOpenAIAgent(
   } catch (error) {
     if (!fallbackModel || fallbackModel === primaryModel) throw error;
     try {
-      const fallbackResult = await runLiveOpenAIAgentWithModel(sdk, definition, context, fallbackModel, preparation);
+      const fallbackPreparation = await prepareAgentRun(definition, context, fallbackModel);
+      const fallbackResult = await runLiveOpenAIAgentWithModel(
+        sdk,
+        definition,
+        context,
+        fallbackModel,
+        fallbackPreparation
+      );
       return {
         ...fallbackResult,
         rawOutput: `Primary model ${primaryModel} failed; fallback ${fallbackModel} succeeded.\n${fallbackResult.rawOutput}`

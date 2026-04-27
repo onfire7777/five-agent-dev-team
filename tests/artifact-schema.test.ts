@@ -63,7 +63,7 @@ describe("stage artifact schema", () => {
     expect(loopClosure.stage).toBe("CLOSED");
   });
 
-  it("requires typed release rollback instructions", () => {
+  it("accepts typed release rollback instructions", () => {
     const packet = ReleasePacketSchema.parse({
       workItemId: "WI-1002",
       projectId: "owner-repo",
@@ -78,6 +78,23 @@ describe("stage artifact schema", () => {
     });
 
     expect(packet.rollback.command).toContain("gh release delete");
+  });
+
+  it("rejects empty release rollback instructions", () => {
+    expect(
+      ReleasePacketSchema.safeParse({
+        workItemId: "WI-1002",
+        projectId: "owner-repo",
+        tag: "agent-wi-1002",
+        releaseNotes: "Release passed.",
+        gates: [{ name: "release-command", passed: true, evidence: "gh release create passed." }],
+        rollback: {
+          command: "",
+          verification: ""
+        },
+        recommendation: "go"
+      }).success
+    ).toBe(false);
   });
 
   it("accepts real work item brief identifiers", () => {
@@ -103,12 +120,12 @@ describe("stage artifact schema", () => {
     ).toMatchObject({ workItemId: "WI-3000", projectId: "owner-repo" });
   });
 
-  it("rejects malformed work item briefs before agent routing", () => {
+  it("rejects empty work item brief identifiers before agent routing", () => {
     expect(() =>
       WorkItemBriefSchema.parse({
-        workItemId: "not-a-uuid",
-        projectId: "not-a-uuid",
-        title: "",
+        workItemId: "",
+        projectId: "",
+        title: "Scoped work",
         requestType: "feature",
         priority: "p1",
         businessGoal: "ship",
