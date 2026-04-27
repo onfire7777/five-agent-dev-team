@@ -1,6 +1,6 @@
 import { run, runNpmScript, verifyComposeSafe } from "./verify-lib.mjs";
 
-await run("npm", ["ci"]);
+await run("npm", ["ci", "--include=dev"]);
 await verifyComposeSafe();
 await runNpmScript("check");
 await runNpmScript("test:e2e");
