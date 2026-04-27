@@ -23,6 +23,12 @@ if (behind !== 0 || ahead !== 0) {
   );
 }
 
-await run("node", ["scripts/verify-ci.mjs"]);
+await run("node", ["scripts/verify-pr-ready.mjs"]);
+
+if (process.env.FIVE_AGENT_SKIP_RUNTIME_SMOKE === "1") {
+  console.log("skip runtime smoke: FIVE_AGENT_SKIP_RUNTIME_SMOKE=1");
+} else {
+  await run("node", ["scripts/verify-runtime.mjs"]);
+}
 
 console.log("verify-captain: PASS");

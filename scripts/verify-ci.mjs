@@ -1,11 +1,5 @@
-import { run, runNpmScript, verifyComposeSafe } from "./verify-lib.mjs";
+import { run } from "./verify-lib.mjs";
 
-await run("npm", ["ci"]);
-await verifyComposeSafe();
-await runNpmScript("check");
-await runNpmScript("test:e2e");
-await run("npm", ["audit", "--audit-level=high"]);
-await runNpmScript("audit:security");
-await run("git", ["diff", "--check"]);
+await run("node", ["scripts/verify-pr-ready.mjs"]);
 
 console.log("verify-ci: PASS");
