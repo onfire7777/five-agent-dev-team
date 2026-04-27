@@ -1,4 +1,6 @@
-import { capture, run } from "./verify-lib.mjs";
+import { capture, requireBranch, run } from "./verify-lib.mjs";
+
+await requireBranch("main");
 
 const status = (await capture("git", ["status", "--porcelain"])).trim();
 if (status) {

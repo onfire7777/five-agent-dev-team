@@ -74,13 +74,30 @@ export async function capture(command, args = []) {
   return run(command, args, { quiet: true });
 }
 
-export async function runNpmScript(name) {
+export async function runNpmScript(name, options = {}) {
   if (!hasNpmScript(name)) {
-    console.log(`skip npm run ${name}: script not defined`);
-    return;
+    if (options.optional === true) {
+      console.log(`skip npm run ${name}: script not defined`);
+      return;
+    }
+
+    throw new Error(`required npm script is missing: ${name}`);
   }
 
   await run("npm", ["run", name]);
+}
+
+export async function requireBranch(name) {
+  let current;
+  try {
+    current = (await capture("git", ["symbolic-ref", "--short", "HEAD"])).trim();
+  } catch {
+    throw new Error(`required branch ${name} is not checked out`);
+  }
+
+  if (current !== name) {
+    throw new Error(`required branch ${name} is not checked out; current ref is ${current}`);
+  }
 }
 
 export async function verifyComposeSafe() {

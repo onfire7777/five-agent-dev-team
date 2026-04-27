@@ -25,6 +25,9 @@
     "test": "vitest run --exclude tests/e2e/**",
     "test:acceptance": "vitest run tests/acceptance",
     "test:e2e": "playwright test",
+    "verify:local": "node scripts/verify-local.mjs",
+    "verify:ci": "node scripts/verify-ci.mjs",
+    "verify:captain": "node scripts/verify-captain.mjs",
     "check": "npm run typecheck && npm run lint && npm run format:check && npm test && npm run build"
   },
   "dependencies": {
