@@ -71,8 +71,12 @@ services:
     volumes:
       - .:/app
       - node-modules:/app/node_modules
-      - "${TARGET_REPO_HOST_PATH:-.}:${TARGET_REPO_CONTAINER_PATH:-/workspace/target-repo}"
-      - "${GH_CONFIG_DIR:-gh-config}:/root/.config/gh"
+      - type: bind
+        source: ${TARGET_REPO_HOST_PATH:-.}
+        target: ${TARGET_REPO_CONTAINER_PATH:-/workspace/target-repo}
+      - type: volume
+        source: ${GH_CONFIG_DIR:-gh-config}
+        target: /root/.config/gh
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://localhost:4310/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 10s
@@ -107,8 +111,12 @@ services:
     volumes:
       - .:/app
       - node-modules:/app/node_modules
-      - "${TARGET_REPO_HOST_PATH:-.}:${TARGET_REPO_CONTAINER_PATH:-/workspace/target-repo}"
-      - "${GH_CONFIG_DIR:-gh-config}:/root/.config/gh"
+      - type: bind
+        source: ${TARGET_REPO_HOST_PATH:-.}
+        target: ${TARGET_REPO_CONTAINER_PATH:-/workspace/target-repo}
+      - type: volume
+        source: ${GH_CONFIG_DIR:-gh-config}
+        target: /root/.config/gh
     healthcheck:
       test: ["CMD-SHELL", "node -e \"const fs=require('fs'); const file=process.env.WORKER_READY_FILE||'/tmp/agent-team-worker-ready'; const max=Number(process.env.WORKER_READY_MAX_AGE_MS||30000); const stat=fs.statSync(file); if(Date.now()-stat.mtimeMs>max) process.exit(1); const {Connection}=require('@temporalio/client'); Connection.connect({address:process.env.TEMPORAL_ADDRESS||'temporal:7233'}).then((connection)=>connection.close()).then(()=>process.exit(0)).catch(()=>process.exit(1));\""]
       interval: 10s
