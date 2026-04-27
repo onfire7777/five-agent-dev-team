@@ -1,0 +1,28 @@
+import { capture, run } from "./verify-lib.mjs";
+
+const status = (await capture("git", ["status", "--porcelain"])).trim();
+if (status) {
+  throw new Error("verify-captain refused: local main is dirty");
+}
+
+await run("git", ["fetch", "--prune", "origin"], { quiet: true });
+
+const sync = (
+  await capture("git", [
+    "rev-list",
+    "--left-right",
+    "--count",
+    "origin/main...HEAD",
+  ])
+).trim();
+const [behind, ahead] = sync.split(/\s+/).map(Number);
+
+if (behind !== 0 || ahead !== 0) {
+  throw new Error(
+    `verify-captain refused: origin/main...HEAD is ${behind}/${ahead}`,
+  );
+}
+
+await run("node", ["scripts/verify-ci.mjs"]);
+
+console.log("verify-captain: PASS");
