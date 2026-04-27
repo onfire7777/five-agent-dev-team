@@ -33,7 +33,7 @@ The linked `amafjarkasi/electron-mcp-server` should not be integrated directly. 
 
 The repo already has the pieces a lean desktop/MCP integration should reuse:
 
-- Controller API on `http://localhost:4310`: status, work items, memories, events, emergency stop/resume.
+- Controller API on `http://127.0.0.1:4310`: status, work items, memories, events, emergency stop/resume.
 - Dashboard on Vite/React, already using browser `fetch` and `EventSource`.
 - Shared TypeScript/Zod models in `packages/shared`.
 - Durable release policy and serialized repo-write lane in the worker/controller path.
@@ -133,7 +133,7 @@ Streamable HTTP is useful later if the MCP server must support multiple simultan
 - support current MCP protocol headers and session behavior
 - keep it separate from the public controller API unless there is a strong reason to combine them
 
-The MCP transport spec explicitly warns local HTTP servers to validate `Origin`, bind to localhost, and implement authentication to avoid DNS rebinding and unwanted local access.
+The MCP transport spec explicitly warns local HTTP servers to validate `Origin`, bind to loopback, and implement authentication to avoid DNS rebinding and unwanted local access.
 
 ## Dependency Notes
 

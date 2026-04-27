@@ -74,7 +74,7 @@ The easiest operator path is dashboard GitHub account connection:
 
 1. Create a GitHub OAuth App for this local controller and enable Device Flow.
 2. Put the OAuth App client ID in `GITHUB_OAUTH_CLIENT_ID`.
-3. Start Docker Compose and open `http://localhost:5173`.
+3. Start Docker Compose and open `http://127.0.0.1:5173`.
 4. Open `Project`, click `Connect GitHub`, approve the code in GitHub, then connect each target repository.
 
 The controller stores the resulting token in `.agent-team/github-auth.json`, which is ignored by git. That token is then injected into `gh`, Octokit, and the official GitHub MCP server as `GH_TOKEN`, `GITHUB_TOKEN`, and `GITHUB_PERSONAL_ACCESS_TOKEN` for the current runtime. Advanced setups may still authenticate through `GH_TOKEN`/`GITHUB_TOKEN`, `GITHUB_PERSONAL_ACCESS_TOKEN`, or a deliberate mount of the user's `gh` config directory. Do not hardcode credentials.

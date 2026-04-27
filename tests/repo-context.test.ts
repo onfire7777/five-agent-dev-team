@@ -52,7 +52,8 @@ function configFor(repoPath: string): TargetRepoConfig {
         notes: []
       },
       mcpServers: [],
-      capabilityPacks: []
+      capabilityPacks: [],
+      plugins: []
     },
     models: {
       primaryCodingModel: "gpt-5.5",
@@ -176,7 +177,8 @@ describe("repo context packs", () => {
             contextFiles: [],
             notes: ["Convert useful MCP exploration into checked-in tests."]
           }
-        ]
+        ],
+        plugins: []
       }
     };
 
@@ -222,7 +224,8 @@ describe("repo context packs", () => {
             notes: []
           }
         ],
-        capabilityPacks: []
+        capabilityPacks: [],
+        plugins: []
       }
     };
 

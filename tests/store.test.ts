@@ -193,6 +193,9 @@ describe("controller store workflow claims", () => {
       testsRun: ["git-sync:passed"],
       releaseReadiness: "ready",
       nextStage: null,
+      promptHash: "test-prompt",
+      skillIds: ["handoff-discipline"],
+      capabilityIds: [],
       createdAt: now
     };
     await store.addArtifact(closure);

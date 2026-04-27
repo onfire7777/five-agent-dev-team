@@ -47,7 +47,7 @@ integrations:
     preferredAutomation: playwright_test
     # appPath: apps/desktop
     # launchCommand: npm run electron:dev
-    # devServerUrl: http://localhost:5173
+    # devServerUrl: http://127.0.0.1:5173
     # debugPort: 9222
     # testCommand: npm run test:electron
     artifactsDir: .agent-team/artifacts/electron

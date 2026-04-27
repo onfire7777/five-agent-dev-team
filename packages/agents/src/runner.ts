@@ -1,9 +1,9 @@
 import type { AgentDefinition } from "./definitions";
 import type { McpServerConfig, MemoryRecord, StageArtifact, TargetRepoConfig, WorkItem, WorkItemState } from "../../shared/src";
+import { assembleCanonicalPrompt } from "./prompt";
+import { loadTriggeredSkills, type LoadedSkill } from "./skills";
 import {
-  buildSharedContext,
   DEFAULT_SCHEDULER_POLICY,
-  formatSharedContext,
   githubToken,
   shouldActivateCapability,
   shouldUseLiveApi,
@@ -37,30 +37,72 @@ export interface AgentRunResult {
   live: boolean;
 }
 
+type AgentRunPreparation = {
+  prompt: string;
+  promptHash: string;
+  skills: LoadedSkill[];
+  droppedSkillIds: string[];
+  capabilityIds: string[];
+};
+
 export async function runRoleAgent(definition: AgentDefinition, context: AgentRunContext): Promise<AgentRunResult> {
   const policy = {
     ...DEFAULT_SCHEDULER_POLICY,
     mode: (process.env.AGENT_EXECUTION_MODE as any) || DEFAULT_SCHEDULER_POLICY.mode
   };
+  const preparation = await prepareAgentRun(definition, context);
 
   if ((process.env.AGENT_LIVE_MODE === "true" || shouldUseLiveApi(policy)) && process.env.OPENAI_API_KEY) {
-    return runLiveOpenAIAgent(definition, context);
+    return runLiveOpenAIAgent(definition, context, preparation);
   }
 
-  const artifact = createTemplateArtifact(definition, context);
+  const artifact = createTemplateArtifact(definition, context, preparation);
   return { artifact, rawOutput: artifact.summary, live: false };
 }
 
-async function runLiveOpenAIAgent(definition: AgentDefinition, context: AgentRunContext): Promise<AgentRunResult> {
+async function prepareAgentRun(definition: AgentDefinition, context: AgentRunContext): Promise<AgentRunPreparation> {
+  const selectedModel = modelForAgent(definition, context.targetRepoConfig);
+  const skillLoad = await loadTriggeredSkills({
+    workItem: context.workItem,
+    stage: context.stage,
+    agent: definition.role,
+    targetRepoConfig: context.targetRepoConfig
+  });
+  const capabilityIds = activeCapabilityIds(definition, context);
+  const prompt = assembleCanonicalPrompt({
+    definition,
+    workItem: context.workItem,
+    stage: context.stage,
+    selectedModel,
+    previousArtifacts: context.previousArtifacts,
+    memories: context.memories || [],
+    skills: skillLoad.skills,
+    droppedSkillIds: skillLoad.droppedSkillIds,
+    capabilityIds,
+    targetRepoConfig: context.targetRepoConfig,
+    proposalStage: context.proposalStage,
+    teamDirection: context.teamDirection,
+    loopContext: context.loopContext
+  });
+  return {
+    prompt: prompt.prompt,
+    promptHash: prompt.promptHash,
+    skills: skillLoad.skills,
+    droppedSkillIds: skillLoad.droppedSkillIds,
+    capabilityIds
+  };
+}
+
+async function runLiveOpenAIAgent(definition: AgentDefinition, context: AgentRunContext, preparation: AgentRunPreparation): Promise<AgentRunResult> {
   const sdk = await import("@openai/agents");
   const primaryModel = modelForAgent(definition, context.targetRepoConfig);
   const fallbackModel = fallbackModelForAgent(context.targetRepoConfig);
   try {
-    return await runLiveOpenAIAgentWithModel(sdk, definition, context, primaryModel);
+    return await runLiveOpenAIAgentWithModel(sdk, definition, context, primaryModel, preparation);
   } catch (error) {
     if (!fallbackModel || fallbackModel === primaryModel) throw error;
     try {
-      const fallbackResult = await runLiveOpenAIAgentWithModel(sdk, definition, context, fallbackModel);
+      const fallbackResult = await runLiveOpenAIAgentWithModel(sdk, definition, context, fallbackModel, preparation);
       return {
         ...fallbackResult,
         rawOutput: `Primary model ${primaryModel} failed; fallback ${fallbackModel} succeeded.\n${fallbackResult.rawOutput}`
@@ -75,7 +117,8 @@ async function runLiveOpenAIAgentWithModel(
   sdk: any,
   definition: AgentDefinition,
   context: AgentRunContext,
-  model: string
+  model: string,
+  preparation: AgentRunPreparation
 ): Promise<AgentRunResult> {
   const AgentCtor = (sdk as any).Agent;
   const run = (sdk as any).run;
@@ -100,77 +143,13 @@ async function runLiveOpenAIAgentWithModel(
       tools
     });
 
-    const result = await run(agent, buildAgentPrompt(definition, context, model));
+    const result = await run(agent, preparation.prompt);
     const rawOutput = String(result?.finalOutput ?? result?.output ?? result ?? "");
-    const artifact = parseLiveArtifact(definition, context, rawOutput) || createInvalidLiveArtifact(definition, context, rawOutput);
+    const artifact = parseLiveArtifact(definition, context, rawOutput, preparation) || createInvalidLiveArtifact(definition, context, rawOutput, preparation);
     return { artifact, rawOutput, live: true };
   } finally {
     await mcpSession?.close();
   }
-}
-
-function buildAgentPrompt(definition: AgentDefinition, context: AgentRunContext, selectedModel = modelForAgent(definition, context.targetRepoConfig)): string {
-  const sharedContext = buildSharedContext(context.workItem, context.previousArtifacts, context.memories || [], {
-    targetRepoConfig: context.targetRepoConfig,
-    stage: context.stage,
-    agent: definition.role
-  });
-  return [
-    `Work item: ${context.workItem.id} - ${context.workItem.title}`,
-    `Stage: ${context.stage}${context.proposalStage ? " proposal" : ""}`,
-    `Agent: ${definition.displayName}`,
-    `Project scope: ${context.workItem.projectId || (context.targetRepoConfig ? "configured repo" : "unscoped")}`,
-    `Repository scope: ${context.workItem.repo || "not connected"}`,
-    `Model policy: ${selectedModel} selected for this run, with configured fallback only if unavailable.`,
-    context.proposalStage
-      ? [
-          "",
-          "Proposal mode:",
-          definition.proposalInstructions || "Propose the next stage plan, risks, dependencies, and handoff needs before implementation.",
-          "Return a normal stage artifact JSON, but make it clear in title and summary that this is a proposal-only handoff. Do not claim files changed or tests run unless already proven."
-        ].join("\n")
-      : "",
-    "",
-    "Shared team context:",
-    formatSharedContext(sharedContext),
-    "",
-    "Team bus messages:",
-    formatTeamMessages(context.teamMessages || []),
-    "",
-    "Team direction:",
-    formatList(context.teamDirection || []),
-    "",
-    "Loop context:",
-    formatList(context.loopContext || []),
-    "",
-    `Acceptance criteria: ${context.workItem.acceptanceCriteria.join("; ") || "Not provided"}`,
-    `Previous artifacts: ${context.previousArtifacts.map((artifact) => `${artifact.stage}: ${artifact.summary}`).join(" | ") || "None"}`,
-    "Capability rule: proactively use active MCP tools, skills, plugins, and knowledge packs when they materially improve this stage; do not call inactive or irrelevant tools.",
-    "Research rule: use hosted web search or web-search MCP only for current external facts that local repo context cannot prove; summarize sources into decisions, risks, tests, or follow-ups.",
-    "When a tool uncovers a durable lesson, convert it into an artifact decision, risk, test, or follow-up rather than relying on transient tool output.",
-    "Cooperate with the team: reference teammate activity, team bus messages, current direction, loop context, preserve prior decisions, update shared risks, and return only JSON for one stage artifact.",
-    "The JSON must include title, summary, status, decisions, risks, filesChanged, testsRun, releaseReadiness, and nextStage."
-  ].filter(Boolean).join("\n");
-}
-
-function formatTeamMessages(messages: TeamBusMessage[]): string {
-  if (!messages.length) return "none";
-  return messages
-    .slice(-12)
-    .map((message) => {
-      const prefix = [
-        message.createdAt,
-        message.ownerAgent,
-        message.stage,
-        message.type
-      ].filter(Boolean).join(" | ");
-      return prefix ? `${prefix}: ${message.message}` : message.message;
-    })
-    .join("\n");
-}
-
-function formatList(values: string[]): string {
-  return values.length ? values.map((value) => `- ${value}`).join("\n") : "none";
 }
 
 function modelForAgent(definition: AgentDefinition, config?: TargetRepoConfig): string {
@@ -218,6 +197,23 @@ function shouldUseHostedWebSearch(definition: AgentDefinition, context: AgentRun
   ) || context.targetRepoConfig.integrations.mcpServers.some((server) =>
     server.category === "web_search" && shouldActivateCapability(server.enabled, server.activation, input)
   );
+}
+
+function activeCapabilityIds(definition: AgentDefinition, context: AgentRunContext): string[] {
+  if (!context.targetRepoConfig) return [];
+  const input = {
+    workItem: context.workItem,
+    stage: context.stage,
+    agent: definition.role
+  };
+  return [
+    ...context.targetRepoConfig.integrations.mcpServers
+      .filter((server) => shouldActivateCapability(server.enabled, server.activation, input))
+      .map((server) => `mcp:${server.name}`),
+    ...context.targetRepoConfig.integrations.capabilityPacks
+      .filter((pack) => shouldActivateCapability(pack.enabled, pack.activation, input))
+      .map((pack) => `${pack.kind}:${pack.name}`)
+  ];
 }
 
 function createMcpServer(sdk: any, server: McpServerConfig): any {
@@ -270,7 +266,8 @@ export function resolveMcpEnv(env: Record<string, string>): Record<string, strin
 function parseLiveArtifact(
   definition: AgentDefinition,
   context: AgentRunContext,
-  rawOutput: string
+  rawOutput: string,
+  preparation: AgentRunPreparation
 ): StageArtifact | null {
   const parsed = parseJsonObject(rawOutput);
   if (!parsed || typeof parsed !== "object") return null;
@@ -282,6 +279,9 @@ function parseLiveArtifact(
     repo: context.workItem.repo,
     stage: context.stage,
     ownerAgent: definition.role,
+    promptHash: preparation.promptHash,
+    skillIds: preparation.skills.map((skill) => skill.id),
+    capabilityIds: preparation.capabilityIds,
     createdAt: String((parsed as any).createdAt || new Date().toISOString())
   };
 
@@ -309,6 +309,7 @@ function parseJsonObject(rawOutput: string): unknown {
 function createTemplateArtifact(
   definition: AgentDefinition,
   context: AgentRunContext,
+  preparation: AgentRunPreparation,
   liveSummary?: string
 ): StageArtifact {
   const nextStage = inferNextStage(context.stage, context.workItem);
@@ -330,6 +331,9 @@ function createTemplateArtifact(
     testsRun: context.stage === "VERIFY" || context.stage === "RELEASE" ? ["configured local checks", "GitHub Actions gate"] : [],
     releaseReadiness: context.stage === "RELEASE" ? "ready" : "unknown",
     nextStage,
+    promptHash: preparation.promptHash,
+    skillIds: preparation.skills.map((skill) => skill.id),
+    capabilityIds: preparation.capabilityIds,
     createdAt: new Date().toISOString()
   };
   return StageArtifactSchema.parse(artifact);
@@ -338,7 +342,8 @@ function createTemplateArtifact(
 function createInvalidLiveArtifact(
   definition: AgentDefinition,
   context: AgentRunContext,
-  rawOutput: string
+  rawOutput: string,
+  preparation: AgentRunPreparation
 ): StageArtifact {
   return StageArtifactSchema.parse({
     workItemId: context.workItem.id,
@@ -359,6 +364,9 @@ function createInvalidLiveArtifact(
     testsRun: [],
     releaseReadiness: "not_ready",
     nextStage: "BLOCKED",
+    promptHash: preparation.promptHash,
+    skillIds: preparation.skills.map((skill) => skill.id),
+    capabilityIds: preparation.capabilityIds,
     createdAt: new Date().toISOString()
   });
 }

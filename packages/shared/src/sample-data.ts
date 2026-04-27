@@ -127,6 +127,9 @@ export function createSampleArtifacts(): StageArtifact[] {
       testsRun: [],
       releaseReadiness: "unknown",
       nextStage: "CONTRACT",
+      promptHash: "sample-prompt-rnd",
+      skillIds: ["adr-authoring"],
+      capabilityIds: [],
       createdAt: now()
     },
     {
@@ -144,6 +147,9 @@ export function createSampleArtifacts(): StageArtifact[] {
       testsRun: ["npm test", "npm run security"],
       releaseReadiness: "not_ready",
       nextStage: "RELEASE",
+      promptHash: "sample-prompt-verify",
+      skillIds: ["verification-plan"],
+      capabilityIds: [],
       createdAt: now()
     }
   ];

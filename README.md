@@ -19,8 +19,8 @@ npm run check
 docker compose up --build
 ```
 
-Dashboard: `http://localhost:5173`  
-Controller API: `http://localhost:4310`
+Dashboard: `http://127.0.0.1:5173`
+Controller API: `http://127.0.0.1:4310`
 
 For host-based development against already-running local Postgres and Temporal:
 

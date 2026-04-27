@@ -152,7 +152,7 @@ const githubDeviceSessions = new Map<string, {
   scope: string;
   expiresAt: number;
 }>();
-const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:5173,http://127.0.0.1:5173")
+const allowedOrigins = (process.env.CORS_ORIGINS || "http://127.0.0.1:5173")
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
@@ -1601,7 +1601,7 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
 
 store.init().then(() => {
   startSmartScheduler(store);
-  app.listen(port, () => {
-    console.log(`AI Dev Team controller listening on http://localhost:${port}`);
+  app.listen(port, "127.0.0.1", () => {
+    console.log(`AI Dev Team controller listening on http://127.0.0.1:${port}`);
   });
 });

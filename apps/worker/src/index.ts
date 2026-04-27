@@ -20,7 +20,7 @@ async function connectToTemporal(address: string): Promise<NativeConnection> {
 }
 
 async function main() {
-  const address = process.env.TEMPORAL_ADDRESS || "localhost:7233";
+  const address = process.env.TEMPORAL_ADDRESS || "127.0.0.1:7233";
   const connection = await connectToTemporal(address);
   const readyFile = process.env.WORKER_READY_FILE || "/tmp/agent-team-worker-ready";
   let readyTimer: NodeJS.Timeout | null = null;

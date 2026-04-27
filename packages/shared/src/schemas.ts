@@ -66,6 +66,9 @@ export const StageArtifactSchema = z.object({
   testsRun: z.array(z.string()).default([]),
   releaseReadiness: z.enum(["unknown", "not_ready", "ready"]).default("unknown"),
   nextStage: WorkItemStateSchema.nullable(),
+  promptHash: z.string().min(1).default("not-recorded"),
+  skillIds: z.array(z.string().min(1)).default([]),
+  capabilityIds: z.array(z.string().min(1)).default([]),
   createdAt: z.string().datetime()
 });
 
@@ -636,6 +639,46 @@ export const CapabilityPackSchema = z.object({
 
 export type CapabilityPack = z.infer<typeof CapabilityPackSchema>;
 
+export const PluginContributionSchema = z.object({
+  capabilities: z.array(CapabilityPackSchema).default([]),
+  mcpServers: z.array(McpServerConfigSchema).default([]),
+  skills: z.array(z.object({
+    id: z.string().min(1),
+    relativePath: z.string().min(1)
+  })).default([]),
+  tools: z.array(z.object({
+    name: z.string().min(1),
+    description: z.string().min(1)
+  })).default([]),
+  releaseGates: z.array(z.object({
+    id: z.string().min(1),
+    command: z.string().min(1),
+    required: z.boolean().default(true)
+  })).default([])
+});
+
+export type PluginContribution = z.infer<typeof PluginContributionSchema>;
+
+export const AgentTeamPluginSchema = z.object({
+  name: z.string().min(1),
+  packageName: z.string().min(1),
+  enabled: z.boolean().default(false),
+  allowlisted: z.boolean().default(false),
+  projectId: z.string().min(1).optional(),
+  repo: z.string().min(1).optional(),
+  initCommand: z.string().min(1).optional(),
+  disposeCommand: z.string().min(1).optional(),
+  contributions: PluginContributionSchema.default({
+    capabilities: [],
+    mcpServers: [],
+    skills: [],
+    tools: [],
+    releaseGates: []
+  })
+});
+
+export type AgentTeamPlugin = z.infer<typeof AgentTeamPluginSchema>;
+
 export const ProjectIsolationSchema = z.object({
   requireExplicitRepoConnection: z.boolean().default(true),
   allowCrossProjectMemory: z.boolean().default(false),
@@ -701,7 +744,8 @@ export const TargetRepoConfigSchema = z.object({
       notes: []
     }),
     mcpServers: z.array(McpServerConfigSchema).default([]),
-    capabilityPacks: z.array(CapabilityPackSchema).default([])
+    capabilityPacks: z.array(CapabilityPackSchema).default([]),
+    plugins: z.array(AgentTeamPluginSchema).default([])
   }).default({
     electron: {
       enabled: false,
@@ -712,7 +756,8 @@ export const TargetRepoConfigSchema = z.object({
       notes: []
     },
     mcpServers: [],
-    capabilityPacks: []
+    capabilityPacks: [],
+    plugins: []
   }),
   models: ModelPolicySchema.default({
     primaryCodingModel: "gpt-5.5",

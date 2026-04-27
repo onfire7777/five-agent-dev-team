@@ -1,38 +1,51 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
-  Activity,
-  AlertTriangle,
   Bot,
-  CheckCircle2,
   CircleStop,
-  Compass,
-  ExternalLink,
-  GitBranch,
   Github,
-  History,
-  LayoutDashboard,
-  Lightbulb,
-  LogOut,
-  MessageSquareText,
-  PauseCircle,
   PlayCircle,
   RefreshCw,
-  Rocket,
-  SearchCheck,
-  Send,
   ShieldCheck,
-  SquareKanban,
-  TerminalSquare,
-  Workflow,
   type LucideIcon
 } from "lucide-react";
-import { createSampleStatus } from "../../../packages/shared/src/sample-data";
-import type { AgentRole, MemoryRecord, ProjectConnection, StageArtifact } from "../../../packages/shared/src";
+import type { AgentRole, MemoryRecord, ProjectConnection, ProjectTeamStatus, StageArtifact, WorkItem } from "../../../packages/shared/src";
 
 declare const __DASHBOARD_API_BASE__: string | undefined;
 
-type Status = ReturnType<typeof createSampleStatus>;
-type RoutingKey = "frontendNeeded" | "backendNeeded" | "rndNeeded";
+type DashboardLog = [time: string, level: string, source: string, message: string, item?: string];
+
+type Status = {
+  system: {
+    name: string;
+    operational: boolean;
+    emergencyStop: boolean;
+    queueDepth: number;
+    agentsOnline: number;
+    agentsTotal: number;
+    githubSync: string;
+    systemLoad: number;
+    executionMode?: string;
+    emergencyReason: string;
+    scheduler: {
+      maxConcurrentAgentRuns: number;
+      [key: string]: unknown;
+    };
+  };
+  projectTeams: ProjectTeamStatus[];
+  pipeline: Record<string, number>;
+  workItems: WorkItem[];
+  artifacts: StageArtifact[];
+  releaseReadiness: {
+    status: string;
+    target: string;
+    checks: Array<[string, string]>;
+  };
+  logs: DashboardLog[];
+  sharedContext: {
+    activeThreads: Array<[string, string, string]>;
+    research: string[];
+  };
+};
 type InsightView = "release" | "direction" | "ideas" | "teamMessages" | "loopHistory" | "team" | "capabilities" | "memory" | "events";
 type RequestType = "feature" | "bug" | "performance" | "security" | "privacy" | "refactor" | "research";
 type Priority = "low" | "medium" | "high" | "urgent";
@@ -63,7 +76,6 @@ type ProjectDraft = {
 
 type ApiState = {
   connected: boolean;
-  usingFallback: boolean;
   lastError: string;
 };
 
@@ -214,30 +226,48 @@ type LoopRun = {
   updatedAt?: string;
 };
 
-const API_BASE = typeof __DASHBOARD_API_BASE__ === "string" && __DASHBOARD_API_BASE__ ? __DASHBOARD_API_BASE__ : "http://localhost:4310";
+const API_BASE = typeof __DASHBOARD_API_BASE__ === "string" && __DASHBOARD_API_BASE__ ? __DASHBOARD_API_BASE__ : "http://127.0.0.1:4310";
 
-function createOfflineStatus(): Status {
-  const status = createSampleStatus();
+const pipelineStates = [
+  "NEW",
+  "INTAKE",
+  "RND",
+  "PROPOSAL",
+  "AWAITING_ACCEPTANCE",
+  "CONTRACT",
+  "FRONTEND_BUILD",
+  "BACKEND_BUILD",
+  "INTEGRATION",
+  "VERIFY",
+  "RELEASE",
+  "CLOSED",
+  "BLOCKED"
+] as const;
+
+function createEmptyStatus(): Status {
   return {
-    ...status,
     system: {
-      ...status.system,
+      name: "AI Dev Team Controller",
       operational: false,
       emergencyStop: false,
       queueDepth: 0,
       agentsOnline: 0,
+      agentsTotal: 0,
       githubSync: "offline",
       systemLoad: 0,
-      emergencyReason: ""
+      emergencyReason: "",
+      scheduler: {
+        maxConcurrentAgentRuns: 0
+      }
     },
-    pipeline: Object.fromEntries(Object.keys(status.pipeline).map((key) => [key, 0])) as Status["pipeline"],
+    pipeline: Object.fromEntries(pipelineStates.map((state) => [state, 0])),
     projectTeams: [],
     workItems: [],
     artifacts: [],
     releaseReadiness: {
-      ...status.releaseReadiness,
-      status: "unknown",
-      target: "Controller offline"
+      status: "offline",
+      target: "Controller offline",
+      checks: []
     },
     logs: [],
     sharedContext: {
@@ -247,83 +277,30 @@ function createOfflineStatus(): Status {
   };
 }
 
-const fallbackAgentRows: AgentLane[] = [
-  {
-    icon: SquareKanban,
-    name: "Product",
-    role: "Product & Delivery",
-    status: "Active",
-    work: "WI-1289",
-    task: "Locking acceptance criteria",
-    progress: 74,
-    tone: "blue"
-  },
-  {
-    icon: SearchCheck,
-    name: "R&D",
-    role: "Architecture",
-    status: "Active",
-    work: "WI-1290",
-    task: "Finalizing contract",
-    progress: 66,
-    tone: "green"
-  },
-  {
-    icon: LayoutDashboard,
-    name: "Frontend",
-    role: "UX Engineering",
-    status: "Active",
-    work: "WI-1290",
-    task: "Building interface states",
-    progress: 58,
-    tone: "violet"
-  },
-  {
-    icon: TerminalSquare,
-    name: "Backend",
-    role: "Systems Engineering",
-    status: "Active",
-    work: "WI-1290",
-    task: "Implementing API",
-    progress: 62,
-    tone: "slate"
-  },
-  {
-    icon: ShieldCheck,
-    name: "Quality",
-    role: "Security & Release",
-    status: "Blocked",
-    work: "WI-1291",
-    task: "Waiting on rollback proof",
-    progress: 42,
-    tone: "amber"
-  }
-];
-
 const roleLanes: Array<Omit<AgentLane, "status" | "work" | "task" | "progress"> & { agentRole: AgentRole }> = [
   {
-    icon: SquareKanban,
+    icon: Bot,
     name: "Product",
     role: "Product & Delivery",
     tone: "blue",
     agentRole: "product-delivery-orchestrator"
   },
   {
-    icon: SearchCheck,
+    icon: RefreshCw,
     name: "R&D",
     role: "Architecture",
     tone: "green",
     agentRole: "rnd-architecture-innovation"
   },
   {
-    icon: LayoutDashboard,
+    icon: PlayCircle,
     name: "Frontend",
     role: "UX Engineering",
     tone: "violet",
     agentRole: "frontend-ux-engineering"
   },
   {
-    icon: TerminalSquare,
+    icon: CircleStop,
     name: "Backend",
     role: "Systems Engineering",
     tone: "slate",
@@ -338,35 +315,20 @@ const roleLanes: Array<Omit<AgentLane, "status" | "work" | "task" | "progress"> 
   }
 ];
 
-const routeToggles: Array<[RoutingKey, string]> = [
-  ["rndNeeded", "R&D"],
-  ["frontendNeeded", "Frontend"],
-  ["backendNeeded", "Backend"]
-];
-
 const flowGroups = [
-  { label: "Intake", states: ["NEW", "INTAKE"], icon: SquareKanban },
-  { label: "Research", states: ["RND", "PROPOSAL", "AWAITING_ACCEPTANCE", "CONTRACT"], icon: SearchCheck },
-  { label: "Build", states: ["FRONTEND_BUILD", "BACKEND_BUILD", "INTEGRATION"], icon: Workflow },
+  { label: "Intake", states: ["NEW", "INTAKE"], icon: Bot },
+  { label: "Research", states: ["RND", "PROPOSAL", "AWAITING_ACCEPTANCE", "CONTRACT"], icon: RefreshCw },
+  { label: "Build", states: ["FRONTEND_BUILD", "BACKEND_BUILD", "INTEGRATION"], icon: PlayCircle },
   { label: "Verify", states: ["VERIFY", "BLOCKED"], icon: ShieldCheck },
-  { label: "Release", states: ["RELEASE", "CLOSED"], icon: Rocket }
+  { label: "Release", states: ["RELEASE", "CLOSED"], icon: ShieldCheck }
 ] as const;
 
 const insightOptions: Array<[InsightView, string]> = [
   ["release", "Release gate"],
-  ["direction", "Direction"],
-  ["ideas", "Ideas & Proposals"],
-  ["teamMessages", "Team Messages"],
-  ["loopHistory", "Loop History"],
   ["team", "Team lanes"],
-  ["capabilities", "Capabilities"],
   ["memory", "Memory"],
   ["events", "Events"]
 ];
-
-const requestTypeOptions: RequestType[] = ["feature", "bug", "performance", "security", "privacy", "refactor", "research"];
-const priorityOptions: Priority[] = ["low", "medium", "high", "urgent"];
-const riskLevelOptions: RiskLevel[] = ["low", "medium", "high"];
 
 const defaultGitHubAccount: GitHubAccount = {
   connected: false,
@@ -392,14 +354,13 @@ function createProposalState(): ProposalDetailState {
 }
 
 export function App() {
-  const [status, setStatus] = useState<Status>(() => createSampleStatus());
+  const [status, setStatus] = useState<Status>(() => createEmptyStatus());
   const [apiState, setApiState] = useState<ApiState>({
     connected: false,
-    usingFallback: true,
-    lastError: "Connecting to controller"
+    lastError: "Controller unavailable"
   });
   const [loading, setLoading] = useState(false);
-  const [selectedWorkItem, setSelectedWorkItem] = useState("WI-1290");
+  const [selectedWorkItem, setSelectedWorkItem] = useState("");
   const [activeInsight, setActiveInsight] = useState<InsightView>("release");
   const [memories, setMemories] = useState<MemoryRecord[]>([]);
   const [projects, setProjects] = useState<ProjectConnection[]>([]);
@@ -476,7 +437,7 @@ export function App() {
       const response = await fetch(`${API_BASE}/api/status`);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       setStatus(await response.json());
-      setApiState({ connected: true, usingFallback: false, lastError: "" });
+      setApiState({ connected: true, lastError: "" });
       try {
         await loadMemories();
       } catch {
@@ -494,13 +455,12 @@ export function App() {
       }
       return true;
     } catch (error) {
-      setStatus(createOfflineStatus());
+      setStatus(createEmptyStatus());
       setMemories([]);
       setProjects([]);
       setGithubAccount(defaultGitHubAccount);
       setApiState({
         connected: false,
-        usingFallback: true,
         lastError: error instanceof Error ? error.message : "Controller unavailable"
       });
       return false;
@@ -966,7 +926,6 @@ export function App() {
     } catch {
       setApiState({
         connected: false,
-        usingFallback: true,
         lastError: "Emergency control request failed"
       });
     } finally {
@@ -1127,7 +1086,7 @@ export function App() {
       <main className="page">
         {(apiMessage || status.system.emergencyReason) && (
           <div className="notice" role="status">
-            <AlertTriangle size={16} />
+            <ShieldCheck size={16} />
             <span>{status.system.emergencyReason || apiMessage}</span>
           </div>
         )}
@@ -1219,14 +1178,14 @@ export function App() {
                           target="_blank"
                           rel="noreferrer"
                         >
-                          <ExternalLink size={14} />
+                          <Github size={14} />
                           Open GitHub
                         </a>
                       </>
                     ) : githubAccount.connected ? (
                       githubAccount.source === "local" ? (
                         <button className="secondary-button" type="button" onClick={disconnectGithubAccount} disabled={loading}>
-                          <LogOut size={15} />
+                          <CircleStop size={15} />
                           Disconnect
                         </button>
                       ) : (
@@ -1331,7 +1290,7 @@ export function App() {
                     <span>Deep research</span>
                   </label>
                   <button className="secondary-button" type="button" onClick={connectProject} disabled={loading || !apiState.connected}>
-                    <GitBranch size={15} />
+                    <Github size={15} />
                     Connect
                   </button>
                 </div>
@@ -1533,7 +1492,7 @@ function renderInsight(
     return (
       <div className="direction-panel" data-testid="direction-panel">
         <div className="insight-inline-header">
-          <span className="insight-kicker"><Compass size={14} /> Project steering</span>
+          <span className="insight-kicker"><ShieldCheck size={14} /> Project steering</span>
           <small>{activeProject?.repo || "No project"}</small>
         </div>
         {activeProject ? (
@@ -1572,16 +1531,16 @@ function renderInsight(
                 checked={directionPause}
                 onChange={(event) => onDirectionPauseChange(event.target.checked)}
               />
-              <PauseCircle size={14} />
+              <CircleStop size={14} />
               <span>Pause new loops after this one</span>
             </label>
             <div className="compact-actions">
               <button className="secondary-button" type="button" disabled={!directionDraft.trim() || Boolean(pendingAction)} onClick={() => onSaveDirection("next_loop")}>
-                <Send size={14} />
+                <PlayCircle size={14} />
                 Use for next loop
               </button>
               <button className="secondary-button" type="button" disabled={!directionDraft.trim() || Boolean(pendingAction)} onClick={() => onSaveDirection("standing")}>
-                <Activity size={14} />
+                <RefreshCw size={14} />
                 Save standing direction
               </button>
             </div>
@@ -1600,7 +1559,7 @@ function renderInsight(
     return (
       <div className="ideas-panel" data-testid="ideas-panel">
         <div className="insight-inline-header">
-          <span className="insight-kicker"><Lightbulb size={14} /> Autonomous ideation</span>
+          <span className="insight-kicker"><Bot size={14} /> Autonomous ideation</span>
           <button className="text-button" type="button" disabled={!activeProject || opportunitiesState.status === "loading" || Boolean(pendingAction)} onClick={onScanOpportunities}>
             Scan
           </button>
@@ -1693,7 +1652,7 @@ function renderInsight(
     return (
       <div className="team-message-list" data-testid="team-messages-panel">
         <div className="insight-inline-header">
-          <span className="insight-kicker"><MessageSquareText size={14} /> Agent communication</span>
+          <span className="insight-kicker"><Bot size={14} /> Agent communication</span>
           <small>{teamMessagesState.items.length ? `${teamMessagesState.items.length} messages` : "Quiet"}</small>
         </div>
         {teamMessagesState.items.length ? (
@@ -1717,7 +1676,7 @@ function renderInsight(
     return (
       <div className="loop-history-list" data-testid="loop-history-panel">
         <div className="insight-inline-header">
-          <span className="insight-kicker"><History size={14} /> Loop history</span>
+          <span className="insight-kicker"><RefreshCw size={14} /> Loop history</span>
           <small>{loopRunsState.items.length ? `${loopRunsState.items.length} runs` : "No runs"}</small>
         </div>
         {loopRunsState.items.length ? (
@@ -1767,7 +1726,6 @@ function renderInsight(
   }
 
   if (activeInsight === "memory") {
-    const fallbackThreads = status.sharedContext.activeThreads.slice(0, 3);
     return (
       <div className="memory-list">
         {visibleMemories.length ? (
@@ -1776,14 +1734,6 @@ function renderInsight(
               <strong>{memory.title}</strong>
               <span>{memory.kind} · {memory.permanence}</span>
               <p>{memory.content}</p>
-            </article>
-          ))
-        ) : fallbackThreads.length ? (
-          fallbackThreads.map(([agent, item, summary]) => (
-            <article key={`${agent}-${item}`}>
-              <strong>{agent}</strong>
-              <span>{item}</span>
-              <p>{summary}</p>
             </article>
           ))
         ) : (
@@ -1852,17 +1802,21 @@ function renderInsight(
   return (
     <div className="release-panel" data-testid="release-panel">
       <div className={`release-state ${releaseReady ? "ready" : "waiting"}`}>
-        {releaseReady ? <CheckCircle2 size={19} /> : <ShieldCheck size={19} />}
+        <ShieldCheck size={19} />
         <span>{status.releaseReadiness.target}</span>
         <strong>{releaseReady ? "Ready" : status.releaseReadiness.status}</strong>
       </div>
       <div className="check-grid">
-        {status.releaseReadiness.checks.map(([label, value]) => (
-          <div key={label}>
-            <span>{label}</span>
-            <strong>{value}</strong>
-          </div>
-        ))}
+        {status.releaseReadiness.checks.length ? (
+          status.releaseReadiness.checks.map(([label, value]) => (
+            <div key={label}>
+              <span>{label}</span>
+              <strong>{value}</strong>
+            </div>
+          ))
+        ) : (
+          <div className="empty-state compact">No release checks yet.</div>
+        )}
       </div>
     </div>
   );
@@ -1871,7 +1825,7 @@ function renderInsight(
 function systemPresentation(status: Status, apiState: ApiState) {
   if (!apiState.connected) {
     return {
-      label: apiState.usingFallback ? "Demo Data" : "Offline",
+      label: "Offline",
       className: "warning",
       dot: "amber"
     };
@@ -1887,13 +1841,22 @@ function systemPresentation(status: Status, apiState: ApiState) {
 
 function apiNotice(apiState: ApiState) {
   if (apiState.connected) return "";
-  return apiState.usingFallback
-    ? `Controller connection failed: ${apiState.lastError}. Showing offline state.`
-    : apiState.lastError;
+  return `Controller connection failed: ${apiState.lastError}. Showing offline state.`;
 }
 
 function deriveAgentRows(status: Status, connected: boolean): AgentLane[] {
-  if (!connected) return fallbackAgentRows;
+  if (!connected) {
+    return roleLanes.map((lane) => ({
+      icon: lane.icon,
+      name: lane.name,
+      role: lane.role,
+      tone: lane.tone,
+      status: "Offline",
+      work: "-",
+      task: "Controller offline",
+      progress: 0
+    }));
+  }
   return roleLanes.map((lane) => {
     const latestArtifact = [...status.artifacts].reverse().find((artifact) => artifact.ownerAgent === lane.agentRole);
     const workItem = latestArtifact ? status.workItems.find((item) => item.id === latestArtifact.workItemId) : undefined;

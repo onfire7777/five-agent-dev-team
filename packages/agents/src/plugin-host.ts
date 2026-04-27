@@ -1,0 +1,72 @@
+import childProcess from "node:child_process";
+import util from "node:util";
+import {
+  AgentTeamPluginSchema,
+  type AgentTeamPlugin,
+  type PluginContribution,
+  type TargetRepoConfig
+} from "../../shared/src";
+
+const execFile = util.promisify(childProcess.execFile);
+
+export type LoadedPlugin = {
+  plugin: AgentTeamPlugin;
+  contribution: PluginContribution;
+};
+
+export async function initializePlugins(config: TargetRepoConfig): Promise<LoadedPlugin[]> {
+  const loaded: LoadedPlugin[] = [];
+  for (const candidate of config.integrations.plugins) {
+    const plugin = AgentTeamPluginSchema.parse(candidate);
+    if (!plugin.enabled) continue;
+    if (!plugin.allowlisted) {
+      throw new Error(`Plugin ${plugin.name} is enabled but not allowlisted for this project.`);
+    }
+    if (plugin.projectId && plugin.projectId !== (config.project.id || config.project.isolation.memoryNamespace)) {
+      throw new Error(`Plugin ${plugin.name} is scoped to another project.`);
+    }
+    if (plugin.repo && plugin.repo !== `${config.repo.owner}/${config.repo.name}`) {
+      throw new Error(`Plugin ${plugin.name} is scoped to another repo.`);
+    }
+    if (plugin.initCommand) await runLifecycleCommand(plugin.initCommand, config.repo.localPath);
+    loaded.push({ plugin, contribution: plugin.contributions });
+  }
+  return loaded;
+}
+
+export async function disposePlugins(plugins: LoadedPlugin[], cwd: string): Promise<void> {
+  await Promise.all(plugins.map(async ({ plugin }) => {
+    if (plugin.disposeCommand) await runLifecycleCommand(plugin.disposeCommand, cwd);
+  }));
+}
+
+export function mergePluginContributions(config: TargetRepoConfig, plugins: LoadedPlugin[]): TargetRepoConfig {
+  if (!plugins.length) return config;
+  return {
+    ...config,
+    integrations: {
+      ...config.integrations,
+      capabilityPacks: [
+        ...config.integrations.capabilityPacks,
+        ...plugins.flatMap((loaded) => loaded.contribution.capabilities)
+      ],
+      mcpServers: [
+        ...config.integrations.mcpServers,
+        ...plugins.flatMap((loaded) => loaded.contribution.mcpServers)
+      ],
+      plugins: config.integrations.plugins
+    }
+  };
+}
+
+async function runLifecycleCommand(command: string, cwd: string): Promise<void> {
+  const [file, ...args] = command.split(/\s+/).filter(Boolean);
+  if (!file) return;
+  await execFile(file, args, {
+    cwd,
+    timeout: 30_000,
+    windowsHide: true,
+    maxBuffer: 1024 * 1024
+  });
+}
+

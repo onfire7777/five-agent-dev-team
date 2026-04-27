@@ -41,7 +41,8 @@ const config: TargetRepoConfig = {
       notes: []
     },
     mcpServers: [],
-    capabilityPacks: []
+    capabilityPacks: [],
+    plugins: []
   },
   models: {
     primaryCodingModel: "gpt-5.5",

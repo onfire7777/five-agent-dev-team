@@ -19,7 +19,15 @@ import {
   type WorkItem,
   type WorkItemState
 } from "../../../packages/shared/src";
-import { getAgentDefinition, roleForStage, runRoleAgent, type TeamBusMessage } from "../../../packages/agents/src";
+import {
+  disposePlugins,
+  getAgentDefinition,
+  initializePlugins,
+  mergePluginContributions,
+  roleForStage,
+  runRoleAgent,
+  type TeamBusMessage
+} from "../../../packages/agents/src";
 import { createStore, type ControllerStore, type StrictProjectScope } from "../../controller/src/store";
 
 const exec = util.promisify(childProcess.exec);
@@ -312,45 +320,51 @@ async function runAgentWithTeamContext(input: StageInput, proposalStage = false)
   const role = roleForStage(input.stage);
   const definition = getAgentDefinition(role);
   const store = await getActivityStore();
-  const config = await loadReleaseConfig(input.workItem);
+  const baseConfig = await loadReleaseConfig(input.workItem);
+  const loadedPlugins = await initializePlugins(baseConfig);
+  const config = mergePluginContributions(baseConfig, loadedPlugins);
   const scopedWorkItem = scopeWorkItemToProject(input.workItem, config);
-  await ensureNotStopped(scopedWorkItem.id, config);
-  await store.addEvent({
-    workItemId: scopedWorkItem.id,
-    stage: input.stage,
-    ownerAgent: definition.role,
-    level: "info",
-    type: "stage_started",
-    message: proposalStage
-      ? `${definition.displayName} started ${input.stage} proposal.`
-      : `${definition.displayName} started ${input.stage}.`
-  });
-  const contextMemories = await loadRepoContextMemories(config, scopedWorkItem);
-  const memories = selectRelevantMemories([
-    ...(await store.listMemories(scopedWorkItem.id)),
-    ...contextMemories
-  ], scopedWorkItem);
-  const teamMessages = [
-    ...(await readTeamBusMessages(store, scopedWorkItem.id)),
-    ...(input.teamMessages || [])
-  ];
-  const result = await runRoleAgent(definition, {
-    ...input,
-    workItem: scopedWorkItem,
-    memories,
-    targetRepoConfig: config,
-    proposalStage,
-    teamMessages,
-    teamDirection: [
-      ...buildTeamDirection(input, proposalStage),
-      ...(input.teamDirection || [])
-    ],
-    loopContext: [
-      ...buildLoopContext(input.previousArtifacts),
-      ...(input.loopContext || [])
-    ]
-  });
-  return { artifact: result.artifact, definition, store, workItem: scopedWorkItem };
+  try {
+    await ensureNotStopped(scopedWorkItem.id, config);
+    await store.addEvent({
+      workItemId: scopedWorkItem.id,
+      stage: input.stage,
+      ownerAgent: definition.role,
+      level: "info",
+      type: "stage_started",
+      message: proposalStage
+        ? `${definition.displayName} started ${input.stage} proposal.`
+        : `${definition.displayName} started ${input.stage}.`
+    });
+    const contextMemories = await loadRepoContextMemories(config, scopedWorkItem);
+    const memories = selectRelevantMemories([
+      ...(await store.listMemories(scopedWorkItem.id)),
+      ...contextMemories
+    ], scopedWorkItem);
+    const teamMessages = [
+      ...(await readTeamBusMessages(store, scopedWorkItem.id)),
+      ...(input.teamMessages || [])
+    ];
+    const result = await runRoleAgent(definition, {
+      ...input,
+      workItem: scopedWorkItem,
+      memories,
+      targetRepoConfig: config,
+      proposalStage,
+      teamMessages,
+      teamDirection: [
+        ...buildTeamDirection(input, proposalStage),
+        ...(input.teamDirection || [])
+      ],
+      loopContext: [
+        ...buildLoopContext(input.previousArtifacts),
+        ...(input.loopContext || [])
+      ]
+    });
+    return { artifact: result.artifact, definition, store, workItem: scopedWorkItem };
+  } finally {
+    await disposePlugins(loadedPlugins, config.repo.localPath || process.cwd());
+  }
 }
 
 export async function closeWorkLoop(workItem: WorkItem, previousArtifacts: StageArtifact[]): Promise<StageArtifact> {
@@ -650,7 +664,7 @@ async function readRuntimeHealthEvidence(): Promise<EvidenceItem> {
   const configuredUrl = process.env.CONTROLLER_HEALTH_URL;
   const urls = configuredUrl
     ? [configuredUrl]
-    : ["http://controller:4310/health", "http://localhost:4310/health"];
+    : ["http://controller:4310/health", "http://127.0.0.1:4310/health"];
   const failures: string[] = [];
 
   for (const url of urls) {
@@ -1131,7 +1145,8 @@ function createDefaultReleaseConfig(): TargetRepoConfig {
         notes: []
       },
       mcpServers: [],
-      capabilityPacks: []
+      capabilityPacks: [],
+      plugins: []
     },
     models: {
       primaryCodingModel: process.env.AGENT_PRIMARY_MODEL || "gpt-5.5",

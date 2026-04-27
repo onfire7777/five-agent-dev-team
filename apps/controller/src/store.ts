@@ -3,9 +3,6 @@ import crypto from "node:crypto";
 import {
   canTransition,
   AgentEventSchema,
-  createSampleArtifacts,
-  createSampleStatus,
-  createSampleWorkItems,
   DEFAULT_SCHEDULER_POLICY,
   dependenciesSatisfied,
   loadTargetRepoConfig,
@@ -25,12 +22,45 @@ import {
   type MemoryRecord,
   type ProjectConnection,
   type ProjectConnectionInput,
+  type ProjectTeamStatus,
   type StageArtifact,
   type WorkItem,
   type WorkItemState
 } from "../../../packages/shared/src";
 
-type ControllerStatus = ReturnType<typeof createSampleStatus>;
+type PipelineSummary = Record<WorkItemState, number>;
+type ReleaseReadinessSummary = {
+  status: StageArtifact["releaseReadiness"];
+  target: string;
+  checks: Array<[string, string]>;
+};
+type StatusLogEntry = [time: string, level: string, owner: string, message: string, workItemId: string];
+type SharedContextSummary = {
+  activeThreads: Array<[string, string, string]>;
+  research: string[];
+};
+type ControllerStatus = {
+  system: {
+    name: string;
+    operational: boolean;
+    emergencyStop: boolean;
+    queueDepth: number;
+    agentsOnline: number;
+    agentsTotal: number;
+    githubSync: string;
+    systemLoad: number;
+    executionMode: string;
+    emergencyReason: string;
+    scheduler: typeof DEFAULT_SCHEDULER_POLICY;
+  };
+  projectTeams: ProjectTeamStatus[];
+  pipeline: PipelineSummary;
+  workItems: WorkItem[];
+  artifacts: StageArtifact[];
+  releaseReadiness: ReleaseReadinessSummary;
+  logs: StatusLogEntry[];
+  sharedContext: SharedContextSummary;
+};
 type WorkItemCreateInput = Pick<WorkItem, "title" | "priority" | "requestType" | "dependencies" | "acceptanceCriteria" | "riskLevel" | "frontendNeeded" | "backendNeeded" | "rndNeeded"> & Partial<Pick<WorkItem, "projectId" | "repo">>;
 type ProjectScope = { projectId?: string; repo?: string };
 type ProjectConnectionPersistInput = ProjectConnectionInput & Partial<Pick<ProjectConnection, "remoteUrl" | "ghAvailable" | "ghAuthed" | "githubCliVersion" | "githubMcpAvailable" | "githubMcpAuthenticated" | "githubMcpVersion" | "githubSdkConnected" | "githubSdkVersion" | "githubConnected" | "remoteMatches" | "defaultBranchVerified" | "capabilities" | "validationErrors" | "lastValidatedAt" | "status">>;
@@ -160,8 +190,8 @@ export interface ControllerStore {
 }
 
 export class MemoryStore implements ControllerStore {
-  private workItems = createSampleWorkItems();
-  private artifacts = createSampleArtifacts();
+  private workItems: WorkItem[] = [];
+  private artifacts: StageArtifact[] = [];
   private memories: MemoryRecord[] = [];
   private projectConnections: ProjectConnection[] = [];
   private teamBusMessages: TeamBusMessage[] = [];
@@ -181,25 +211,14 @@ export class MemoryStore implements ControllerStore {
   }
 
   async getStatus() {
-    const status = createSampleStatus();
-    const projectTeams = buildProjectTeams(this.projectConnections, this.workItems);
-    const agentTotals = summarizeAgents(projectTeams);
-    return {
-      ...status,
-      system: {
-        ...status.system,
-        operational: !this.emergencyStop,
-        emergencyStop: this.emergencyStop,
-        emergencyReason: this.emergencyReason,
-        agentsOnline: agentTotals.online,
-        agentsTotal: agentTotals.total,
-        githubSync: projectTeams.length ? "release-gated" : "connect-repo",
-        queueDepth: countRunnableWorkItems(this.workItems)
-      },
-      projectTeams,
+    return buildControllerStatus({
       workItems: this.workItems,
-      artifacts: this.artifacts
-    };
+      artifacts: this.artifacts,
+      events: this.events,
+      projectConnections: await this.listProjectConnections(),
+      emergencyStop: this.emergencyStop,
+      emergencyReason: this.emergencyReason
+    });
   }
 
   async listWorkItems(): Promise<WorkItem[]> {
@@ -660,56 +679,18 @@ export class PostgresStore extends MemoryStore {
   }
 
   override async getStatus() {
-    const status = createSampleStatus();
     const workItems = await this.listWorkItems();
     const artifacts = await this.listArtifacts();
     const events = await this.listEvents(0, 50);
     const emergencyStop = await this.readEmergencyStopFlag();
-    const pipeline = buildPipelineSummary(workItems);
-    const recentArtifacts = artifacts.slice(0, 10);
-    const projectTeams = buildProjectTeams(await this.listProjectConnections(), workItems);
-    const agentTotals = summarizeAgents(projectTeams);
-    return {
-      ...status,
-      system: {
-        ...status.system,
-        operational: !emergencyStop.active,
-        emergencyStop: emergencyStop.active,
-        emergencyReason: emergencyStop.reason,
-        agentsOnline: agentTotals.online,
-        agentsTotal: agentTotals.total,
-        githubSync: projectTeams.length ? "release-gated" : "connect-repo",
-        systemLoad: Math.min(100, workItems.filter((item) => item.state !== "CLOSED" && item.state !== "BLOCKED").length * 12),
-        queueDepth: countRunnableWorkItems(workItems)
-      },
-      projectTeams,
-      pipeline,
+    return buildControllerStatus({
       workItems,
       artifacts,
-      releaseReadiness: buildReleaseReadiness(artifacts),
-      logs: events.length
-        ? events.slice(-10).reverse().map((event) => [
-          new Date(event.createdAt).toLocaleTimeString("en-US", { hour12: false }),
-          event.level.toUpperCase(),
-          event.ownerAgent || "system",
-          event.message,
-          event.workItemId || "-"
-        ])
-        : recentArtifacts.map((artifact) => [
-          new Date(artifact.createdAt).toLocaleTimeString("en-US", { hour12: false }),
-          artifact.status === "blocked" || artifact.status === "failed" ? "ERROR" : artifact.status === "running" ? "INFO" : "INFO",
-          artifact.ownerAgent,
-          artifact.summary,
-          artifact.workItemId
-        ]),
-      sharedContext: {
-        activeThreads: buildActiveThreads(workItems, artifacts),
-        research: artifacts
-          .filter((artifact) => artifact.stage === "RND")
-          .slice(0, 5)
-          .map((artifact) => artifact.summary)
-      }
-    };
+      events,
+      projectConnections: await this.listProjectConnections(),
+      emergencyStop: emergencyStop.active,
+      emergencyReason: emergencyStop.reason
+    });
   }
 
   override async createWorkItem(input: WorkItemCreateInput): Promise<WorkItem> {
@@ -1071,7 +1052,41 @@ export function createStore(): ControllerStore {
   return new MemoryStore();
 }
 
-function buildPipelineSummary(workItems: WorkItem[]): ControllerStatus["pipeline"] {
+function buildControllerStatus(input: {
+  workItems: WorkItem[];
+  artifacts: StageArtifact[];
+  events: AgentEvent[];
+  projectConnections: ProjectConnection[];
+  emergencyStop: boolean;
+  emergencyReason: string;
+}): ControllerStatus {
+  const projectTeams = buildProjectTeams(input.projectConnections, input.workItems);
+  const agentTotals = summarizeAgents(projectTeams);
+  return {
+    system: {
+      name: "AI Dev Team Controller",
+      operational: !input.emergencyStop,
+      emergencyStop: input.emergencyStop,
+      queueDepth: countRunnableWorkItems(input.workItems),
+      agentsOnline: agentTotals.online,
+      agentsTotal: agentTotals.total,
+      githubSync: projectTeams.length ? "release-gated" : "connect-repo",
+      systemLoad: Math.min(100, input.workItems.filter((item) => item.state !== "CLOSED" && item.state !== "BLOCKED").length * 12),
+      executionMode: "ChatGPT Pro assisted",
+      emergencyReason: input.emergencyReason,
+      scheduler: DEFAULT_SCHEDULER_POLICY
+    },
+    projectTeams,
+    pipeline: buildPipelineSummary(input.workItems),
+    workItems: input.workItems,
+    artifacts: input.artifacts,
+    releaseReadiness: buildReleaseReadiness(input.artifacts),
+    logs: buildStatusLogs(input.events, input.artifacts),
+    sharedContext: buildSharedContextSummary(input.workItems, input.artifacts)
+  };
+}
+
+function buildPipelineSummary(workItems: WorkItem[]): PipelineSummary {
   return {
     NEW: workItems.filter((item) => item.state === "NEW").length,
     INTAKE: workItems.filter((item) => item.state === "INTAKE").length,
@@ -1184,7 +1199,7 @@ function fallbackProjectCapabilities(project: ProjectConnection) {
   ];
 }
 
-function buildReleaseReadiness(artifacts: StageArtifact[]): ControllerStatus["releaseReadiness"] {
+function buildReleaseReadiness(artifacts: StageArtifact[]): ReleaseReadinessSummary {
   const latestRelease = artifacts.find((artifact) => artifact.stage === "RELEASE");
   const testsRun = artifacts.flatMap((artifact) => artifact.testsRun);
   return {
@@ -1200,7 +1215,37 @@ function buildReleaseReadiness(artifacts: StageArtifact[]): ControllerStatus["re
   };
 }
 
-function buildActiveThreads(workItems: WorkItem[], artifacts: StageArtifact[]): ControllerStatus["sharedContext"]["activeThreads"] {
+function buildStatusLogs(events: AgentEvent[], artifacts: StageArtifact[]): StatusLogEntry[] {
+  if (events.length) {
+    return events.slice(-10).reverse().map((event) => [
+      new Date(event.createdAt).toLocaleTimeString("en-US", { hour12: false }),
+      event.level.toUpperCase(),
+      event.ownerAgent || "system",
+      event.message,
+      event.workItemId || "-"
+    ]);
+  }
+
+  return artifacts.slice(0, 10).map((artifact) => [
+    new Date(artifact.createdAt).toLocaleTimeString("en-US", { hour12: false }),
+    artifact.status === "blocked" || artifact.status === "failed" ? "ERROR" : "INFO",
+    artifact.ownerAgent,
+    artifact.summary,
+    artifact.workItemId
+  ]);
+}
+
+function buildSharedContextSummary(workItems: WorkItem[], artifacts: StageArtifact[]): SharedContextSummary {
+  return {
+    activeThreads: buildActiveThreads(workItems, artifacts),
+    research: artifacts
+      .filter((artifact) => artifact.stage === "RND")
+      .slice(0, 5)
+      .map((artifact) => artifact.summary)
+  };
+}
+
+function buildActiveThreads(workItems: WorkItem[], artifacts: StageArtifact[]): SharedContextSummary["activeThreads"] {
   return workItems
     .filter((item) => item.state !== "CLOSED")
     .slice(0, 5)
