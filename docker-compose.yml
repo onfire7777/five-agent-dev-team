@@ -71,8 +71,12 @@ services:
     volumes:
       - .:/app
       - node-modules:/app/node_modules
-      - "${TARGET_REPO_HOST_PATH:-.}:${TARGET_REPO_CONTAINER_PATH:-/workspace/target-repo}"
-      - "${GH_CONFIG_DIR:-gh-config}:/root/.config/gh"
+      - type: bind
+        source: ${TARGET_REPO_HOST_PATH:-.}
+        target: ${TARGET_REPO_CONTAINER_PATH:-/workspace/target-repo}
+      - type: bind
+        source: ${GH_CONFIG_DIR:-./.agent-team/gh-config}
+        target: /root/.config/gh
     healthcheck:
       test:
         [
@@ -111,8 +115,12 @@ services:
     volumes:
       - .:/app
       - node-modules:/app/node_modules
-      - "${TARGET_REPO_HOST_PATH:-.}:${TARGET_REPO_CONTAINER_PATH:-/workspace/target-repo}"
-      - "${GH_CONFIG_DIR:-gh-config}:/root/.config/gh"
+      - type: bind
+        source: ${TARGET_REPO_HOST_PATH:-.}
+        target: ${TARGET_REPO_CONTAINER_PATH:-/workspace/target-repo}
+      - type: bind
+        source: ${GH_CONFIG_DIR:-./.agent-team/gh-config}
+        target: /root/.config/gh
     healthcheck:
       test:
         [
