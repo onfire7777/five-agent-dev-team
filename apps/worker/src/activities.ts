@@ -364,7 +364,18 @@ async function runAgentWithTeamContext(
     });
     return { artifact: result.artifact, definition, store, workItem: scopedWorkItem };
   } finally {
-    await disposePlugins(loadedPlugins, config.repo.localPath || process.cwd());
+    await disposePlugins(loadedPlugins, config.repo.localPath || process.cwd()).catch(async () => {
+      await store
+        .addEvent({
+          workItemId: scopedWorkItem.id,
+          stage: input.stage,
+          ownerAgent: definition.role,
+          level: "warn",
+          type: "system",
+          message: "Plugin cleanup failed after stage execution; primary stage result was preserved."
+        })
+        .catch(() => undefined);
+    });
   }
 }
 
@@ -1082,11 +1093,11 @@ async function readTeamBusMessages(store: ControllerStore, workItemId: string): 
         type: event.type,
         message: event.message
       }));
-  } catch (error) {
+  } catch {
     return [
       {
         type: "system",
-        message: `Team bus read unavailable through the current store interface: ${error instanceof Error ? error.message : String(error)}`
+        message: "Team bus read unavailable through the current store interface; continuing without bus context."
       }
     ];
   }
