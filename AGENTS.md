@@ -1,6 +1,7 @@
 # Repository Operating Rules
 
 ## Non-negotiable gates
+
 - Never push directly to `main` except from the Captain Integrator.
 - Never print secrets, tokens, passwords, or resolved private environment values.
 - Never run `docker compose config` without `--no-interpolate` unless the output
@@ -10,6 +11,7 @@
 - Do not create duplicate branches for active PR scope.
 
 ## Specialization
+
 - Backend/core owns controller APIs, workers, shared schemas, state, GitHub
   integration boundaries, and backend tests.
 - Frontend/UX owns dashboard behavior, accessibility, responsive layout, and
@@ -22,6 +24,7 @@
   traceability.
 
 ## PR policy
+
 - Every material change must go through a PR unless the Captain is doing a
   narrow integration-only repair.
 - PRs must include summary, validation, risk, rollback, and acceptance evidence.
@@ -30,6 +33,7 @@
 - Use deterministic branch names under `codex/stage-XX-<lane>/<task-slug>`.
 
 ## State policy
+
 - Update swarm state compactly.
 - Append detailed run facts to the ledger.
 - Do not paste full logs into state.

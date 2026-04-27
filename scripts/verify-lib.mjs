@@ -5,13 +5,13 @@ const SECRET_PATTERNS = [
   /\b(GH_TOKEN|GITHUB_TOKEN|OPENAI_API_KEY|ANTHROPIC_API_KEY|PASSWORD|SECRET|TOKEN)=\S+/gi,
   /ghp_[A-Za-z0-9_]+/g,
   /github_pat_[A-Za-z0-9_]+/g,
-  /sk-[A-Za-z0-9_-]+/g
+  /sk-[A-Za-z0-9_-]+/g,
 ];
 
 export function redact(value) {
   return SECRET_PATTERNS.reduce(
     (text, pattern) => text.replace(pattern, "[REDACTED]"),
-    String(value ?? "")
+    String(value ?? ""),
   );
 }
 
@@ -28,15 +28,18 @@ export async function run(command, args = [], options = {}) {
   const quiet = Boolean(options.quiet);
   const label = [command, ...args].join(" ");
   console.log(`> ${label}`);
-  const needsShell = process.platform === "win32" && ["npm", "npx"].includes(command);
-  const executable = needsShell ? [command, ...args.map(quoteCmdArg)].join(" ") : command;
+  const needsShell =
+    process.platform === "win32" && ["npm", "npx"].includes(command);
+  const executable = needsShell
+    ? [command, ...args.map(quoteCmdArg)].join(" ")
+    : command;
   const spawnArgs = needsShell ? [] : args;
 
   return new Promise((resolve, reject) => {
     const child = spawn(executable, spawnArgs, {
       shell: needsShell,
       stdio: quiet ? ["ignore", "pipe", "pipe"] : "inherit",
-      env: process.env
+      env: process.env,
     });
 
     let stdout = "";
@@ -59,7 +62,11 @@ export async function run(command, args = [], options = {}) {
       }
 
       const output = redact(`${stdout}\n${stderr}`).trim().slice(0, 4000);
-      reject(new Error(`${label} failed with exit code ${code}${output ? `\n${output}` : ""}`));
+      reject(
+        new Error(
+          `${label} failed with exit code ${code}${output ? `\n${output}` : ""}`,
+        ),
+      );
     });
   });
 }
@@ -88,10 +95,14 @@ export async function runNpmScript(name) {
 
 export async function verifyComposeSafe() {
   if (!hasFile("docker-compose.yml")) {
-    console.log("skip docker compose config --no-interpolate: no docker-compose.yml");
+    console.log(
+      "skip docker compose config --no-interpolate: no docker-compose.yml",
+    );
     return;
   }
 
-  await run("docker", ["compose", "config", "--no-interpolate"], { quiet: true });
+  await run("docker", ["compose", "config", "--no-interpolate"], {
+    quiet: true,
+  });
   console.log("docker compose config --no-interpolate: PASS");
 }
