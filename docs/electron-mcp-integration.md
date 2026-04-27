@@ -87,6 +87,11 @@ Initial tool surface:
 | `agent_team_emergency_stop`   | control | `POST /api/emergency-stop`   | Sensitive, require reason and explicit approval.                      |
 | `agent_team_emergency_resume` | control | `POST /api/emergency-resume` | Sensitive, explicit approval.                                         |
 
+For the current controller surface, work-item listing supports `projectId` and
+`state` filters, memory listing must stay scoped by `projectId` or `workItemId`,
+and event listing is limit-bound. Any MCP adapter must redact sensitive event
+fields before returning data to a client.
+
 Resources can come after tools prove stable:
 
 - `agent-team://status`
