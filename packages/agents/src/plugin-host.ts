@@ -16,20 +16,25 @@ export type LoadedPlugin = {
 
 export async function initializePlugins(config: TargetRepoConfig): Promise<LoadedPlugin[]> {
   const loaded: LoadedPlugin[] = [];
-  for (const candidate of config.integrations.plugins) {
-    const plugin = AgentTeamPluginSchema.parse(candidate);
-    if (!plugin.enabled) continue;
-    if (!plugin.allowlisted) {
-      throw new Error(`Plugin ${plugin.name} is enabled but not allowlisted for this project.`);
+  try {
+    for (const candidate of config.integrations.plugins) {
+      const plugin = AgentTeamPluginSchema.parse(candidate);
+      if (!plugin.enabled) continue;
+      if (!plugin.allowlisted) {
+        throw new Error(`Plugin ${plugin.name} is enabled but not allowlisted for this project.`);
+      }
+      if (plugin.projectId && plugin.projectId !== (config.project.id || config.project.isolation.memoryNamespace)) {
+        throw new Error(`Plugin ${plugin.name} is scoped to another project.`);
+      }
+      if (plugin.repo && plugin.repo !== `${config.repo.owner}/${config.repo.name}`) {
+        throw new Error(`Plugin ${plugin.name} is scoped to another repo.`);
+      }
+      if (plugin.initCommand) await runLifecycleCommand(plugin.initCommand, config.repo.localPath);
+      loaded.push({ plugin, contribution: plugin.contributions });
     }
-    if (plugin.projectId && plugin.projectId !== (config.project.id || config.project.isolation.memoryNamespace)) {
-      throw new Error(`Plugin ${plugin.name} is scoped to another project.`);
-    }
-    if (plugin.repo && plugin.repo !== `${config.repo.owner}/${config.repo.name}`) {
-      throw new Error(`Plugin ${plugin.name} is scoped to another repo.`);
-    }
-    if (plugin.initCommand) await runLifecycleCommand(plugin.initCommand, config.repo.localPath);
-    loaded.push({ plugin, contribution: plugin.contributions });
+  } catch (error) {
+    await disposePlugins(loaded, config.repo.localPath);
+    throw error;
   }
   return loaded;
 }

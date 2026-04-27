@@ -88,6 +88,7 @@ async function prepareAgentRun(definition: AgentDefinition, context: AgentRunCon
     capabilityIds,
     targetRepoConfig: context.targetRepoConfig,
     proposalStage: context.proposalStage,
+    teamMessages: context.teamMessages,
     teamDirection: context.teamDirection,
     loopContext: context.loopContext
   });

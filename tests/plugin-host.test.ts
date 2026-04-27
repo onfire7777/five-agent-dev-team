@@ -1,8 +1,11 @@
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { initializePlugins, mergePluginContributions, parseLifecycleCommand } from "../packages/agents/src";
 import { type AgentTeamPlugin, TargetRepoConfigSchema, type TargetRepoConfig } from "../packages/shared/src";
 
-function configWithPlugins(plugins: AgentTeamPlugin[]): TargetRepoConfig {
+function configWithPlugins(plugins: AgentTeamPlugin[], localPath = process.cwd()): TargetRepoConfig {
   return TargetRepoConfigSchema.parse({
     project: {
       id: "project-a",
@@ -16,7 +19,7 @@ function configWithPlugins(plugins: AgentTeamPlugin[]): TargetRepoConfig {
       owner: "acme",
       name: "app",
       defaultBranch: "main",
-      localPath: process.cwd()
+      localPath
     },
     commands: {
       install: "npm ci",
@@ -184,5 +187,33 @@ describe("plugin host", () => {
       "--path",
       "C:\\Program Files\\Agent"
     ]);
+  });
+
+  it("disposes initialized plugins when a later plugin fails", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "plugin-rollback-"));
+    try {
+      const config = configWithPlugins(
+        [
+          {
+            ...contributionPlugin,
+            name: "initialized-plugin",
+            initCommand: "node -e \"require('fs').writeFileSync('initialized.txt','1')\"",
+            disposeCommand: "node -e \"require('fs').writeFileSync('disposed.txt','1')\""
+          },
+          {
+            ...contributionPlugin,
+            name: "rejected-plugin",
+            allowlisted: false
+          }
+        ],
+        tempDir
+      );
+
+      await expect(initializePlugins(config)).rejects.toThrow(/not allowlisted/);
+      expect(existsSync(join(tempDir, "initialized.txt"))).toBe(true);
+      expect(existsSync(join(tempDir, "disposed.txt"))).toBe(true);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });

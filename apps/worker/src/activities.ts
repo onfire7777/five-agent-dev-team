@@ -194,9 +194,7 @@ export async function evaluateProposalGate(input: ProposalGateInput): Promise<St
   const scopedWorkItem = scopeWorkItemToProject(input.workItem, config);
   await ensureNotStopped(scopedWorkItem.id, config);
   const store = await getActivityStore();
-  const githubMcpWriteEnabled = config.integrations.mcpServers.some(
-    (server) => server.name === "github-mcp" && server.transport === "stdio" && !server.args.includes("--read-only")
-  );
+  const githubMcpWriteEnabled = hasGithubWriteIntegration(config);
   const autoAccept =
     scopedWorkItem.riskLevel === "low" &&
     input.proposal.status === "passed" &&
@@ -244,6 +242,14 @@ export async function evaluateProposalGate(input: ProposalGateInput): Promise<St
     message: artifact.summary
   });
   return artifact;
+}
+
+export function hasGithubWriteIntegration(config: TargetRepoConfig): boolean {
+  return config.integrations.mcpServers.some((server) => {
+    if (!server.enabled || server.category !== "github") return false;
+    if (server.transport === "stdio") return !server.args.includes("--read-only");
+    return true;
+  });
 }
 
 export async function recordProposalDecision(input: WorkflowProposalDecisionInput): Promise<StageArtifact> {

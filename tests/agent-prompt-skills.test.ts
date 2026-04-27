@@ -30,11 +30,19 @@ describe("agent prompt and skills", () => {
       previousArtifacts: [],
       memories: [],
       skills: [],
-      capabilityIds: []
+      capabilityIds: [],
+      teamMessages: [
+        {
+          stage: "BACKEND_BUILD",
+          ownerAgent: "backend-systems-engineering",
+          message: "API contract is ready for frontend consumption."
+        }
+      ]
     });
 
     const blocks = [...result.prompt.matchAll(/<<< BLOCK: ([a-z_]+) >>>/g)].map((match) => match[1]);
     expect(blocks).toEqual(["identity", "nonnegotiables", "context", "skills", "tools", "task", "output_contract"]);
+    expect(result.prompt).toContain("API contract is ready for frontend consumption.");
     expect(result.promptHash).toMatch(/^[a-f0-9]{64}$/);
   });
 

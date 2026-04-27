@@ -88,6 +88,50 @@ describe("release activities", () => {
     expect(artifact.testsRun).toContain("rollback:passed");
     expect(store.updatedStates).toEqual([{ id: "WI-RELEASE", state: "BLOCKED" }]);
   });
+
+  it("detects write-capable GitHub integrations by category", async () => {
+    const { hasGithubWriteIntegration } = await loadActivities(fakeStore());
+    const config = targetRepoConfig(process.cwd());
+
+    expect(
+      hasGithubWriteIntegration({
+        ...config,
+        integrations: {
+          ...config.integrations,
+          mcpServers: [
+            {
+              ...mcpServerDefaults(),
+              name: "custom-github",
+              category: "github",
+              enabled: true,
+              transport: "streamable_http",
+              url: "https://example.com/mcp"
+            }
+          ]
+        }
+      })
+    ).toBe(true);
+
+    expect(
+      hasGithubWriteIntegration({
+        ...config,
+        integrations: {
+          ...config.integrations,
+          mcpServers: [
+            {
+              ...mcpServerDefaults(),
+              name: "github-mcp-read",
+              category: "github",
+              enabled: true,
+              transport: "stdio",
+              command: "github-mcp-server",
+              args: ["stdio", "--read-only"]
+            }
+          ]
+        }
+      })
+    ).toBe(false);
+  });
 });
 
 async function loadActivities(store: ReturnType<typeof fakeStore>) {
@@ -117,6 +161,17 @@ function fakeStore() {
     async updateWorkItemState(id: string, state: string) {
       this.updatedStates.push({ id, state });
     }
+  };
+}
+
+function mcpServerDefaults() {
+  return {
+    activation: { mode: "on_demand" as const, stages: [], agents: [], keywords: [] },
+    env: {},
+    timeoutSeconds: 30,
+    cacheToolsList: true,
+    toolAllowlist: [],
+    notes: []
   };
 }
 

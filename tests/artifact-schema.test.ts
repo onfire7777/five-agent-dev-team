@@ -80,6 +80,29 @@ describe("stage artifact schema", () => {
     expect(packet.rollback.command).toContain("gh release delete");
   });
 
+  it("accepts real work item brief identifiers", () => {
+    expect(
+      WorkItemBriefSchema.parse({
+        workItemId: "WI-3000",
+        projectId: "owner-repo",
+        title: "Scoped work",
+        requestType: "research",
+        priority: "p1",
+        businessGoal: "ship",
+        userGoal: "use",
+        technicalGoal: "build",
+        scopeIn: [],
+        scopeOut: [],
+        acceptanceCriteria: [],
+        affectedAreas: ["backend"],
+        flags: { frontendNeeded: false, backendNeeded: true, rndNeeded: true },
+        riskLevels: { securityPrivacy: "medium", performance: "medium" },
+        openQuestions: [],
+        routingDecision: "research"
+      })
+    ).toMatchObject({ workItemId: "WI-3000", projectId: "owner-repo" });
+  });
+
   it("rejects malformed work item briefs before agent routing", () => {
     expect(() =>
       WorkItemBriefSchema.parse({

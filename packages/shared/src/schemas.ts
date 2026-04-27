@@ -106,8 +106,8 @@ export const StageArtifactSchema = z.object({
 export type StageArtifact = z.infer<typeof StageArtifactSchema>;
 
 export const WorkItemBriefSchema = z.object({
-  workItemId: z.string().uuid(),
-  projectId: z.string().uuid(),
+  workItemId: z.string().min(1),
+  projectId: z.string().min(1),
   title: z.string().min(1).max(200),
   requestType: z.enum(["feature", "bug", "performance", "security", "privacy", "refactor", "research"]),
   priority: z.enum(["p0", "p1", "p2", "p3"]),

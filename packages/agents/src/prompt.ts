@@ -3,6 +3,14 @@ import type { AgentDefinition } from "./definitions";
 import type { LoadedSkill } from "./skills";
 import type { MemoryRecord, StageArtifact, TargetRepoConfig, WorkItem, WorkItemState } from "../../shared/src";
 
+export interface PromptTeamMessage {
+  createdAt?: string;
+  stage?: WorkItemState;
+  ownerAgent?: string;
+  type?: string;
+  message: string;
+}
+
 export interface PromptAssemblyInput {
   definition: AgentDefinition;
   workItem: WorkItem;
@@ -15,6 +23,7 @@ export interface PromptAssemblyInput {
   capabilityIds: string[];
   targetRepoConfig?: TargetRepoConfig;
   proposalStage?: boolean;
+  teamMessages?: PromptTeamMessage[];
   teamDirection?: string[];
   loopContext?: string[];
 }
@@ -52,6 +61,7 @@ export function assembleCanonicalPrompt(input: PromptAssemblyInput): PromptAssem
         `- Latest completed loop: ${latestLoop(input.memories)}`,
         `- Active work item brief: ${JSON.stringify(workItemBrief(input.workItem))}`,
         `- Prior-stage artifacts (this loop): ${formatArtifacts(input.previousArtifacts)}`,
+        `- Team bus messages: ${formatTeamMessages(input.teamMessages)}`,
         `- Model policy: ${input.selectedModel} selected for this run.`,
         `- Dropped skills: ${input.droppedSkillIds?.length ? input.droppedSkillIds.join(", ") : "none"}`,
         input.proposalStage
@@ -134,6 +144,21 @@ function formatArtifacts(artifacts: StageArtifact[]): string {
   return artifacts.length
     ? artifacts
         .map((artifact) => `${artifact.stage}/${artifact.ownerAgent}/${artifact.status}: ${artifact.title}`)
+        .join("; ")
+    : "none";
+}
+
+function formatTeamMessages(messages?: PromptTeamMessage[]): string {
+  return messages?.length
+    ? messages
+        .map((message) =>
+          [
+            message.createdAt || "unknown-time",
+            message.stage || "unknown-stage",
+            message.ownerAgent || message.type || "unknown-source",
+            message.message
+          ].join("/")
+        )
         .join("; ")
     : "none";
 }
