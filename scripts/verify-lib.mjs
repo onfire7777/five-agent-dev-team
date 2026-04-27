@@ -24,7 +24,8 @@ export function hasNpmScript(name) {
 export async function run(command, args = [], options = {}) {
   const quiet = Boolean(options.quiet);
   const label = [command, ...args].join(" ");
-  console.log(`> ${label}`);
+  const safeLabel = redact(label);
+  console.log(`> ${safeLabel}`);
   const needsShell = process.platform === "win32" && ["npm", "npx"].includes(command);
   const executable = needsShell ? [command, ...args.map(quoteCmdArg)].join(" ") : command;
   const spawnArgs = needsShell ? [] : args;
@@ -56,7 +57,7 @@ export async function run(command, args = [], options = {}) {
       }
 
       const output = redact(`${stdout}\n${stderr}`).trim().slice(0, 4000);
-      reject(new Error(`${label} failed with exit code ${code}${output ? `\n${output}` : ""}`));
+      reject(new Error(`${safeLabel} failed with exit code ${code}${output ? `\n${output}` : ""}`));
     });
   });
 }

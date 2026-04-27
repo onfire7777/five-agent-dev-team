@@ -63,15 +63,17 @@ export function startSmartScheduler(store: ControllerStore): NodeJS.Timeout | nu
         const claimed = await store.claimWorkItemForWorkflow(next.id);
         if (!claimed) return;
         activeIds.add(next.id);
+        let workflowStarted = false;
         try {
           const workflowId = await startAutonomousWorkflow(next);
           if (workflowId) {
+            workflowStarted = true;
             await store.updateWorkItemState(next.id, "INTAKE");
           } else {
             await store.releaseWorkItemWorkflowClaim(next.id);
           }
         } catch (error) {
-          await store.releaseWorkItemWorkflowClaim(next.id);
+          if (!workflowStarted) await store.releaseWorkItemWorkflowClaim(next.id);
           throw error;
         } finally {
           activeIds.delete(next.id);

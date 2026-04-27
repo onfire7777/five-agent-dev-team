@@ -1330,6 +1330,7 @@ async function loadConfigFromProjectConnection(workItem: WorkItem): Promise<Targ
   const store = await getActivityStore();
   const connections = await store.listProjectConnections();
   const match = connections.find((connection) => {
+    if (!connection.active) return false;
     if (workItem.projectId && workItem.repo)
       return connection.projectId === workItem.projectId && connection.repo === workItem.repo;
     return connection.projectId === workItem.projectId || connection.repo === workItem.repo;

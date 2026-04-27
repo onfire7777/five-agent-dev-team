@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { initializePlugins, mergePluginContributions } from "../packages/agents/src";
+import { initializePlugins, mergePluginContributions, parseLifecycleCommand } from "../packages/agents/src";
 import { type AgentTeamPlugin, TargetRepoConfigSchema, type TargetRepoConfig } from "../packages/shared/src";
 
 function configWithPlugins(plugins: AgentTeamPlugin[]): TargetRepoConfig {
@@ -169,5 +169,20 @@ describe("plugin host", () => {
     expect(merged.integrations.capabilityPacks[0].name).toBe("Browser smoke testing");
     expect(merged.integrations.mcpServers[0].name).toBe("browser-use");
     expect(merged.integrations.plugins).toHaveLength(1);
+  });
+
+  it("preserves quoted lifecycle command arguments", () => {
+    expect(
+      parseLifecycleCommand(
+        'node scripts/init-plugin.mjs --label "Browser smoke testing" --path "C:\\Program Files\\Agent"'
+      )
+    ).toEqual([
+      "node",
+      "scripts/init-plugin.mjs",
+      "--label",
+      "Browser smoke testing",
+      "--path",
+      "C:\\Program Files\\Agent"
+    ]);
   });
 });

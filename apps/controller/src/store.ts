@@ -694,9 +694,12 @@ export class PostgresStore extends MemoryStore {
       create table if not exists stage_artifacts (
         id bigserial primary key,
         work_item_id text not null,
+        artifact_key text,
         payload jsonb not null,
         created_at timestamptz not null default now()
       );
+      alter table stage_artifacts add column if not exists artifact_key text;
+      create unique index if not exists stage_artifacts_artifact_key_idx on stage_artifacts (artifact_key) where artifact_key is not null;
       create table if not exists agent_events (
         sequence bigserial primary key,
         work_item_id text,
@@ -836,10 +839,6 @@ export class PostgresStore extends MemoryStore {
 
   override async addArtifact(artifact: StageArtifact): Promise<void> {
     const parsed = StageArtifactSchema.parse(artifact);
-    await this.pool.query(`
-      alter table stage_artifacts add column if not exists artifact_key text;
-      create unique index if not exists stage_artifacts_artifact_key_idx on stage_artifacts (artifact_key) where artifact_key is not null;
-    `);
     const artifactKey = parsed.artifactId;
     await this.pool.query(
       `insert into stage_artifacts (work_item_id, payload, artifact_key, created_at)

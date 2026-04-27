@@ -59,7 +59,7 @@ export function mergePluginContributions(config: TargetRepoConfig, plugins: Load
 }
 
 async function runLifecycleCommand(command: string, cwd: string): Promise<void> {
-  const [file, ...args] = command.split(/\s+/).filter(Boolean);
+  const [file, ...args] = parseLifecycleCommand(command);
   if (!file) return;
   await execFile(file, args, {
     cwd,
@@ -67,4 +67,58 @@ async function runLifecycleCommand(command: string, cwd: string): Promise<void> 
     windowsHide: true,
     maxBuffer: 1024 * 1024
   });
+}
+
+export function parseLifecycleCommand(command: string): string[] {
+  const args: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index];
+
+    if (quote === "'") {
+      if (char === "'") quote = null;
+      else current += char;
+      continue;
+    }
+
+    if (quote === '"') {
+      if (char === '"') {
+        quote = null;
+        continue;
+      }
+      if (char === "\\") {
+        const next = command[index + 1];
+        if (next === '"' || next === "\\") {
+          current += next;
+          index += 1;
+        } else {
+          current += char;
+        }
+        continue;
+      }
+      current += char;
+      continue;
+    }
+
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+
+    if (/\s/.test(char)) {
+      if (current) {
+        args.push(current);
+        current = "";
+      }
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (quote) throw new Error("Unterminated quoted lifecycle command.");
+  if (current) args.push(current);
+  return args;
 }

@@ -378,7 +378,11 @@ function createInvalidLiveArtifact(
     title: `${definition.shortName} returned invalid output for ${context.stage}`,
     summary: `Live agent output could not be parsed into a valid stage artifact. The workflow is blocked so invalid or incomplete agent output cannot advance implementation.`,
     decisions: ["Block this stage until the agent returns valid JSON matching the StageArtifact schema."],
-    risks: [`Invalid live output preview: ${rawOutput.trim().slice(0, 500) || "empty output"}`],
+    risks: [
+      rawOutput.trim()
+        ? "Invalid live output was omitted from the artifact to avoid persisting untrusted content."
+        : "Live agent returned empty output."
+    ],
     filesChanged: [],
     testsRun: [],
     releaseReadiness: "not_ready",

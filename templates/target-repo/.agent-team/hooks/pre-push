@@ -6,4 +6,26 @@ if ! command -v gitleaks >/dev/null 2>&1; then
   exit 1
 fi
 
-gitleaks protect --staged --redact
+zero_sha=0000000000000000000000000000000000000000
+status=0
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ -n "${local_sha:-}" ] || continue
+  [ "$local_sha" != "$zero_sha" ] || continue
+
+  if [ "${remote_sha:-$zero_sha}" = "$zero_sha" ]; then
+    log_opts="$local_sha"
+  else
+    log_opts="$remote_sha..$local_sha"
+  fi
+
+  if ! git rev-list --max-count=1 "$log_opts" >/dev/null 2>&1; then
+    continue
+  fi
+
+  if ! gitleaks git --log-opts "$log_opts" --redact .; then
+    status=1
+  fi
+done
+
+exit "$status"

@@ -109,7 +109,7 @@ export const WorkItemBriefSchema = z.object({
   workItemId: z.string().uuid(),
   projectId: z.string().uuid(),
   title: z.string().min(1).max(200),
-  requestType: z.enum(["feature", "bug", "perf", "security", "privacy", "refactor", "rnd"]),
+  requestType: z.enum(["feature", "bug", "performance", "security", "privacy", "refactor", "research"]),
   priority: z.enum(["p0", "p1", "p2", "p3"]),
   businessGoal: z.string().min(1),
   userGoal: z.string().min(1),

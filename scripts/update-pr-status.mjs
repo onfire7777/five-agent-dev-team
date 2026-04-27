@@ -50,7 +50,10 @@ function buildBlock(existingBody, stageName, state, stageNotes) {
   rows[normalizedStage] = {
     lastRun: now,
     status: state,
-    notes: stageNotes.replace(/\|/g, "/")
+    notes: stageNotes
+      .replace(/\|/g, "/")
+      .replace(/[\r\n]+/g, " ")
+      .trim()
   };
 
   const tableRows = stages

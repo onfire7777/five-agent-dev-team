@@ -25,6 +25,7 @@ import {
   ProjectCapabilityStatusSchema,
   ProjectConnectionInputSchema,
   WorkItemStateSchema,
+  loadTargetRepoConfig,
   targetRepoConfigFromProjectConnection,
   type ProjectCapabilityStatus,
   type ProjectConnection,
@@ -631,7 +632,8 @@ app.post("/api/github/device/start", async (_req, res, next) => {
         Accept: "application/json",
         "Content-Type": "application/x-www-form-urlencoded"
       },
-      body
+      body,
+      signal: AbortSignal.timeout(10_000)
     });
     const data = (await response.json()) as {
       device_code?: string;
@@ -692,7 +694,8 @@ app.post("/api/github/device/poll", async (req, res, next) => {
         client_id: session.clientId,
         device_code: session.deviceCode,
         grant_type: "urn:ietf:params:oauth:grant-type:device_code"
-      })
+      }),
+      signal: AbortSignal.timeout(10_000)
     });
     const data = (await response.json()) as {
       access_token?: string;
@@ -837,6 +840,7 @@ app.post("/api/projects/:id/activate", async (req, res, next) => {
 app.delete("/api/projects/:id", async (req, res, next) => {
   try {
     const project = await store.deactivateProjectConnection(req.params.id);
+    await removeTargetRepoConfig(project);
     await store.addEvent({
       level: "info",
       type: "system",
@@ -907,6 +911,23 @@ async function writeTargetRepoConfig(project: ProjectConnection): Promise<void> 
   const projectConfigDir = process.env.AGENT_TEAM_PROJECT_CONFIG_DIR || ".agent-team/projects";
   await fs.mkdir(projectConfigDir, { recursive: true });
   await fs.writeFile(path.join(projectConfigDir, `${safeFileSegment(project.projectId)}.yaml`), yaml, "utf8");
+}
+
+async function removeTargetRepoConfig(project: ProjectConnection): Promise<void> {
+  const projectConfigDir = process.env.AGENT_TEAM_PROJECT_CONFIG_DIR || ".agent-team/projects";
+  await fs.rm(path.join(projectConfigDir, `${safeFileSegment(project.projectId)}.yaml`), { force: true });
+
+  const configPath = process.env.AGENT_TEAM_CONFIG || "agent-team.config.yaml";
+  try {
+    const config = loadTargetRepoConfig(configPath);
+    const matchesDeactivatedProject =
+      config.project.id === project.projectId &&
+      config.repo.owner === project.repoOwner &&
+      config.repo.name === project.repoName;
+    if (matchesDeactivatedProject) await fs.rm(configPath, { force: true });
+  } catch {
+    // If the global config is absent or invalid, the project-scoped cleanup above is still sufficient.
+  }
 }
 
 type ProjectConnectionDiagnostics = Partial<
@@ -1045,15 +1066,11 @@ async function inspectProjectConnection(input: ProjectConnectionInput): Promise<
     if (!branch.ok) validationErrors.push(`Default branch ${defaultBranch} was not verified on origin.`);
   }
 
-  const status: ProjectConnection["status"] =
-    !diagnostics.remoteMatches && !diagnostics.githubConnected
+  const status: ProjectConnection["status"] = validationErrors.length
+    ? !diagnostics.remoteMatches && !diagnostics.githubConnected
       ? "remote_mismatch"
-      : !diagnostics.ghAvailable ||
-          !diagnostics.ghAuthed ||
-          !diagnostics.githubSdkConnected ||
-          (input.githubMcpEnabled && (!diagnostics.githubMcpAvailable || !diagnostics.githubMcpAuthenticated))
-        ? "needs_github_auth"
-        : "connected";
+      : "needs_github_auth"
+    : "connected";
 
   const finalDiagnostics = {
     ...diagnostics,
