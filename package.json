@@ -28,7 +28,14 @@
     "verify:local": "node scripts/verify-local.mjs",
     "verify:ci": "node scripts/verify-ci.mjs",
     "verify:captain": "node scripts/verify-captain.mjs",
-    "check": "npm run typecheck && npm run lint && npm run format:check && npm test && npm run build"
+    "check": "npm run typecheck && npm run lint && npm run format:check && npm test && npm run build",
+    "verify:targeted": "node scripts/verify-targeted.mjs",
+    "verify:pr": "node scripts/verify-pr-ready.mjs",
+    "verify:runtime": "node scripts/verify-runtime.mjs",
+    "ci:route": "node scripts/ci-failure-router.mjs",
+    "ops:janitor": "node scripts/janitor.mjs",
+    "spec:hash": "node scripts/spec-hash.mjs",
+    "diff:budget": "node scripts/diff-budget-check.mjs"
   },
   "dependencies": {
     "@octokit/rest": "^22.0.1",

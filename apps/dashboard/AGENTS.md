@@ -1,7 +1,9 @@
 # Dashboard Rules
 
 - Optimize for a dense, usable operator dashboard, not a marketing page.
+- Consume typed API contracts from `packages/shared`.
 - Verify loading, empty, error, keyboard, focus, and responsive states.
+- Preserve desktop and mobile viewport behavior.
 - Keep API defaults local and explicit.
 - Do not change backend contracts, CI workflows, Docker, or dependency versions
   from this lane; write a handoff to the owning lane instead.

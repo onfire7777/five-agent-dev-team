@@ -1,40 +1,36 @@
-# Repository Operating Rules
+# five-agent-dev-team operating rules
 
-## Non-negotiable gates
+## Primary rule
 
-- Never push directly to `main` except from the Captain Integrator.
+Optimize for safe convergence, not constant mutation.
+
+## Authority
+
+- R&D may create RFCs, architecture contracts, scores, and queue entries only.
+- Stages 1-5 work only in worktrees and PR branches.
+- Captain alone may merge, push `main`, update final state, or mark acceptance
+  complete.
+- Janitor may clean only safe operational artifacts.
+
+## Preflight
+
+- Check `C:\Users\burni\.codex\state\five-agent-dev-team-control.json`.
+- Check active claims and integration lock.
+- Run `git status --short`.
+- Run `git fetch --all --prune`.
+- Confirm branch sync before mutation.
+- Confirm no duplicate active PR scope.
+
+## Verification
+
+- Run targeted checks after small changes.
+- Run full PR readiness checks before `codex-status:ready-to-merge`.
+- Captain runs merge queue or `integration/codex` verification before merge.
+
+## Safety
+
 - Never print secrets, tokens, passwords, or resolved private environment values.
-- Never run `docker compose config` without `--no-interpolate` unless the output
-  is intentionally safe and will not be pasted into logs or state.
-- Always run `npm ci` before validation after dependency changes.
-- Always run `npm run check` before handoff.
-- Do not create duplicate branches for active PR scope.
-
-## Specialization
-
-- Backend/core owns controller APIs, workers, shared schemas, state, GitHub
-  integration boundaries, and backend tests.
-- Frontend/UX owns dashboard behavior, accessibility, responsive layout, and
-  browser/E2E smoke coverage.
-- Quality/debug owns reproduction, regression tests, coverage gaps, flaky tests,
-  and acceptance verification.
-- Security/devops owns CI, Gitleaks, audit policy, Docker, release hygiene,
-  secret handling, and workflow permissions.
-- Docs/alignment owns README, docs, runbooks, acceptance evidence, and spec
-  traceability.
-
-## PR policy
-
-- Every material change must go through a PR unless the Captain is doing a
-  narrow integration-only repair.
-- PRs must include summary, validation, risk, rollback, and acceptance evidence.
-- Draft PRs are never mergeable.
-- Broad PRs must be reviewed before readiness.
-- Use deterministic branch names under `codex/stage-XX-<lane>/<task-slug>`.
-
-## State policy
-
-- Update swarm state compactly.
-- Append detailed run facts to the ledger.
-- Do not paste full logs into state.
-- Prefer a precise no-op handoff over speculative edits.
+- Never run interpolating Docker Compose config into logs.
+- Do not add production dependencies without Security/DevOps review.
+- Do not document speculative behavior as complete.
+- Prefer a no-op receipt over speculative mutation.
