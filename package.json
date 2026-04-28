@@ -34,6 +34,7 @@
     "verify:runtime": "node scripts/verify-runtime.mjs",
     "ci:route": "node scripts/ci-failure-router.mjs",
     "ops:janitor": "node scripts/janitor.mjs",
+    "logs:check": "node scripts/validate-logging.mjs",
     "spec:hash": "node scripts/spec-hash.mjs",
     "diff:budget": "node scripts/diff-budget-check.mjs"
   },
