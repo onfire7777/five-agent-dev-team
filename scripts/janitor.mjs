@@ -20,7 +20,15 @@ for (const tree of worktrees) {
   const stale = mtime < cutoff;
   const safe = !status && !openPr && stale;
 
-  results.push({ path: treePath, branch, detached: Boolean(tree.detached), dirty: Boolean(status), openPr, stale, safe });
+  results.push({
+    path: treePath,
+    branch,
+    detached: Boolean(tree.detached),
+    dirty: Boolean(status),
+    openPr,
+    stale,
+    safe
+  });
   if (safe && apply) {
     await run("git", ["worktree", "remove", treePath]);
   }
