@@ -1,9 +1,16 @@
 import type { AgentDefinition } from "./definitions";
-import type { McpServerConfig, MemoryRecord, StageArtifact, TargetRepoConfig, WorkItem, WorkItemState } from "../../shared/src";
+import type {
+  McpServerConfig,
+  MemoryRecord,
+  StageArtifact,
+  TargetRepoConfig,
+  WorkItem,
+  WorkItemState
+} from "../../shared/src";
+import { assembleCanonicalPrompt } from "./prompt";
+import { loadTriggeredSkills, type LoadedSkill } from "./skills";
 import {
-  buildSharedContext,
   DEFAULT_SCHEDULER_POLICY,
-  formatSharedContext,
   githubToken,
   shouldActivateCapability,
   shouldUseLiveApi,
@@ -37,18 +44,76 @@ export interface AgentRunResult {
   live: boolean;
 }
 
+type AgentRunPreparation = {
+  prompt: string;
+  promptHash: string;
+  skills: LoadedSkill[];
+  droppedSkillIds: string[];
+  capabilityIds: string[];
+};
+
+type ConfiguredMcpServer = {
+  id: string;
+  server: any;
+};
+
+type ConfiguredHostedTool = {
+  id: string;
+  tool: any;
+};
+
 export async function runRoleAgent(definition: AgentDefinition, context: AgentRunContext): Promise<AgentRunResult> {
   const policy = {
     ...DEFAULT_SCHEDULER_POLICY,
     mode: (process.env.AGENT_EXECUTION_MODE as any) || DEFAULT_SCHEDULER_POLICY.mode
   };
+  const preparation = await prepareAgentRun(definition, context);
 
   if ((process.env.AGENT_LIVE_MODE === "true" || shouldUseLiveApi(policy)) && process.env.OPENAI_API_KEY) {
     return runLiveOpenAIAgent(definition, context);
   }
 
-  const artifact = createTemplateArtifact(definition, context);
+  const artifact = createTemplateArtifact(definition, context, preparation);
   return { artifact, rawOutput: artifact.summary, live: false };
+}
+
+async function prepareAgentRun(
+  definition: AgentDefinition,
+  context: AgentRunContext,
+  selectedModelOverride?: string,
+  capabilityIdsOverride?: string[]
+): Promise<AgentRunPreparation> {
+  const selectedModel = selectedModelOverride || modelForAgent(definition, context.targetRepoConfig);
+  const skillLoad = await loadTriggeredSkills({
+    workItem: context.workItem,
+    stage: context.stage,
+    agent: definition.role,
+    targetRepoConfig: context.targetRepoConfig
+  });
+  const capabilityIds = capabilityIdsOverride || activeCapabilityIds(definition, context);
+  const prompt = assembleCanonicalPrompt({
+    definition,
+    workItem: context.workItem,
+    stage: context.stage,
+    selectedModel,
+    previousArtifacts: context.previousArtifacts,
+    memories: context.memories || [],
+    skills: skillLoad.skills,
+    droppedSkillIds: skillLoad.droppedSkillIds,
+    capabilityIds,
+    targetRepoConfig: context.targetRepoConfig,
+    proposalStage: context.proposalStage,
+    teamMessages: context.teamMessages,
+    teamDirection: context.teamDirection,
+    loopContext: context.loopContext
+  });
+  return {
+    prompt: prompt.prompt,
+    promptHash: prompt.promptHash,
+    skills: skillLoad.skills,
+    droppedSkillIds: skillLoad.droppedSkillIds,
+    capabilityIds
+  };
 }
 
 async function runLiveOpenAIAgent(definition: AgentDefinition, context: AgentRunContext): Promise<AgentRunResult> {
@@ -79,17 +144,22 @@ async function runLiveOpenAIAgentWithModel(
 ): Promise<AgentRunResult> {
   const AgentCtor = (sdk as any).Agent;
   const run = (sdk as any).run;
-  const mcpServers = createConfiguredMcpServers(sdk, definition, context);
-  const tools = createHostedTools(sdk, definition, context);
-  const mcpSession = mcpServers.length
-    ? await sdk.MCPServers.open(mcpServers, {
-        connectTimeoutMs: Number(process.env.AGENT_MCP_CONNECT_TIMEOUT_MS || 10_000),
-        closeTimeoutMs: Number(process.env.AGENT_MCP_CLOSE_TIMEOUT_MS || 5_000),
-        connectInParallel: true,
-        dropFailed: true,
-        strict: /^(1|true|yes)$/i.test(process.env.AGENT_MCP_STRICT || "")
-      })
+  const configuredMcpServers = createConfiguredMcpServers(sdk, definition, context);
+  const hostedTools = createHostedTools(sdk, definition, context);
+  const mcpSession = configuredMcpServers.length
+    ? await sdk.MCPServers.open(
+        configuredMcpServers.map(({ server }) => server),
+        {
+          connectTimeoutMs: Number(process.env.AGENT_MCP_CONNECT_TIMEOUT_MS || 10_000),
+          closeTimeoutMs: Number(process.env.AGENT_MCP_CLOSE_TIMEOUT_MS || 5_000),
+          connectInParallel: true,
+          dropFailed: true,
+          strict: /^(1|true|yes)$/i.test(process.env.AGENT_MCP_STRICT || "")
+        }
+      )
     : null;
+  const capabilityIds = runtimeCapabilityIds(configuredMcpServers, mcpSession?.active || [], hostedTools);
+  const preparation = await prepareAgentRun(definition, context, model, capabilityIds);
 
   try {
     const agent = new AgentCtor({
@@ -97,80 +167,24 @@ async function runLiveOpenAIAgentWithModel(
       instructions: definition.instructions,
       model,
       mcpServers: mcpSession?.active || [],
-      tools
+      tools: hostedTools.map(({ tool }) => tool)
     });
 
-    const result = await run(agent, buildAgentPrompt(definition, context, model));
+    const result = await run(agent, preparation.prompt);
     const rawOutput = String(result?.finalOutput ?? result?.output ?? result ?? "");
-    const artifact = parseLiveArtifact(definition, context, rawOutput) || createInvalidLiveArtifact(definition, context, rawOutput);
+    const artifact =
+      parseLiveArtifact(definition, context, rawOutput, preparation) ||
+      createInvalidLiveArtifact(definition, context, rawOutput, preparation);
     return { artifact, rawOutput, live: true };
   } finally {
-    await mcpSession?.close();
+    try {
+      await mcpSession?.close();
+    } catch {
+      process.emitWarning("MCP session close failed; preserving completed agent result.", {
+        code: "AGENT_MCP_CLOSE_FAILED"
+      });
+    }
   }
-}
-
-function buildAgentPrompt(definition: AgentDefinition, context: AgentRunContext, selectedModel = modelForAgent(definition, context.targetRepoConfig)): string {
-  const sharedContext = buildSharedContext(context.workItem, context.previousArtifacts, context.memories || [], {
-    targetRepoConfig: context.targetRepoConfig,
-    stage: context.stage,
-    agent: definition.role
-  });
-  return [
-    `Work item: ${context.workItem.id} - ${context.workItem.title}`,
-    `Stage: ${context.stage}${context.proposalStage ? " proposal" : ""}`,
-    `Agent: ${definition.displayName}`,
-    `Project scope: ${context.workItem.projectId || (context.targetRepoConfig ? "configured repo" : "unscoped")}`,
-    `Repository scope: ${context.workItem.repo || "not connected"}`,
-    `Model policy: ${selectedModel} selected for this run, with configured fallback only if unavailable.`,
-    context.proposalStage
-      ? [
-          "",
-          "Proposal mode:",
-          definition.proposalInstructions || "Propose the next stage plan, risks, dependencies, and handoff needs before implementation.",
-          "Return a normal stage artifact JSON, but make it clear in title and summary that this is a proposal-only handoff. Do not claim files changed or tests run unless already proven."
-        ].join("\n")
-      : "",
-    "",
-    "Shared team context:",
-    formatSharedContext(sharedContext),
-    "",
-    "Team bus messages:",
-    formatTeamMessages(context.teamMessages || []),
-    "",
-    "Team direction:",
-    formatList(context.teamDirection || []),
-    "",
-    "Loop context:",
-    formatList(context.loopContext || []),
-    "",
-    `Acceptance criteria: ${context.workItem.acceptanceCriteria.join("; ") || "Not provided"}`,
-    `Previous artifacts: ${context.previousArtifacts.map((artifact) => `${artifact.stage}: ${artifact.summary}`).join(" | ") || "None"}`,
-    "Capability rule: proactively use active MCP tools, skills, plugins, and knowledge packs when they materially improve this stage; do not call inactive or irrelevant tools.",
-    "Research rule: use hosted web search or web-search MCP only for current external facts that local repo context cannot prove; summarize sources into decisions, risks, tests, or follow-ups.",
-    "When a tool uncovers a durable lesson, convert it into an artifact decision, risk, test, or follow-up rather than relying on transient tool output.",
-    "Cooperate with the team: reference teammate activity, team bus messages, current direction, loop context, preserve prior decisions, update shared risks, and return only JSON for one stage artifact.",
-    "The JSON must include title, summary, status, decisions, risks, filesChanged, testsRun, releaseReadiness, and nextStage."
-  ].filter(Boolean).join("\n");
-}
-
-function formatTeamMessages(messages: TeamBusMessage[]): string {
-  if (!messages.length) return "none";
-  return messages
-    .slice(-12)
-    .map((message) => {
-      const prefix = [
-        message.createdAt,
-        message.ownerAgent,
-        message.stage,
-        message.type
-      ].filter(Boolean).join(" | ");
-      return prefix ? `${prefix}: ${message.message}` : message.message;
-    })
-    .join("\n");
-}
-
-function formatList(values: string[]): string {
-  return values.length ? values.map((value) => `- ${value}`).join("\n") : "none";
 }
 
 function modelForAgent(definition: AgentDefinition, config?: TargetRepoConfig): string {
@@ -186,23 +200,47 @@ function fallbackModelForAgent(config?: TargetRepoConfig): string | null {
   return config.models.fallbackModel;
 }
 
-function createConfiguredMcpServers(sdk: any, definition: AgentDefinition, context: AgentRunContext): any[] {
+function createConfiguredMcpServers(
+  sdk: any,
+  definition: AgentDefinition,
+  context: AgentRunContext
+): ConfiguredMcpServer[] {
   if (!context.targetRepoConfig) return [];
   return context.targetRepoConfig.integrations.mcpServers
-    .filter((server) => shouldActivateCapability(server.enabled, server.activation, {
-      workItem: context.workItem,
-      stage: context.stage,
-      agent: definition.role
-    }))
-    .map((server) => createMcpServer(sdk, server));
+    .filter((server) =>
+      shouldActivateCapability(server.enabled, server.activation, {
+        workItem: context.workItem,
+        stage: context.stage,
+        agent: definition.role
+      })
+    )
+    .map((server) => ({
+      id: `mcp:${server.name}`,
+      server: createMcpServer(sdk, server)
+    }));
 }
 
-function createHostedTools(sdk: any, definition: AgentDefinition, context: AgentRunContext): any[] {
+function createHostedTools(sdk: any, definition: AgentDefinition, context: AgentRunContext): ConfiguredHostedTool[] {
   if (!shouldUseHostedWebSearch(definition, context) || typeof sdk.webSearchTool !== "function") return [];
   return [
-    sdk.webSearchTool({
-      searchContextSize: "medium"
-    })
+    {
+      id: "hosted:hosted-search",
+      tool: sdk.webSearchTool({
+        searchContextSize: "medium"
+      })
+    }
+  ];
+}
+
+function runtimeCapabilityIds(
+  configuredMcpServers: ConfiguredMcpServer[],
+  activeMcpServers: any[],
+  hostedTools: ConfiguredHostedTool[]
+): string[] {
+  const active = new Set(activeMcpServers);
+  return [
+    ...configuredMcpServers.filter(({ server }) => active.has(server)).map(({ id }) => id),
+    ...hostedTools.map(({ id }) => id)
   ];
 }
 
@@ -213,11 +251,26 @@ function shouldUseHostedWebSearch(definition: AgentDefinition, context: AgentRun
     stage: context.stage,
     agent: definition.role
   };
-  return context.targetRepoConfig.integrations.capabilityPacks.some((pack) =>
-    pack.name === "deep-web-research" && shouldActivateCapability(pack.enabled, pack.activation, input)
-  ) || context.targetRepoConfig.integrations.mcpServers.some((server) =>
-    server.category === "web_search" && shouldActivateCapability(server.enabled, server.activation, input)
+  return context.targetRepoConfig.integrations.capabilityPacks.some(
+    (pack) => pack.name === "hosted-search" && shouldActivateCapability(pack.enabled, pack.activation, input)
   );
+}
+
+function activeCapabilityIds(definition: AgentDefinition, context: AgentRunContext): string[] {
+  if (!context.targetRepoConfig) return [];
+  const input = {
+    workItem: context.workItem,
+    stage: context.stage,
+    agent: definition.role
+  };
+  return [
+    ...context.targetRepoConfig.integrations.mcpServers
+      .filter((server) => shouldActivateCapability(server.enabled, server.activation, input))
+      .map((server) => `mcp:${server.name}`),
+    ...context.targetRepoConfig.integrations.capabilityPacks
+      .filter((pack) => shouldActivateCapability(pack.enabled, pack.activation, input))
+      .map((pack) => `${pack.kind}:${pack.name}`)
+  ];
 }
 
 function createMcpServer(sdk: any, server: McpServerConfig): any {
@@ -249,10 +302,12 @@ function createMcpServer(sdk: any, server: McpServerConfig): any {
 }
 
 export function resolveMcpEnv(env: Record<string, string>): Record<string, string> {
-  const resolved = Object.fromEntries(Object.entries(env).map(([key, value]) => [
-    key,
-    value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_match, name: string) => process.env[name] || "")
-  ]));
+  const resolved = Object.fromEntries(
+    Object.entries(env).map(([key, value]) => [
+      key,
+      value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_match, name: string) => process.env[name] || "")
+    ])
+  );
 
   if ("GITHUB_PERSONAL_ACCESS_TOKEN" in resolved && !resolved.GITHUB_PERSONAL_ACCESS_TOKEN) {
     resolved.GITHUB_PERSONAL_ACCESS_TOKEN = githubToken();
@@ -270,7 +325,8 @@ export function resolveMcpEnv(env: Record<string, string>): Record<string, strin
 function parseLiveArtifact(
   definition: AgentDefinition,
   context: AgentRunContext,
-  rawOutput: string
+  rawOutput: string,
+  preparation: AgentRunPreparation
 ): StageArtifact | null {
   const parsed = parseJsonObject(rawOutput);
   if (!parsed || typeof parsed !== "object") return null;
@@ -282,6 +338,9 @@ function parseLiveArtifact(
     repo: context.workItem.repo,
     stage: context.stage,
     ownerAgent: definition.role,
+    promptHash: preparation.promptHash,
+    skillIds: preparation.skills.map((skill) => skill.id),
+    capabilityIds: preparation.capabilityIds,
     createdAt: String((parsed as any).createdAt || new Date().toISOString())
   };
 
@@ -309,6 +368,7 @@ function parseJsonObject(rawOutput: string): unknown {
 function createTemplateArtifact(
   definition: AgentDefinition,
   context: AgentRunContext,
+  preparation: AgentRunPreparation,
   liveSummary?: string
 ): StageArtifact {
   const nextStage = inferNextStage(context.stage, context.workItem);
@@ -327,9 +387,12 @@ function createTemplateArtifact(
     decisions: templateDecisions(definition, context),
     risks: templateRisks(context),
     filesChanged: [],
-    testsRun: context.stage === "VERIFY" || context.stage === "RELEASE" ? ["configured local checks", "GitHub Actions gate"] : [],
-    releaseReadiness: context.stage === "RELEASE" ? "ready" : "unknown",
+    testsRun: [],
+    releaseReadiness: "unknown",
     nextStage,
+    promptHash: preparation.promptHash,
+    skillIds: preparation.skills.map((skill) => skill.id),
+    capabilityIds: preparation.capabilityIds,
     createdAt: new Date().toISOString()
   };
   return StageArtifactSchema.parse(artifact);
@@ -338,7 +401,8 @@ function createTemplateArtifact(
 function createInvalidLiveArtifact(
   definition: AgentDefinition,
   context: AgentRunContext,
-  rawOutput: string
+  rawOutput: string,
+  preparation: AgentRunPreparation
 ): StageArtifact {
   return StageArtifactSchema.parse({
     workItemId: context.workItem.id,
@@ -349,16 +413,19 @@ function createInvalidLiveArtifact(
     status: "failed",
     title: `${definition.shortName} returned invalid output for ${context.stage}`,
     summary: `Live agent output could not be parsed into a valid stage artifact. The workflow is blocked so invalid or incomplete agent output cannot advance implementation.`,
-    decisions: [
-      "Block this stage until the agent returns valid JSON matching the StageArtifact schema."
-    ],
+    decisions: ["Block this stage until the agent returns valid JSON matching the StageArtifact schema."],
     risks: [
-      `Invalid live output preview: ${rawOutput.trim().slice(0, 500) || "empty output"}`
+      rawOutput.trim()
+        ? "Invalid live output was omitted from the artifact to avoid persisting untrusted content."
+        : "Live agent returned empty output."
     ],
     filesChanged: [],
     testsRun: [],
     releaseReadiness: "not_ready",
     nextStage: "BLOCKED",
+    promptHash: preparation.promptHash,
+    skillIds: preparation.skills.map((skill) => skill.id),
+    capabilityIds: preparation.capabilityIds,
     createdAt: new Date().toISOString()
   });
 }
@@ -398,7 +465,9 @@ function templateSummary(definition: AgentDefinition, context: AgentRunContext):
 
 function templateDecisions(definition: AgentDefinition, context: AgentRunContext): string[] {
   if (definition.role === "product-delivery-orchestrator") {
-    return [`Route ${context.workItem.id} through ${context.workItem.rndNeeded ? "R&D" : "direct build"} before verification.`];
+    return [
+      `Route ${context.workItem.id} through ${context.workItem.rndNeeded ? "R&D" : "direct build"} before verification.`
+    ];
   }
   if (definition.role === "rnd-architecture-innovation") {
     return ["Use a locked frontend/backend contract before parallel implementation."];
@@ -409,7 +478,9 @@ function templateDecisions(definition: AgentDefinition, context: AgentRunContext
   if (definition.role === "backend-systems-engineering") {
     return ["Implement APIs, data behavior, observability, and backend tests against the contract."];
   }
-  return ["Release can proceed only when local checks, GitHub Actions, security, privacy, rollback, and sync gates pass."];
+  return [
+    "Release can proceed only when local checks, GitHub Actions, security, privacy, rollback, and sync gates pass."
+  ];
 }
 
 function templateRisks(context: AgentRunContext): string[] {

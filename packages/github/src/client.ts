@@ -110,4 +110,3 @@ export class GitHubAutomationClient {
     return result.data.html_url;
   }
 }
-

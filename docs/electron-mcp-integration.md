@@ -33,7 +33,7 @@ The linked `amafjarkasi/electron-mcp-server` should not be integrated directly. 
 
 The repo already has the pieces a lean desktop/MCP integration should reuse:
 
-- Controller API on `http://localhost:4310`: status, work items, memories, events, emergency stop/resume.
+- Controller API on `http://127.0.0.1:4310`: status, work items, memories, events, emergency stop/resume.
 - Dashboard on Vite/React, already using browser `fetch` and `EventSource`.
 - Shared TypeScript/Zod models in `packages/shared`.
 - Durable release policy and serialized repo-write lane in the worker/controller path.
@@ -77,15 +77,20 @@ Candidate module:
 
 Initial tool surface:
 
-| Name | Kind | Controller mapping | Safety |
-| --- | --- | --- | --- |
-| `agent_team_get_status` | read | `GET /api/status` | Safe, structured output. |
-| `agent_team_list_work_items` | read | `GET /api/work-items` | Safe, allow filters later. |
-| `agent_team_list_events` | read | `GET /api/events?limit=n` | Safe, limit and redact. |
-| `agent_team_list_memories` | read | `GET /api/memories` | Safe, optional `workItemId`. |
-| `agent_team_create_work_item` | write | `POST /api/work-items` | Requires explicit user approval in MCP host. Mirrors existing schema. |
-| `agent_team_emergency_stop` | control | `POST /api/emergency-stop` | Sensitive, require reason and explicit approval. |
-| `agent_team_emergency_resume` | control | `POST /api/emergency-resume` | Sensitive, explicit approval. |
+| Name                          | Kind    | Controller mapping           | Safety                                                                |
+| ----------------------------- | ------- | ---------------------------- | --------------------------------------------------------------------- |
+| `agent_team_get_status`       | read    | `GET /api/status`            | Safe, structured output.                                              |
+| `agent_team_list_work_items`  | read    | `GET /api/work-items`        | Safe, allow filters later.                                            |
+| `agent_team_list_events`      | read    | `GET /api/events?limit=n`    | Safe, limit and redact.                                               |
+| `agent_team_list_memories`    | read    | `GET /api/memories`          | Safe, optional `workItemId`.                                          |
+| `agent_team_create_work_item` | write   | `POST /api/work-items`       | Requires explicit user approval in MCP host. Mirrors existing schema. |
+| `agent_team_emergency_stop`   | control | `POST /api/emergency-stop`   | Sensitive, require reason and explicit approval.                      |
+| `agent_team_emergency_resume` | control | `POST /api/emergency-resume` | Sensitive, explicit approval.                                         |
+
+For the current controller surface, work-item listing supports `projectId` and
+`state` filters, memory listing must stay scoped by `projectId` or `workItemId`,
+and event listing is limit-bound. Any MCP adapter must redact sensitive event
+fields before returning data to a client.
 
 Resources can come after tools prove stable:
 
@@ -133,7 +138,7 @@ Streamable HTTP is useful later if the MCP server must support multiple simultan
 - support current MCP protocol headers and session behavior
 - keep it separate from the public controller API unless there is a strong reason to combine them
 
-The MCP transport spec explicitly warns local HTTP servers to validate `Origin`, bind to localhost, and implement authentication to avoid DNS rebinding and unwanted local access.
+The MCP transport spec explicitly warns local HTTP servers to validate `Origin`, bind to loopback, and implement authentication to avoid DNS rebinding and unwanted local access.
 
 ## Dependency Notes
 

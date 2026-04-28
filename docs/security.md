@@ -26,7 +26,7 @@ Enable code scanning/GitHub Advanced Security in repository settings first, then
 
 Docker Compose binds Postgres, Temporal, the controller, and the dashboard to `127.0.0.1` by default. Keep those bindings local unless you deliberately put the controller behind authentication and a trusted network boundary.
 
-The controller accepts browser requests only from `CORS_ORIGINS`, which defaults to the local dashboard origins. Keep write-capable endpoints such as emergency stop and work-item creation off broad CORS policies.
+The controller accepts browser requests only from `CORS_ORIGINS`, which Compose defaults to `http://127.0.0.1:5173`. Add `http://localhost:5173` explicitly through `CORS_ORIGINS` if that host name is needed. Keep write-capable endpoints such as emergency stop and work-item creation off broad CORS policies.
 
 ## GitHub Credentials
 

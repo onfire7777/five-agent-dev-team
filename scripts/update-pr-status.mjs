@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { capture, run } from "./verify-lib.mjs";
@@ -25,7 +25,16 @@ console.log(`updated PR #${pr} automation status`);
 
 function buildBlock(existingBody, stageName, state, stageNotes) {
   const now = new Date().toISOString();
-  const stages = ["R&D", "Backend/Core", "Frontend/UX", "Quality/Debug", "Security/DevOps", "Docs/Alignment", "Captain", "Janitor"];
+  const stages = [
+    "R&D",
+    "Backend/Core",
+    "Frontend/UX",
+    "Quality/Debug",
+    "Security/DevOps",
+    "Docs/Alignment",
+    "Captain",
+    "Janitor"
+  ];
   const rows = Object.fromEntries(stages.map((name) => [name, { lastRun: "", status: "", notes: "" }]));
   const existing = existingBody.match(new RegExp(`${marker}[\\s\\S]*?${endMarker}`))?.[0] || "";
 
@@ -41,10 +50,15 @@ function buildBlock(existingBody, stageName, state, stageNotes) {
   rows[normalizedStage] = {
     lastRun: now,
     status: state,
-    notes: stageNotes.replace(/\|/g, "/"),
+    notes: stageNotes
+      .replace(/\|/g, "/")
+      .replace(/[\r\n]+/g, " ")
+      .trim()
   };
 
-  const tableRows = stages.map((name) => `| ${name} | ${rows[name].lastRun} | ${rows[name].status} | ${rows[name].notes} |`).join("\n");
+  const tableRows = stages
+    .map((name) => `| ${name} | ${rows[name].lastRun} | ${rows[name].status} | ${rows[name].notes} |`)
+    .join("\n");
   return `${marker}
 ## Codex Automation Status
 

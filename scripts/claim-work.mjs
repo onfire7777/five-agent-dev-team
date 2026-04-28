@@ -18,7 +18,10 @@ const stage = required("--stage");
 const holder = argValue("--holder") || `build-five-agent-dev-team-${stage}`;
 const branch = required("--branch");
 const pr = Number(argValue("--pr") || 0) || null;
-const fileGlobs = (required("--files")).split(",").map((value) => value.trim()).filter(Boolean);
+const fileGlobs = required("--files")
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
 const reason = required("--reason");
 const ttlMinutes = Number(argValue("--ttl-minutes") || 50);
 const now = new Date();
@@ -44,7 +47,7 @@ const claim = {
   fileGlobs,
   startedAt: now.toISOString(),
   expiresAt: expiresAt.toISOString(),
-  reason,
+  reason
 };
 
 control.claims.push(claim);
@@ -69,9 +72,18 @@ function argValue(name) {
 }
 
 function overlaps(left, right) {
-  return left.some((a) => right.some((b) => globPrefix(a) === globPrefix(b) || globPrefix(a).startsWith(globPrefix(b)) || globPrefix(b).startsWith(globPrefix(a))));
+  return left.some((a) =>
+    right.some(
+      (b) =>
+        globPrefix(a) === globPrefix(b) ||
+        globPrefix(a).startsWith(globPrefix(b)) ||
+        globPrefix(b).startsWith(globPrefix(a))
+    )
+  );
 }
 
 function globPrefix(glob) {
-  return String(glob).replace(/\*\*.*$/, "").replace(/\*.*$/, "");
+  return String(glob)
+    .replace(/\*\*.*$/, "")
+    .replace(/\*.*$/, "");
 }

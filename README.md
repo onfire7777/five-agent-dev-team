@@ -19,8 +19,8 @@ npm run check
 docker compose up --build
 ```
 
-Dashboard: `http://localhost:5173`  
-Controller API: `http://localhost:4310`
+Dashboard: `http://127.0.0.1:5173`
+Controller API: `http://127.0.0.1:4310`
 
 For host-based development against already-running local Postgres and Temporal:
 
@@ -80,7 +80,7 @@ The lean AutoMaker-inspired context pack lives in the target repo at `.agent-tea
 
 ## Lazy MCP, Skills, And Plugins
 
-Agents can be configured with MCP servers and capability packs, but they are not loaded into every run. The runner selects tools from the current work item, stage, agent role, risk, and keywords, then closes MCP sessions after that run. This gives the team proactive access to browser automation, Chrome diagnostics, GitHub context, security scanners, database tools, Electron diagnostics, and specialized coding knowledge without bloating normal prompts.
+Agents can be configured with MCP servers and capability packs, but they are not loaded into every run. The runner selects tools from the current work item, stage, agent role, risk-level keywords, and acceptance criteria, then closes MCP sessions after that run. This gives the team proactive access to browser automation, Chrome diagnostics, GitHub context, security scanners, database tools, Electron diagnostics, and specialized coding knowledge without bloating normal prompts.
 
 See `agent-team.config.example.yaml` and `docs/lazy-capability-model.md`.
 
@@ -92,6 +92,11 @@ Live agent runs default to the configured best coding model policy: `gpt-5.5` fo
 
 - `GET /health`
 - `GET /api/status`
+- `GET /api/github/status`
+- `GET /api/projects`
+- `POST /api/projects`
+- `POST /api/projects/:id/activate`
+- `DELETE /api/projects/:id`
 - `GET /api/work-items`
 - `GET /api/memories`
 - `GET /api/events`
