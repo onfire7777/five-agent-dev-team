@@ -124,6 +124,19 @@ Live agent runs default to the configured best coding model policy: `gpt-5.5` fo
 
 If `AGENT_LIVE_MODE=false`, agents use deterministic local templates so the workflow can be tested without an API key. Set `AGENT_LIVE_MODE=true` and `OPENAI_API_KEY` to use live OpenAI Agents SDK runs.
 
+## Codex Automation Control
+
+This repo includes a guarded bulk-control utility for the Codex automations that build this project. It updates only the nine approved `five-agent-dev-team` automation folders under `%USERPROFILE%\.codex\automations`, preserves each automation's prompt/schedule/environment, and dry-runs unless `--apply` is provided. Use `--root=<automation-root>` when checking a different automation folder.
+
+```powershell
+Get-Content "$env:USERPROFILE\.codex\state\five-agent-dev-team-control.json"
+npm run automation:status -- --status=PAUSED
+npm run automation:pause
+npm run automation:verify-paused
+npm run automation:resume
+npm run automation:verify-active
+```
+
 See `docs/architecture.md` and `docs/target-repo-setup.md` for operational details.
 
 Security note: `npm audit` currently reports a Temporal transitive `uuid` advisory that cannot be fixed safely with non-breaking npm resolution. CodeQL is provided as an opt-in template because GitHub code scanning must be enabled first for this private repo. See `docs/security.md`.
