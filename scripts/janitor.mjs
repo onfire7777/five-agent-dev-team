@@ -13,18 +13,27 @@ for (const tree of worktrees) {
   const normalizedPath = treePath.replaceAll("/", "\\");
   if (!normalizedPath.toLowerCase().includes("\\.codex\\worktrees\\")) continue;
 
-  const status = (await capture("git", ["-C", treePath, "status", "--porcelain"])).trim();
-  const mtime = statSync(treePath).mtimeMs;
+  let status = "";
+  let mtime = 0;
+  let probeError = null;
+  try {
+    status = (await capture("git", ["-C", treePath, "status", "--porcelain"])).trim();
+    mtime = statSync(treePath).mtimeMs;
+  } catch (error) {
+    probeError = error instanceof Error ? error.message : String(error);
+  }
   const branch = tree.branch ? tree.branch.replace(/^refs\/heads\//, "") : null;
   const openPr = branch ? await hasOpenPr(branch) : false;
-  const stale = mtime < cutoff;
-  const safe = !status && !openPr && stale;
+  const stale = !probeError && mtime < cutoff;
+  const safe = !probeError && !status && !openPr && stale;
 
   results.push({
     path: treePath,
     branch,
     detached: Boolean(tree.detached),
     dirty: Boolean(status),
+    readable: !probeError,
+    probeError,
     openPr,
     stale,
     safe
