@@ -92,8 +92,11 @@ export async function requireBranch(name) {
   let current;
   try {
     current = (await capture("git", ["symbolic-ref", "--short", "HEAD"])).trim();
-  } catch {
-    throw new Error(`required branch ${name} is not checked out`);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`required branch ${name} is not checked out: ${detail}`, {
+      cause: error instanceof Error ? error : undefined
+    });
   }
 
   if (current !== name) {

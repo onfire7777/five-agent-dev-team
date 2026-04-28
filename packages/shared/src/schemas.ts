@@ -287,6 +287,13 @@ export const AgentEventSchema = z.object({
 
 export type AgentEvent = z.infer<typeof AgentEventSchema>;
 
+export const EmergencyControlRequestSchema = z.object({
+  scope: z.string().trim().min(1).default("global"),
+  reason: z.string().trim().min(1)
+});
+
+export type EmergencyControlRequest = z.infer<typeof EmergencyControlRequestSchema>;
+
 export const TeammateActivitySchema = z.object({
   agent: AgentRoleSchema,
   stage: WorkItemStateSchema,

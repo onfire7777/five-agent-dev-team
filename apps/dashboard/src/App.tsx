@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Bot, CircleStop, Github, PlayCircle, RefreshCw, ShieldCheck, type LucideIcon } from "lucide-react";
+import { EmergencyControlRequestSchema, type EmergencyControlRequest } from "../../../packages/shared/src/schemas";
 import type {
   AgentRole,
   MemoryRecord,
@@ -940,7 +941,11 @@ export function App() {
     setLoading(true);
     try {
       const path = status.system.emergencyStop ? "/api/emergency-resume" : "/api/emergency-stop";
-      await postControl(path, { scope: "global", reason: "Operator dashboard control" });
+      const payload: EmergencyControlRequest = EmergencyControlRequestSchema.parse({
+        scope: "global",
+        reason: "Operator dashboard control"
+      });
+      await postControl(path, payload);
       await refreshAll();
     } catch {
       setApiState({

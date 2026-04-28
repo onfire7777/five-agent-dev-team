@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { getAgentDefinition, resolveMcpEnv, runRoleAgent } from "../packages/agents/src";
-import { TargetRepoConfigSchema, type WorkItem } from "../packages/shared/src";
+import { DEFAULT_RELEASE_COMMAND, TargetRepoConfigSchema, type WorkItem } from "../packages/shared/src";
 
 const liveAgentMock = vi.hoisted(() => ({
   models: [] as string[],
@@ -340,7 +340,7 @@ function liveTargetConfig(overrides: { mcpServers?: unknown[]; capabilityPacks?:
       test: "npm test",
       build: "npm run build",
       security: "npm audit --audit-level=high",
-      release: 'gh release create "$AGENT_RELEASE_TAG" --notes-file release/notes.md --verify-tag'
+      release: DEFAULT_RELEASE_COMMAND
     },
     integrations: {
       mcpServers: overrides.mcpServers || [],

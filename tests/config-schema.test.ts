@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import YAML from "yaml";
 import {
+  DEFAULT_RELEASE_COMMAND,
+  EmergencyControlRequestSchema,
   ProjectConnectionInputSchema,
   ProjectConnectionSchema,
   TargetRepoConfigSchema,
@@ -22,7 +24,7 @@ const minimalConfig = {
     test: "npm test",
     build: "npm run build",
     security: "npm audit --audit-level=high",
-    release: 'gh release create "$AGENT_RELEASE_TAG" --notes-file release/notes.md --verify-tag'
+    release: DEFAULT_RELEASE_COMMAND
   },
   release: {
     mode: "autonomous",
@@ -41,6 +43,41 @@ describe("target repo config schema", () => {
     expect(config.integrations.capabilityPacks).toEqual([]);
     expect(config.project.isolation.requireExplicitRepoConnection).toBe(true);
     expect(config.models.primaryCodingModel).toBe("gpt-5.5");
+  });
+
+  it("uses a release command compatible with generated release tags", () => {
+    const connection = ProjectConnectionSchema.parse({
+      id: "acme-app",
+      projectId: "acme-app",
+      name: "Acme App",
+      repo: "acme/app",
+      repoOwner: "acme",
+      repoName: "app",
+      localPath: "C:/repo/app",
+      defaultBranch: "main",
+      memoryNamespace: "acme-app",
+      contextDir: ".agent-team/context",
+      githubMcpEnabled: true,
+      githubWriteEnabled: false,
+      webResearchEnabled: true,
+      active: true,
+      createdAt: "2026-04-25T00:00:00.000Z",
+      updatedAt: "2026-04-25T00:00:00.000Z"
+    });
+
+    const config = targetRepoConfigFromProjectConnection(connection);
+
+    expect(config.commands.release).toBe(DEFAULT_RELEASE_COMMAND);
+    expect(config.commands.release).not.toContain("--verify-tag");
+    expect(config.commands.release).not.toContain("--notes-file");
+  });
+
+  it("shares the emergency control contract across controller and dashboard", () => {
+    expect(EmergencyControlRequestSchema.parse({ reason: "Operator stop" })).toEqual({
+      scope: "global",
+      reason: "Operator stop"
+    });
+    expect(() => EmergencyControlRequestSchema.parse({ scope: "global", reason: " " })).toThrow();
   });
 
   it("keeps project connection defaults explicit and repo scoped", () => {

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { assembleCanonicalPrompt, getAgentDefinition, loadTriggeredSkills, runRoleAgent } from "../packages/agents/src";
 import type { WorkItem } from "../packages/shared/src";
 
+const liveEnvKeys = ["AGENT_LIVE_MODE", "AGENT_EXECUTION_MODE", "AGENT_MODEL", "OPENAI_API_KEY"] as const;
+
 const workItem: WorkItem = {
   id: "WI-3000",
   projectId: "project-a",
@@ -65,15 +67,40 @@ describe("agent prompt and skills", () => {
   });
 
   it("records prompt, skill, and capability provenance on artifacts", async () => {
-    const result = await runRoleAgent(getAgentDefinition("frontend-ux-engineering"), {
-      workItem,
-      stage: "FRONTEND_BUILD",
-      previousArtifacts: []
-    });
+    const originalEnv = snapshotEnv(liveEnvKeys);
+    clearEnv(liveEnvKeys);
+    try {
+      const result = await runRoleAgent(getAgentDefinition("frontend-ux-engineering"), {
+        workItem,
+        stage: "FRONTEND_BUILD",
+        previousArtifacts: []
+      });
 
-    expect(result.artifact.promptHash).toMatch(/^[a-f0-9]{64}$/);
-    expect(result.artifact.skillIds).toContain("react-component-design");
-    expect(result.artifact.skillIds).toContain("handoff-discipline");
-    expect(result.artifact.capabilityIds).toEqual([]);
+      expect(result.live).toBe(false);
+      expect(result.artifact.promptHash).toMatch(/^[a-f0-9]{64}$/);
+      expect(result.artifact.skillIds).toContain("react-component-design");
+      expect(result.artifact.skillIds).toContain("handoff-discipline");
+      expect(result.artifact.capabilityIds).toEqual([]);
+    } finally {
+      restoreEnv(originalEnv);
+    }
   });
 });
+
+function snapshotEnv(keys: readonly string[]): Record<string, string | undefined> {
+  return Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+}
+
+function clearEnv(keys: readonly string[]): void {
+  for (const key of keys) delete process.env[key];
+}
+
+function restoreEnv(snapshot: Record<string, string | undefined>): void {
+  for (const [key, value] of Object.entries(snapshot)) {
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+}
