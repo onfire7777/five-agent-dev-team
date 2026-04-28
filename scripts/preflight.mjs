@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { canRunWhenControlPaused } from "./preflight-policy.mjs";
 import { capture, run } from "./verify-lib.mjs";
 
 const stage = argValue("--stage") || "unknown";
@@ -11,7 +12,7 @@ const controlPath = join(homedir(), ".codex", "state", "five-agent-dev-team-cont
 const control = existsSync(controlPath) ? JSON.parse(readFileSync(controlPath, "utf8")) : {};
 const stateRoot = join(homedir(), ".codex");
 
-if (control.paused) {
+if (control.paused && !canRunWhenControlPaused(stage)) {
   throw new Error(`preflight refused for ${stage}: paused: ${control.pauseReason || "no reason"}`);
 }
 
@@ -39,7 +40,7 @@ if (behind > 0 && !allowBehind) {
   throw new Error(`preflight refused for ${stage}: branch is behind origin/main by ${behind} commit(s)`);
 }
 
-console.log(JSON.stringify({ stage, paused: false, lock: null, activeClaims: (control.claims || []).length, ahead, behind }, null, 2));
+console.log(JSON.stringify({ stage, paused: Boolean(control.paused), lock: null, activeClaims: (control.claims || []).length, ahead, behind }, null, 2));
 
 function verifySpecHashes(expected) {
   const files = {
