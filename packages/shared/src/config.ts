@@ -40,7 +40,7 @@ export function targetRepoConfigFromProjectConnection(project: ProjectConnection
       test: "npm test --if-present",
       build: "npm run build --if-present",
       security: "npm audit --audit-level=high",
-      release: `gh workflow run agent-release.yml --ref ${parsed.defaultBranch}`
+      release: `gh release create "$AGENT_RELEASE_TAG" --notes-file release/notes.md --verify-tag`
     },
     context: {
       includeDefaultContextDir: true,
@@ -62,7 +62,8 @@ export function targetRepoConfigFromProjectConnection(project: ProjectConnection
         {
           name: "browser-e2e",
           category: "browser",
-          description: "Playwright MCP for browser UI flows, accessibility snapshots, screenshots, and end-to-end verification.",
+          description:
+            "Playwright MCP for browser UI flows, accessibility snapshots, screenshots, and end-to-end verification.",
           enabled: true,
           transport: "stdio",
           command: "npx",
@@ -75,7 +76,13 @@ export function targetRepoConfigFromProjectConnection(project: ProjectConnection
           },
           timeoutSeconds: 45,
           cacheToolsList: true,
-          toolAllowlist: ["browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_take_screenshot"],
+          toolAllowlist: [
+            "browser_navigate",
+            "browser_snapshot",
+            "browser_click",
+            "browser_type",
+            "browser_take_screenshot"
+          ],
           notes: [
             "Use isolated browser state and keep exploratory flows small.",
             "Promote useful flows into checked-in Playwright tests."
@@ -106,11 +113,14 @@ export function targetRepoConfigFromProjectConnection(project: ProjectConnection
         {
           name: "github-mcp",
           category: "github",
-          description: "Official GitHub MCP server for deep repo, issue, PR, Actions, code security, and release context.",
+          description:
+            "Official GitHub MCP server for deep repo, issue, PR, Actions, code security, and release context.",
           enabled: parsed.githubMcpEnabled,
           transport: "stdio",
           command: "github-mcp-server",
-          args: parsed.githubWriteEnabled ? ["stdio", "--dynamic-toolsets"] : ["stdio", "--dynamic-toolsets", "--read-only"],
+          args: parsed.githubWriteEnabled
+            ? ["stdio", "--dynamic-toolsets"]
+            : ["stdio", "--dynamic-toolsets", "--read-only"],
           env: {
             GH_TOKEN: "${GH_TOKEN}",
             GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_PERSONAL_ACCESS_TOKEN}",
@@ -120,7 +130,11 @@ export function targetRepoConfigFromProjectConnection(project: ProjectConnection
           activation: {
             mode: "on_demand",
             stages: ["INTAKE", "RND", "VERIFY", "RELEASE"],
-            agents: ["product-delivery-orchestrator", "rnd-architecture-innovation", "quality-security-privacy-release"],
+            agents: [
+              "product-delivery-orchestrator",
+              "rnd-architecture-innovation",
+              "quality-security-privacy-release"
+            ],
             keywords: ["github", "issue", "pr", "pull request", "actions", "checks", "release", "ci", "review"]
           },
           timeoutSeconds: 45,
@@ -135,14 +149,15 @@ export function targetRepoConfigFromProjectConnection(project: ProjectConnection
         {
           name: "deep-web-research",
           category: "web_search",
-          description: "Tavily MCP for current documentation, advisories, package/API changes, and external error research.",
+          description:
+            "Tavily MCP for current documentation, advisories, package/API changes, and external error research.",
           enabled: parsed.webResearchEnabled,
           transport: "stdio",
           command: "npx",
           args: ["-y", "tavily-mcp@latest"],
           env: {
             TAVILY_API_KEY: "${TAVILY_API_KEY}",
-            DEFAULT_PARAMETERS: "{\"search_depth\":\"advanced\",\"max_results\":8,\"include_raw_content\":false}"
+            DEFAULT_PARAMETERS: '{"search_depth":"advanced","max_results":8,"include_raw_content":false}'
           },
           activation: {
             mode: "on_demand",
@@ -181,7 +196,8 @@ export function targetRepoConfigFromProjectConnection(project: ProjectConnection
           name: "repo-context",
           kind: "knowledge",
           enabled: true,
-          summary: "Load curated project-local context files, latest loop closure memory, architecture decisions, and recurring repo gotchas before each stage.",
+          summary:
+            "Load curated project-local context files, latest loop closure memory, architecture decisions, and recurring repo gotchas before each stage.",
           activation: {
             mode: "always",
             stages: [],
@@ -198,7 +214,8 @@ export function targetRepoConfigFromProjectConnection(project: ProjectConnection
           name: "mcp-tool-routing",
           kind: "knowledge",
           enabled: true,
-          summary: "Select MCP tools lazily by stage, agent role, risk, and keywords so agents stay fast while still having deep capabilities.",
+          summary:
+            "Select MCP tools lazily by stage, agent role, risk, and keywords so agents stay fast while still having deep capabilities.",
           activation: {
             mode: "always",
             stages: [],
@@ -215,7 +232,8 @@ export function targetRepoConfigFromProjectConnection(project: ProjectConnection
           name: "frontend-performance",
           kind: "skill",
           enabled: true,
-          summary: "Use modern React/frontend performance, accessibility, and visual verification patterns for UI work.",
+          summary:
+            "Use modern React/frontend performance, accessibility, and visual verification patterns for UI work.",
           activation: {
             mode: "on_demand",
             stages: ["FRONTEND_BUILD", "VERIFY"],
@@ -223,20 +241,30 @@ export function targetRepoConfigFromProjectConnection(project: ProjectConnection
             keywords: ["react", "frontend", "ui", "accessibility", "responsive", "performance", "bundle", "rerender"]
           },
           contextFiles: [],
-          notes: [
-            "Avoid UI bloat; prefer compact operator workflows and browser-verified behavior."
-          ]
+          notes: ["Avoid UI bloat; prefer compact operator workflows and browser-verified behavior."]
         },
         {
           name: "backend-systems",
           kind: "knowledge",
           enabled: true,
-          summary: "Use API contracts, data migration checks, observability hooks, job/worker boundaries, and backend tests for system work.",
+          summary:
+            "Use API contracts, data migration checks, observability hooks, job/worker boundaries, and backend tests for system work.",
           activation: {
             mode: "on_demand",
             stages: ["RND", "BACKEND_BUILD", "VERIFY", "RELEASE"],
             agents: ["rnd-architecture-innovation", "backend-systems-engineering", "quality-security-privacy-release"],
-            keywords: ["api", "backend", "database", "migration", "worker", "job", "cache", "auth", "observability", "integration"]
+            keywords: [
+              "api",
+              "backend",
+              "database",
+              "migration",
+              "worker",
+              "job",
+              "cache",
+              "auth",
+              "observability",
+              "integration"
+            ]
           },
           contextFiles: [],
           notes: [
@@ -248,7 +276,8 @@ export function targetRepoConfigFromProjectConnection(project: ProjectConnection
           name: "deep-web-research",
           kind: "knowledge",
           enabled: parsed.webResearchEnabled,
-          summary: "Use OpenAI hosted web search plus configured MCP research tools only when current docs, issue context, vulnerabilities, or external evidence are needed.",
+          summary:
+            "Use OpenAI hosted web search plus configured MCP research tools only when current docs, issue context, vulnerabilities, or external evidence are needed.",
           activation: {
             mode: "on_demand",
             stages: ["RND", "VERIFY", "RELEASE"],
@@ -287,11 +316,13 @@ export function targetRepoConfigFromProjectConnection(project: ProjectConnection
   });
 }
 
-export function targetConfigMatchesWorkItem(config: TargetRepoConfig, workItem: Pick<WorkItem, "projectId" | "repo">): boolean {
+export function targetConfigMatchesWorkItem(
+  config: TargetRepoConfig,
+  workItem: Pick<WorkItem, "projectId" | "repo">
+): boolean {
   const configProjectId = projectIdForConfig(config);
   const configRepo = repoKeyForConfig(config);
   return Boolean(
-    (workItem.projectId && workItem.projectId === configProjectId) ||
-    (workItem.repo && workItem.repo === configRepo)
+    (workItem.projectId && workItem.projectId === configProjectId) || (workItem.repo && workItem.repo === configRepo)
   );
 }

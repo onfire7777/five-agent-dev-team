@@ -9,10 +9,12 @@ const files = {
   buildSpec: join(root, "specs", "five-agent-dev-team.md"),
   automationGuide: join(root, "specs", "five-agent-dev-team-automation-team.md"),
   swarmState: join(stateDir, "five-agent-dev-team-swarm.md"),
-  queue: join(stateDir, "five-agent-dev-team-queue.json"),
+  queue: join(stateDir, "five-agent-dev-team-queue.json")
 };
 
-const hashes = Object.fromEntries(Object.entries(files).map(([key, file]) => [key, existsSync(file) ? sha256(file) : null]));
+const hashes = Object.fromEntries(
+  Object.entries(files).map(([key, file]) => [key, existsSync(file) ? sha256(file) : null])
+);
 
 if (process.argv.includes("--write")) {
   const controlPath = join(stateDir, "five-agent-dev-team-control.json");

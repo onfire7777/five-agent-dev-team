@@ -49,23 +49,25 @@ export function getPriorityScore(workItem: WorkItem): number {
 
 export function selectNextWorkItem(workItems: WorkItem[], policy: SchedulerPolicy): WorkItem | null {
   if (!policy.continuous) return null;
-  const candidates = workItems.filter((item) =>
-    !["CLOSED", "BLOCKED"].includes(item.state) && getBlockingWorkItemIds(item, workItems).length === 0
+  const candidates = workItems.filter(
+    (item) => !["CLOSED", "BLOCKED"].includes(item.state) && getBlockingWorkItemIds(item, workItems).length === 0
   );
   if (candidates.length === 0) return null;
   return [...candidates].sort((a, b) => getPriorityScore(b) - getPriorityScore(a))[0] ?? null;
 }
 
-export function selectParallelWorkItems(workItems: WorkItem[], policy: SchedulerPolicy, activeIds: Set<string>, activeWorkItems: WorkItem[] = []): WorkItem[] {
+export function selectParallelWorkItems(
+  workItems: WorkItem[],
+  policy: SchedulerPolicy,
+  activeIds: Set<string>,
+  activeWorkItems: WorkItem[] = []
+): WorkItem[] {
   if (!policy.continuous) return [];
   const capacity = Math.max(0, policy.maxConcurrentWorkflows - activeIds.size);
   if (capacity === 0) return [];
   const allowDisjointProjectLoops = policy.allowParallelWorkItemsWhenDisjoint;
-  const sliceCount = policy.completeLoopBeforeNextWorkItem && !allowDisjointProjectLoops
-    ? 1
-    : allowDisjointProjectLoops
-      ? capacity
-      : 1;
+  const sliceCount =
+    policy.completeLoopBeforeNextWorkItem && !allowDisjointProjectLoops ? 1 : allowDisjointProjectLoops ? capacity : 1;
   const activeScopes = new Set(activeWorkItems.map(projectScopeKey).filter(Boolean));
   const selectedScopes = new Set<string>();
   const candidates = workItems

@@ -51,7 +51,36 @@ export type RiskLevel = z.infer<typeof RiskLevelSchema>;
 export const ArtifactStatusSchema = z.enum(["pending", "running", "passed", "failed", "blocked"]);
 export type ArtifactStatus = z.infer<typeof ArtifactStatusSchema>;
 
+function defaultArtifactId(): string {
+  return globalThis.crypto?.randomUUID?.() || `artifact-${Date.now().toString(36)}`;
+}
+
+const AcceptanceCriterionSchema = z.object({
+  id: z.string().min(1),
+  text: z.string().min(1),
+  testable: z.boolean()
+});
+
+const ArtifactMarkdownSchema = z.string().min(1).max(32_000);
+const ArtifactJsonBodySchema = z.record(z.string(), z.unknown()).default({});
+
 export const StageArtifactSchema = z.object({
+  artifactId: z.string().min(1).default(defaultArtifactId),
+  artifactKind: z
+    .enum([
+      "WorkItemBrief",
+      "RnDPacket",
+      "BuildContract",
+      "FrontendImplSummary",
+      "BackendImplSummary",
+      "VerificationReport",
+      "ReleasePacket",
+      "FinalSummary",
+      "LoopStartSnapshot",
+      "LoopClosureSummary",
+      "StageArtifact"
+    ])
+    .default("StageArtifact"),
   workItemId: z.string().min(1),
   projectId: z.string().min(1).optional(),
   repo: z.string().min(1).optional(),
@@ -66,10 +95,175 @@ export const StageArtifactSchema = z.object({
   testsRun: z.array(z.string()).default([]),
   releaseReadiness: z.enum(["unknown", "not_ready", "ready"]).default("unknown"),
   nextStage: WorkItemStateSchema.nullable(),
+  promptHash: z.string().min(1).default("not-recorded"),
+  skillIds: z.array(z.string().min(1)).default([]),
+  capabilityIds: z.array(z.string().min(1)).default([]),
+  bodyMd: ArtifactMarkdownSchema.optional(),
+  bodyJson: ArtifactJsonBodySchema,
   createdAt: z.string().datetime()
 });
 
 export type StageArtifact = z.infer<typeof StageArtifactSchema>;
+
+export const WorkItemBriefSchema = z.object({
+  workItemId: z.string().min(1),
+  projectId: z.string().min(1),
+  title: z.string().min(1).max(200),
+  requestType: z.enum(["feature", "bug", "performance", "security", "privacy", "refactor", "research"]),
+  priority: z.enum(["p0", "p1", "p2", "p3"]),
+  businessGoal: z.string().min(1),
+  userGoal: z.string().min(1),
+  technicalGoal: z.string().min(1),
+  scopeIn: z.array(z.string().min(1)),
+  scopeOut: z.array(z.string().min(1)),
+  acceptanceCriteria: z.array(AcceptanceCriterionSchema),
+  affectedAreas: z.array(z.enum(["frontend", "backend", "infra", "docs", "tests"])),
+  flags: z.object({
+    frontendNeeded: z.boolean(),
+    backendNeeded: z.boolean(),
+    rndNeeded: z.boolean()
+  }),
+  riskLevels: z.object({
+    securityPrivacy: RiskLevelSchema,
+    performance: RiskLevelSchema
+  }),
+  openQuestions: z.array(z.string().min(1)),
+  routingDecision: z.string().min(1)
+});
+export type WorkItemBrief = z.infer<typeof WorkItemBriefSchema>;
+
+export const RnDPacketSchema = z.object({
+  workItemId: z.string().min(1),
+  projectId: z.string().min(1),
+  options: z.array(
+    z.object({
+      title: z.string().min(1),
+      summary: z.string().min(1),
+      tradeoffs: z.array(z.string()).default([])
+    })
+  ),
+  recommendation: z.string().min(1),
+  rejectedAlternatives: z.array(z.string()).default([]),
+  risks: z.array(z.string()).default([]),
+  openQuestions: z.array(z.string()).default([])
+});
+export type RnDPacket = z.infer<typeof RnDPacketSchema>;
+
+export const BuildContractSchema = z.object({
+  workItemId: z.string().min(1),
+  projectId: z.string().min(1),
+  frontendTasks: z.array(z.string()).default([]),
+  backendTasks: z.array(z.string()).default([]),
+  apiContracts: z.array(z.string()).default([]),
+  dataContracts: z.array(z.string()).default([]),
+  acceptanceTrace: z.array(z.string()).default([]),
+  validationPlan: z.array(z.string()).default([])
+});
+export type BuildContract = z.infer<typeof BuildContractSchema>;
+
+export const FrontendImplSummarySchema = z.object({
+  workItemId: z.string().min(1),
+  projectId: z.string().min(1),
+  filesChanged: z.array(z.string()).default([]),
+  statesImplemented: z.array(z.string()).default([]),
+  accessibilityNotes: z.array(z.string()).default([]),
+  testsRun: z.array(z.string()).default([]),
+  risks: z.array(z.string()).default([])
+});
+export type FrontendImplSummary = z.infer<typeof FrontendImplSummarySchema>;
+
+export const BackendImplSummarySchema = z.object({
+  workItemId: z.string().min(1),
+  projectId: z.string().min(1),
+  filesChanged: z.array(z.string()).default([]),
+  apiChanges: z.array(z.string()).default([]),
+  dataChanges: z.array(z.string()).default([]),
+  observabilityNotes: z.array(z.string()).default([]),
+  testsRun: z.array(z.string()).default([]),
+  risks: z.array(z.string()).default([])
+});
+export type BackendImplSummary = z.infer<typeof BackendImplSummarySchema>;
+
+export const VerificationReportSchema = z.object({
+  workItemId: z.string().min(1),
+  projectId: z.string().min(1),
+  acceptanceResults: z
+    .array(
+      z.object({
+        criterionId: z.string().min(1),
+        passed: z.boolean(),
+        evidence: z.string().min(1)
+      })
+    )
+    .default([]),
+  commandsRun: z.array(z.string()).default([]),
+  securityFindings: z.array(z.string()).default([]),
+  privacyFindings: z.array(z.string()).default([]),
+  blockingGate: z.string().optional(),
+  recommendation: z.enum(["go", "no_go"])
+});
+export type VerificationReport = z.infer<typeof VerificationReportSchema>;
+
+export const ReleasePacketSchema = z.object({
+  workItemId: z.string().min(1),
+  projectId: z.string().min(1),
+  tag: z.string().min(1),
+  releaseNotes: z.string().min(1),
+  gates: z
+    .array(
+      z.object({
+        name: z.string().min(1),
+        passed: z.boolean(),
+        evidence: z.string().min(1)
+      })
+    )
+    .default([]),
+  rollback: z.object({
+    command: z.string().min(1),
+    verification: z.string().min(1)
+  }),
+  recommendation: z.enum(["go", "no_go"])
+});
+export type ReleasePacket = z.infer<typeof ReleasePacketSchema>;
+
+export const FinalSummarySchema = z.object({
+  workItemId: z.string().min(1),
+  projectId: z.string().min(1),
+  outcome: z.enum(["merged_released", "blocked", "closed_no_release"]),
+  summary: z.string().min(1),
+  pullRequestUrl: z.string().url().optional(),
+  releaseUrl: z.string().url().optional(),
+  followUps: z.array(z.string()).default([])
+});
+export type FinalSummary = z.infer<typeof FinalSummarySchema>;
+
+export const LoopStartSnapshotSchema = z.object({
+  loopRunId: z.string().min(1),
+  workItemId: z.string().min(1),
+  projectId: z.string().min(1),
+  repo: z.string().min(1),
+  startRepoSha: z.string().min(1),
+  startBranch: z.string().min(1),
+  startClean: z.boolean(),
+  startSynced: z.boolean(),
+  latestCompletedLoop: z.string().optional(),
+  createdAt: z.string().datetime()
+});
+export type LoopStartSnapshot = z.infer<typeof LoopStartSnapshotSchema>;
+
+export const LoopClosureSummarySchema = z.object({
+  loopRunId: z.string().min(1),
+  workItemId: z.string().min(1),
+  projectId: z.string().min(1),
+  repo: z.string().min(1),
+  status: z.enum(["closed", "blocked", "failed"]),
+  blockingGate: z.string().optional(),
+  summary: z.string().min(1),
+  endRepoSha: z.string().optional(),
+  localRemoteSynced: z.boolean().default(false),
+  createdAt: z.string().datetime()
+});
+export type LoopClosureSummary = z.infer<typeof LoopClosureSummarySchema>;
 
 export const AgentEventSchema = z.object({
   sequence: z.number().int().nonnegative().default(0),
@@ -77,7 +271,16 @@ export const AgentEventSchema = z.object({
   stage: WorkItemStateSchema.optional(),
   ownerAgent: AgentRoleSchema.optional(),
   level: z.enum(["info", "warn", "error"]).default("info"),
-  type: z.enum(["workflow_claimed", "stage_started", "stage_completed", "stage_failed", "verification", "release", "scheduler", "system"]),
+  type: z.enum([
+    "workflow_claimed",
+    "stage_started",
+    "stage_completed",
+    "stage_failed",
+    "verification",
+    "release",
+    "scheduler",
+    "system"
+  ]),
   message: z.string().min(1),
   createdAt: z.string().datetime()
 });
@@ -161,7 +364,9 @@ export const WorkItemSchema = z.object({
   projectId: z.string().min(1).optional(),
   repo: z.string().min(1).optional(),
   title: z.string().min(1),
-  requestType: z.enum(["feature", "bug", "performance", "security", "privacy", "refactor", "research"]).default("feature"),
+  requestType: z
+    .enum(["feature", "bug", "performance", "security", "privacy", "refactor", "research"])
+    .default("feature"),
   priority: z.enum(["low", "medium", "high", "urgent"]).default("medium"),
   state: WorkItemStateSchema.default("NEW"),
   githubIssueNumber: z.number().int().positive().optional(),
@@ -190,13 +395,7 @@ export const LoopTriggerSourceSchema = z.enum([
 
 export type LoopTriggerSource = z.infer<typeof LoopTriggerSourceSchema>;
 
-export const LoopRunStatusSchema = z.enum([
-  "running",
-  "awaiting_acceptance",
-  "blocked",
-  "closed",
-  "failed"
-]);
+export const LoopRunStatusSchema = z.enum(["running", "awaiting_acceptance", "blocked", "closed", "failed"]);
 
 export type LoopRunStatus = z.infer<typeof LoopRunStatusSchema>;
 
@@ -248,56 +447,58 @@ export const AgentMessageSchema = z.object({
 
 export type AgentMessage = z.infer<typeof AgentMessageSchema>;
 
-export const TeamContextSnapshotSchema = z.object({
-  id: z.string().min(1),
-  projectId: z.string().min(1),
-  repo: z.string().min(1),
-  workItemId: z.string().min(1),
-  loopRunId: z.string().min(1),
-  currentStage: WorkItemStateSchema.default("NEW"),
-  summary: z.string().min(1),
-  activeGoal: z.string().min(1),
-  latestLoopSummary: z.string().optional(),
-  activeDirection: z.array(z.string()).default([]),
-  activeAgents: z.array(AgentRoleSchema).default([]),
-  teammateActivity: z.array(TeammateActivitySchema).default([]),
-  decisions: z.array(z.string()).default([]),
-  blockers: z.array(z.string()).default([]),
-  openQuestions: z.array(z.string()).default([]),
-  recentMessages: z.array(AgentMessageSchema).default([]),
-  updatedAt: z.string().datetime()
-}).superRefine((snapshot, ctx) => {
-  snapshot.recentMessages.forEach((message, index) => {
-    if (message.projectId !== snapshot.projectId) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["recentMessages", index, "projectId"],
-        message: "Team context snapshots cannot include messages from another project."
-      });
-    }
-    if (message.repo !== snapshot.repo) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["recentMessages", index, "repo"],
-        message: "Team context snapshots cannot include messages from another repo."
-      });
-    }
-    if (message.workItemId !== snapshot.workItemId) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["recentMessages", index, "workItemId"],
-        message: "Team context snapshots cannot include messages from another work item."
-      });
-    }
-    if (message.loopRunId !== snapshot.loopRunId) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["recentMessages", index, "loopRunId"],
-        message: "Team context snapshots cannot include messages from another loop run."
-      });
-    }
+export const TeamContextSnapshotSchema = z
+  .object({
+    id: z.string().min(1),
+    projectId: z.string().min(1),
+    repo: z.string().min(1),
+    workItemId: z.string().min(1),
+    loopRunId: z.string().min(1),
+    currentStage: WorkItemStateSchema.default("NEW"),
+    summary: z.string().min(1),
+    activeGoal: z.string().min(1),
+    latestLoopSummary: z.string().optional(),
+    activeDirection: z.array(z.string()).default([]),
+    activeAgents: z.array(AgentRoleSchema).default([]),
+    teammateActivity: z.array(TeammateActivitySchema).default([]),
+    decisions: z.array(z.string()).default([]),
+    blockers: z.array(z.string()).default([]),
+    openQuestions: z.array(z.string()).default([]),
+    recentMessages: z.array(AgentMessageSchema).default([]),
+    updatedAt: z.string().datetime()
+  })
+  .superRefine((snapshot, ctx) => {
+    snapshot.recentMessages.forEach((message, index) => {
+      if (message.projectId !== snapshot.projectId) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["recentMessages", index, "projectId"],
+          message: "Team context snapshots cannot include messages from another project."
+        });
+      }
+      if (message.repo !== snapshot.repo) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["recentMessages", index, "repo"],
+          message: "Team context snapshots cannot include messages from another repo."
+        });
+      }
+      if (message.workItemId !== snapshot.workItemId) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["recentMessages", index, "workItemId"],
+          message: "Team context snapshots cannot include messages from another work item."
+        });
+      }
+      if (message.loopRunId !== snapshot.loopRunId) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["recentMessages", index, "loopRunId"],
+          message: "Team context snapshots cannot include messages from another loop run."
+        });
+      }
+    });
   });
-});
 
 export type TeamContextSnapshot = z.infer<typeof TeamContextSnapshotSchema>;
 
@@ -326,7 +527,9 @@ export const AgentTaskLeaseSchema = z.object({
   agent: AgentRoleSchema,
   stage: WorkItemStateSchema,
   task: z.string().min(1),
-  purpose: z.enum(["coordination", "research", "proposal", "build", "verification", "release", "opportunity_scan"]).default("coordination"),
+  purpose: z
+    .enum(["coordination", "research", "proposal", "build", "verification", "release", "opportunity_scan"])
+    .default("coordination"),
   status: z.enum(["active", "released", "expired"]).default("active"),
   leasedAt: z.string().datetime(),
   expiresAt: z.string().datetime()
@@ -383,7 +586,9 @@ export const OpportunityCandidateSchema = z.object({
   urgency: z.number().int().min(1).max(5).default(3),
   implementationSize: z.number().int().min(1).max(5).default(3),
   riskLevel: RiskLevelSchema.default("medium"),
-  suggestedRequestType: z.enum(["feature", "bug", "performance", "security", "privacy", "refactor", "research"]).default("refactor"),
+  suggestedRequestType: z
+    .enum(["feature", "bug", "performance", "security", "privacy", "refactor", "research"])
+    .default("refactor"),
   status: z.enum(["suggested", "promoted", "dismissed", "duplicate"]).default("suggested"),
   workItemId: z.string().min(1).optional(),
   createdAt: z.string().datetime(),
@@ -399,7 +604,9 @@ export const ProposalArtifactSchema = z.object({
   workItemId: z.string().min(1),
   loopRunId: z.string().min(1).optional(),
   version: z.number().int().positive().default(1),
-  status: z.enum(["draft", "awaiting_acceptance", "accepted", "revision_requested", "rejected", "auto_accepted"]).default("draft"),
+  status: z
+    .enum(["draft", "awaiting_acceptance", "accepted", "revision_requested", "rejected", "auto_accepted"])
+    .default("draft"),
   problem: z.string().min(1),
   researchSummary: z.string().min(1),
   recommendedApproach: z.string().min(1),
@@ -475,18 +682,20 @@ export type ProjectConnectionInput = z.input<typeof ProjectConnectionInputSchema
 export const ProjectCapabilityStatusSchema = z.object({
   id: z.string().min(1),
   label: z.string().min(1),
-  kind: z.enum([
-    "github_cli",
-    "github_mcp",
-    "github_sdk",
-    "repo",
-    "memory",
-    "mcp",
-    "research",
-    "security",
-    "scheduler",
-    "custom"
-  ]).default("custom"),
+  kind: z
+    .enum([
+      "github_cli",
+      "github_mcp",
+      "github_sdk",
+      "repo",
+      "memory",
+      "mcp",
+      "research",
+      "security",
+      "scheduler",
+      "custom"
+    ])
+    .default("custom"),
   enabled: z.boolean().default(true),
   status: z.enum(["ready", "available", "needs_auth", "missing", "disabled", "error"]).default("available"),
   summary: z.string().min(1),
@@ -503,7 +712,17 @@ export const ProjectConnectionSchema = ProjectConnectionInputSchema.extend({
   repo: z.string().min(1),
   memoryNamespace: z.string().min(1),
   contextDir: z.string().default(".agent-team/context"),
-  status: z.enum(["connected", "inactive", "missing_local_path", "not_git_repo", "remote_mismatch", "needs_github_auth", "config_written"]).default("connected"),
+  status: z
+    .enum([
+      "connected",
+      "inactive",
+      "missing_local_path",
+      "not_git_repo",
+      "remote_mismatch",
+      "needs_github_auth",
+      "config_written"
+    ])
+    .default("connected"),
   remoteUrl: z.string().optional(),
   ghAvailable: z.boolean().default(false),
   ghAuthed: z.boolean().default(false),
@@ -572,7 +791,20 @@ export type CapabilityActivation = z.infer<typeof CapabilityActivationSchema>;
 
 const McpServerBaseSchema = z.object({
   name: z.string().min(1),
-  category: z.enum(["browser", "debugging", "github", "filesystem", "database", "documentation", "security", "electron", "web_search", "custom"]).default("custom"),
+  category: z
+    .enum([
+      "browser",
+      "debugging",
+      "github",
+      "filesystem",
+      "database",
+      "documentation",
+      "security",
+      "electron",
+      "web_search",
+      "custom"
+    ])
+    .default("custom"),
   description: z.string().optional(),
   enabled: z.boolean().default(false),
   activation: CapabilityActivationSchema.default({
@@ -605,7 +837,9 @@ export type McpServerConfig = z.infer<typeof McpServerConfigSchema>;
 
 export const ElectronIntegrationSchema = z.object({
   enabled: z.boolean().default(false),
-  preferredAutomation: z.enum(["playwright_test", "electron_mcp", "chrome_devtools_mcp", "custom"]).default("playwright_test"),
+  preferredAutomation: z
+    .enum(["playwright_test", "electron_mcp", "chrome_devtools_mcp", "custom"])
+    .default("playwright_test"),
   appPath: z.string().optional(),
   launchCommand: z.string().optional(),
   devServerUrl: z.string().url().optional(),
@@ -636,6 +870,58 @@ export const CapabilityPackSchema = z.object({
 
 export type CapabilityPack = z.infer<typeof CapabilityPackSchema>;
 
+export const PluginContributionSchema = z.object({
+  capabilities: z.array(CapabilityPackSchema).default([]),
+  mcpServers: z.array(McpServerConfigSchema).default([]),
+  skills: z
+    .array(
+      z.object({
+        id: z.string().min(1),
+        relativePath: z.string().min(1)
+      })
+    )
+    .default([]),
+  tools: z
+    .array(
+      z.object({
+        name: z.string().min(1),
+        description: z.string().min(1)
+      })
+    )
+    .default([]),
+  releaseGates: z
+    .array(
+      z.object({
+        id: z.string().min(1),
+        command: z.string().min(1),
+        required: z.boolean().default(true)
+      })
+    )
+    .default([])
+});
+
+export type PluginContribution = z.infer<typeof PluginContributionSchema>;
+
+export const AgentTeamPluginSchema = z.object({
+  name: z.string().min(1),
+  packageName: z.string().min(1),
+  enabled: z.boolean().default(false),
+  allowlisted: z.boolean().default(false),
+  projectId: z.string().min(1).optional(),
+  repo: z.string().min(1).optional(),
+  initCommand: z.string().min(1).optional(),
+  disposeCommand: z.string().min(1).optional(),
+  contributions: PluginContributionSchema.default({
+    capabilities: [],
+    mcpServers: [],
+    skills: [],
+    tools: [],
+    releaseGates: []
+  })
+});
+
+export type AgentTeamPlugin = z.infer<typeof AgentTeamPluginSchema>;
+
 export const ProjectIsolationSchema = z.object({
   requireExplicitRepoConnection: z.boolean().default(true),
   allowCrossProjectMemory: z.boolean().default(false),
@@ -656,21 +942,23 @@ export const ModelPolicySchema = z.object({
 export type ModelPolicy = z.infer<typeof ModelPolicySchema>;
 
 export const TargetRepoConfigSchema = z.object({
-  project: z.object({
-    id: z.string().min(1).optional(),
-    name: z.string().min(1).optional(),
-    isolation: ProjectIsolationSchema.default({
-      requireExplicitRepoConnection: true,
-      allowCrossProjectMemory: false,
-      allowGlobalMemory: false
+  project: z
+    .object({
+      id: z.string().min(1).optional(),
+      name: z.string().min(1).optional(),
+      isolation: ProjectIsolationSchema.default({
+        requireExplicitRepoConnection: true,
+        allowCrossProjectMemory: false,
+        allowGlobalMemory: false
+      })
     })
-  }).default({
-    isolation: {
-      requireExplicitRepoConnection: true,
-      allowCrossProjectMemory: false,
-      allowGlobalMemory: false
-    }
-  }),
+    .default({
+      isolation: {
+        requireExplicitRepoConnection: true,
+        allowCrossProjectMemory: false,
+        allowGlobalMemory: false
+      }
+    }),
   repo: z.object({
     owner: z.string().min(1),
     name: z.string().min(1),
@@ -678,42 +966,48 @@ export const TargetRepoConfigSchema = z.object({
     localPath: z.string().min(1)
   }),
   commands: RepoCommandSchema,
-  context: z.object({
-    includeDefaultContextDir: z.boolean().default(true),
-    defaultContextDir: z.string().default(".agent-team/context"),
-    maxFiles: z.number().int().positive().max(20).default(8),
-    maxBytesPerFile: z.number().int().positive().max(64_000).default(12_000),
-    files: z.array(ContextFileReferenceSchema).default([])
-  }).default({
-    includeDefaultContextDir: true,
-    defaultContextDir: ".agent-team/context",
-    maxFiles: 8,
-    maxBytesPerFile: 12_000,
-    files: []
-  }),
-  integrations: z.object({
-    electron: ElectronIntegrationSchema.default({
-      enabled: false,
-      preferredAutomation: "playwright_test",
-      artifactsDir: ".agent-team/artifacts/electron",
-      requireIsolatedProfile: true,
-      allowRemoteDebugging: false,
-      notes: []
+  context: z
+    .object({
+      includeDefaultContextDir: z.boolean().default(true),
+      defaultContextDir: z.string().default(".agent-team/context"),
+      maxFiles: z.number().int().positive().max(20).default(8),
+      maxBytesPerFile: z.number().int().positive().max(64_000).default(12_000),
+      files: z.array(ContextFileReferenceSchema).default([])
+    })
+    .default({
+      includeDefaultContextDir: true,
+      defaultContextDir: ".agent-team/context",
+      maxFiles: 8,
+      maxBytesPerFile: 12_000,
+      files: []
     }),
-    mcpServers: z.array(McpServerConfigSchema).default([]),
-    capabilityPacks: z.array(CapabilityPackSchema).default([])
-  }).default({
-    electron: {
-      enabled: false,
-      preferredAutomation: "playwright_test",
-      artifactsDir: ".agent-team/artifacts/electron",
-      requireIsolatedProfile: true,
-      allowRemoteDebugging: false,
-      notes: []
-    },
-    mcpServers: [],
-    capabilityPacks: []
-  }),
+  integrations: z
+    .object({
+      electron: ElectronIntegrationSchema.default({
+        enabled: false,
+        preferredAutomation: "playwright_test",
+        artifactsDir: ".agent-team/artifacts/electron",
+        requireIsolatedProfile: true,
+        allowRemoteDebugging: false,
+        notes: []
+      }),
+      mcpServers: z.array(McpServerConfigSchema).default([]),
+      capabilityPacks: z.array(CapabilityPackSchema).default([]),
+      plugins: z.array(AgentTeamPluginSchema).default([])
+    })
+    .default({
+      electron: {
+        enabled: false,
+        preferredAutomation: "playwright_test",
+        artifactsDir: ".agent-team/artifacts/electron",
+        requireIsolatedProfile: true,
+        allowRemoteDebugging: false,
+        notes: []
+      },
+      mcpServers: [],
+      capabilityPacks: [],
+      plugins: []
+    }),
   models: ModelPolicySchema.default({
     primaryCodingModel: "gpt-5.5",
     researchModel: "gpt-5.5",
@@ -726,48 +1020,52 @@ export const TargetRepoConfigSchema = z.object({
     githubActionsRequired: z.boolean().default(true),
     requireLocalRemoteSync: z.boolean().default(true),
     requireCleanWorktree: z.boolean().default(true),
-    allowedRisk: z.object({
-      low: z.enum(["autonomous", "autonomous_with_all_gates", "manual"]).default("autonomous"),
-      medium: z.enum(["autonomous", "autonomous_with_all_gates", "manual"]).default("autonomous_with_all_gates"),
-      high: z.enum(["autonomous", "autonomous_with_all_gates", "manual"]).default("autonomous_with_all_gates")
-    }).default({
-      low: "autonomous",
-      medium: "autonomous_with_all_gates",
-      high: "autonomous_with_all_gates"
-    }),
+    allowedRisk: z
+      .object({
+        low: z.enum(["autonomous", "autonomous_with_all_gates", "manual"]).default("autonomous"),
+        medium: z.enum(["autonomous", "autonomous_with_all_gates", "manual"]).default("autonomous_with_all_gates"),
+        high: z.enum(["autonomous", "autonomous_with_all_gates", "manual"]).default("autonomous_with_all_gates")
+      })
+      .default({
+        low: "autonomous",
+        medium: "autonomous_with_all_gates",
+        high: "autonomous_with_all_gates"
+      }),
     emergencyStopFile: z.string().default(".agent-team/emergency-stop")
   }),
-  scheduler: z.object({
-    mode: z.enum(["chatgpt_pro_assisted", "api_live", "dry_run"]).default("chatgpt_pro_assisted"),
-    continuous: z.boolean().default(true),
-    pollIntervalSeconds: z.number().int().positive().default(15),
-    maxConcurrentWorkflows: z.number().int().positive().default(3),
-    maxConcurrentAgentRuns: z.number().int().positive().default(5),
-    maxConcurrentRepoWrites: z.number().int().positive().default(1),
-    completeLoopBeforeNextWorkItem: z.boolean().default(true),
-    cooldownSecondsAfterFailure: z.number().int().positive().default(300),
-    preferCodexForCodingWork: z.boolean().default(true),
-    requireEventTrigger: z.boolean().default(true),
-    parallelDiscovery: z.boolean().default(true),
-    parallelFrontendBackend: z.boolean().default(true),
-    parallelVerificationPlanning: z.boolean().default(true),
-    allowParallelWorkItemsWhenDisjoint: z.boolean().default(true)
-  }).default({
-    mode: "chatgpt_pro_assisted",
-    continuous: true,
-    pollIntervalSeconds: 15,
-    maxConcurrentWorkflows: 3,
-    maxConcurrentAgentRuns: 5,
-    maxConcurrentRepoWrites: 1,
-    completeLoopBeforeNextWorkItem: true,
-    cooldownSecondsAfterFailure: 300,
-    preferCodexForCodingWork: true,
-    requireEventTrigger: true,
-    parallelDiscovery: true,
-    parallelFrontendBackend: true,
-    parallelVerificationPlanning: true,
-    allowParallelWorkItemsWhenDisjoint: true
-  })
+  scheduler: z
+    .object({
+      mode: z.enum(["chatgpt_pro_assisted", "api_live", "dry_run"]).default("chatgpt_pro_assisted"),
+      continuous: z.boolean().default(true),
+      pollIntervalSeconds: z.number().int().positive().default(15),
+      maxConcurrentWorkflows: z.number().int().positive().default(3),
+      maxConcurrentAgentRuns: z.number().int().positive().default(5),
+      maxConcurrentRepoWrites: z.number().int().positive().default(1),
+      completeLoopBeforeNextWorkItem: z.boolean().default(true),
+      cooldownSecondsAfterFailure: z.number().int().positive().default(300),
+      preferCodexForCodingWork: z.boolean().default(true),
+      requireEventTrigger: z.boolean().default(true),
+      parallelDiscovery: z.boolean().default(true),
+      parallelFrontendBackend: z.boolean().default(true),
+      parallelVerificationPlanning: z.boolean().default(true),
+      allowParallelWorkItemsWhenDisjoint: z.boolean().default(true)
+    })
+    .default({
+      mode: "chatgpt_pro_assisted",
+      continuous: true,
+      pollIntervalSeconds: 15,
+      maxConcurrentWorkflows: 3,
+      maxConcurrentAgentRuns: 5,
+      maxConcurrentRepoWrites: 1,
+      completeLoopBeforeNextWorkItem: true,
+      cooldownSecondsAfterFailure: 300,
+      preferCodexForCodingWork: true,
+      requireEventTrigger: true,
+      parallelDiscovery: true,
+      parallelFrontendBackend: true,
+      parallelVerificationPlanning: true,
+      allowParallelWorkItemsWhenDisjoint: true
+    })
 });
 
 export type TargetRepoConfig = z.infer<typeof TargetRepoConfigSchema>;

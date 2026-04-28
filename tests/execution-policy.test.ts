@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_SCHEDULER_POLICY, dependenciesSatisfied, getBlockingWorkItemIds, selectNextWorkItem, selectParallelWorkItems, shouldUseLiveApi, type WorkItem } from "../packages/shared/src";
+import {
+  DEFAULT_SCHEDULER_POLICY,
+  dependenciesSatisfied,
+  getBlockingWorkItemIds,
+  selectNextWorkItem,
+  selectParallelWorkItems,
+  shouldUseLiveApi,
+  type WorkItem
+} from "../packages/shared/src";
 
 const base: WorkItem = {
   id: "WI-1",
@@ -19,11 +27,14 @@ const base: WorkItem = {
 
 describe("smart scheduler policy", () => {
   it("prioritizes urgent active work and skips closed work", () => {
-    const next = selectNextWorkItem([
-      { ...base, id: "WI-closed", priority: "urgent", state: "CLOSED" },
-      { ...base, id: "WI-low", priority: "low" },
-      { ...base, id: "WI-urgent", priority: "urgent" }
-    ], DEFAULT_SCHEDULER_POLICY);
+    const next = selectNextWorkItem(
+      [
+        { ...base, id: "WI-closed", priority: "urgent", state: "CLOSED" },
+        { ...base, id: "WI-low", priority: "low" },
+        { ...base, id: "WI-urgent", priority: "urgent" }
+      ],
+      DEFAULT_SCHEDULER_POLICY
+    );
 
     expect(next?.id).toBe("WI-urgent");
   });
@@ -34,45 +45,68 @@ describe("smart scheduler policy", () => {
   });
 
   it("selects one work item by default so the current loop finishes before the next starts", () => {
-    const selected = selectParallelWorkItems([
-      { ...base, id: "WI-1", projectId: "repo-a", priority: "high" },
-      { ...base, id: "WI-2", projectId: "repo-a", priority: "medium" }
-    ], { ...DEFAULT_SCHEDULER_POLICY, maxConcurrentWorkflows: 2 }, new Set());
+    const selected = selectParallelWorkItems(
+      [
+        { ...base, id: "WI-1", projectId: "repo-a", priority: "high" },
+        { ...base, id: "WI-2", projectId: "repo-a", priority: "medium" }
+      ],
+      { ...DEFAULT_SCHEDULER_POLICY, maxConcurrentWorkflows: 2 },
+      new Set()
+    );
 
     expect(selected.map((item) => item.id)).toEqual(["WI-1"]);
   });
 
   it("selects one work item per disjoint project when project parallelism is enabled", () => {
-    const selected = selectParallelWorkItems([
-      { ...base, id: "WI-1", projectId: "repo-a", priority: "high" },
-      { ...base, id: "WI-2", projectId: "repo-a", priority: "medium" },
-      { ...base, id: "WI-3", projectId: "repo-b", priority: "low" }
-    ], { ...DEFAULT_SCHEDULER_POLICY, maxConcurrentWorkflows: 3 }, new Set());
+    const selected = selectParallelWorkItems(
+      [
+        { ...base, id: "WI-1", projectId: "repo-a", priority: "high" },
+        { ...base, id: "WI-2", projectId: "repo-a", priority: "medium" },
+        { ...base, id: "WI-3", projectId: "repo-b", priority: "low" }
+      ],
+      { ...DEFAULT_SCHEDULER_POLICY, maxConcurrentWorkflows: 3 },
+      new Set()
+    );
 
     expect(selected.map((item) => item.id)).toEqual(["WI-1", "WI-3"]);
   });
 
   it("falls back to one work item when disjoint-project parallelism is disabled", () => {
-    const selected = selectParallelWorkItems([
-      { ...base, id: "WI-1", priority: "high" },
-      { ...base, id: "WI-2", priority: "medium" },
-      { ...base, id: "WI-3", priority: "low" }
-    ], { ...DEFAULT_SCHEDULER_POLICY, completeLoopBeforeNextWorkItem: false, allowParallelWorkItemsWhenDisjoint: false, maxConcurrentWorkflows: 2 }, new Set());
+    const selected = selectParallelWorkItems(
+      [
+        { ...base, id: "WI-1", priority: "high" },
+        { ...base, id: "WI-2", priority: "medium" },
+        { ...base, id: "WI-3", priority: "low" }
+      ],
+      {
+        ...DEFAULT_SCHEDULER_POLICY,
+        completeLoopBeforeNextWorkItem: false,
+        allowParallelWorkItemsWhenDisjoint: false,
+        maxConcurrentWorkflows: 2
+      },
+      new Set()
+    );
 
     expect(selected.map((item) => item.id)).toEqual(["WI-1"]);
   });
 
   it("does not start dependency-blocked work in parallel", () => {
-    const selected = selectParallelWorkItems([
-      { ...base, id: "WI-prereq", priority: "medium", state: "VERIFY" },
-      { ...base, id: "WI-blocked", priority: "urgent", dependencies: ["WI-prereq"] },
-      { ...base, id: "WI-free", priority: "high" }
-    ], { ...DEFAULT_SCHEDULER_POLICY, completeLoopBeforeNextWorkItem: false, maxConcurrentWorkflows: 3 }, new Set());
+    const selected = selectParallelWorkItems(
+      [
+        { ...base, id: "WI-prereq", priority: "medium", state: "VERIFY" },
+        { ...base, id: "WI-blocked", priority: "urgent", dependencies: ["WI-prereq"] },
+        { ...base, id: "WI-free", priority: "high" }
+      ],
+      { ...DEFAULT_SCHEDULER_POLICY, completeLoopBeforeNextWorkItem: false, maxConcurrentWorkflows: 3 },
+      new Set()
+    );
 
     expect(selected.map((item) => item.id)).toEqual(["WI-free", "WI-prereq"]);
-    expect(getBlockingWorkItemIds({ ...base, id: "WI-blocked", dependencies: ["WI-prereq"] }, [
-      { ...base, id: "WI-prereq", state: "VERIFY" }
-    ])).toEqual(["WI-prereq"]);
+    expect(
+      getBlockingWorkItemIds({ ...base, id: "WI-blocked", dependencies: ["WI-prereq"] }, [
+        { ...base, id: "WI-prereq", state: "VERIFY" }
+      ])
+    ).toEqual(["WI-prereq"]);
   });
 
   it("treats closed dependency work as satisfied", () => {

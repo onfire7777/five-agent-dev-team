@@ -15,20 +15,11 @@ export const WORKFLOW_SEQUENCE: WorkItemState[] = [
   "CLOSED"
 ];
 
-export const ALL_WORK_ITEM_STATES: WorkItemState[] = [
-  ...WORKFLOW_SEQUENCE,
-  "BLOCKED"
-];
+export const ALL_WORK_ITEM_STATES: WorkItemState[] = [...WORKFLOW_SEQUENCE, "BLOCKED"];
 
-export const PROPOSAL_GATE_STATES: WorkItemState[] = [
-  "PROPOSAL",
-  "AWAITING_ACCEPTANCE"
-];
+export const PROPOSAL_GATE_STATES: WorkItemState[] = ["PROPOSAL", "AWAITING_ACCEPTANCE"];
 
-export const TERMINAL_WORK_ITEM_STATES: WorkItemState[] = [
-  "CLOSED",
-  "BLOCKED"
-];
+export const TERMINAL_WORK_ITEM_STATES: WorkItemState[] = ["CLOSED", "BLOCKED"];
 
 const transitions: Record<WorkItemState, WorkItemState[]> = {
   NEW: ["INTAKE", "BLOCKED"],
@@ -43,7 +34,17 @@ const transitions: Record<WorkItemState, WorkItemState[]> = {
   VERIFY: ["RELEASE", "FRONTEND_BUILD", "BACKEND_BUILD", "RND", "BLOCKED"],
   RELEASE: ["CLOSED", "VERIFY", "BLOCKED"],
   CLOSED: [],
-  BLOCKED: ["INTAKE", "RND", "PROPOSAL", "AWAITING_ACCEPTANCE", "CONTRACT", "FRONTEND_BUILD", "BACKEND_BUILD", "VERIFY", "RELEASE"]
+  BLOCKED: [
+    "INTAKE",
+    "RND",
+    "PROPOSAL",
+    "AWAITING_ACCEPTANCE",
+    "CONTRACT",
+    "FRONTEND_BUILD",
+    "BACKEND_BUILD",
+    "VERIFY",
+    "RELEASE"
+  ]
 };
 
 export function canTransition(from: WorkItemState, to: WorkItemState): boolean {

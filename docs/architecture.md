@@ -27,7 +27,7 @@ NEW
 
 Before `INTAKE`, the worker records a loop-start snapshot with latest repo memory, local Git sync, controller runtime health, and GitHub Actions evidence. After R&D, a proposal artifact records the recommended approach before the build contract is locked. After `RELEASE`, the worker records a closure artifact with completed stages, files, tests, runtime evidence, and release readiness. Frontend and backend build stages run in parallel after the contract stage. Release is autonomous only when configured local, remote, quality, security, privacy, rollback, and sync gates pass.
 
-The cooperative loop layer adds project-scoped records for team-bus messages, loop runs, project direction, opportunities, and proposals. These records are durable, repo-scoped, and summarized for the dashboard instead of exposing raw logs. The dashboard exposes them through Details views: Direction, Ideas & Proposals, Team Messages, and Loop History.
+The cooperative loop layer adds project-scoped records for team-bus messages, loop runs, project direction, opportunities, and proposals. These records are durable, repo-scoped, and summarized for the dashboard instead of exposing raw logs. The current dashboard exposes the stable v1 operator surfaces: Release gate, Team lanes, Memory, and Events.
 
 ## Smart Continuous Autonomy
 
