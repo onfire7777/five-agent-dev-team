@@ -65,14 +65,14 @@ const receipt = {
   claimId: argValue("--claim") || null,
   baseSha: await maybeGit(["rev-parse", "origin/main"]),
   headSha: await maybeGit(["rev-parse", "HEAD"]),
-  branch: argValue("--branch") || await maybeGit(["branch", "--show-current"]),
+  branch: argValue("--branch") || (await maybeGit(["branch", "--show-current"])),
   pr: numericArg("--pr"),
   filesTouched: uniqueListArg("--files"),
   checksRun: uniqueListArg("--checks"),
   checksPassed: boolArg("--passed"),
   blockers: uniqueListArg("--blockers"),
   handoff: argValue("--handoff") || "",
-  writtenAt: now.toISOString(),
+  writtenAt: now.toISOString()
 };
 
 const receiptPath = join(runDir, `${stageInfo.id}.json`);

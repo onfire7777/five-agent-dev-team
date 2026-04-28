@@ -4,7 +4,7 @@ import react from "@vitejs/plugin-react";
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const dashboardPort = Number(env.DASHBOARD_PORT || process.env.DASHBOARD_PORT || 5173);
-  const apiBaseUrl = env.VITE_API_BASE_URL || process.env.VITE_API_BASE_URL || "http://localhost:4310";
+  const apiBaseUrl = env.VITE_API_BASE_URL || process.env.VITE_API_BASE_URL || "http://127.0.0.1:4310";
 
   return {
     root: "apps/dashboard",
@@ -13,10 +13,12 @@ export default defineConfig(({ mode }) => {
       __DASHBOARD_API_BASE__: JSON.stringify(apiBaseUrl)
     },
     server: {
+      host: "127.0.0.1",
       port: dashboardPort,
       strictPort: true
     },
     preview: {
+      host: "127.0.0.1",
       port: dashboardPort
     },
     build: {

@@ -21,21 +21,21 @@ work item + stage + agent role + risk + acceptance criteria
 
 ## Recommended Capability Bundles
 
-| Capability | Load When | Primary Tooling | Notes |
-| --- | --- | --- | --- |
-| `browser-e2e` | UI, accessibility, screenshots, forms, e2e verification | Playwright MCP | Use isolated profiles and narrow tool allowlists. |
-| `chrome-diagnostics` | console, network, performance, renderer debugging | Chrome DevTools MCP | Start slim and isolated; enable tracing only for performance tasks. |
-| `github-mcp` | issues, PRs, checks, release state, security context | Official GitHub MCP server with dynamic toolsets | Use read-only mode by default. |
-| `github-write` | comments, PRs, workflow dispatches | Official GitHub MCP server or existing GitHub API client | Enable only for specific delivery/release tasks. |
-| `github-cli` | local branch, PR, workflow, and release operations | `gh` authenticated by env or mounted config | Prefer deterministic CLI commands for local gates and release verification. |
-| `deep-web-research` | current ecosystem docs, source-backed investigation, external release notes | Web/search MCP or browser research | Load on demand; cite sources and persist only durable findings. |
-| `workspace-read` | code search and repository inspection | Native `rg`, `git`, file reads first | MCP filesystem roots must stay inside the target repo. |
-| `workspace-write` | patches and generated files | Native patch/edit tools first | Requires diff review through existing workflow gates. |
-| `docs-library` | library/framework research | Context/doc MCPs plus official docs | Treat retrieval as research, not final authority. |
-| `security-local` | pre-push/security checks | configured `security` command, Semgrep/Snyk if configured | Never upload secrets or broad local paths. |
-| `db-read` | schema/query debugging | vendor MCPs against dev DBs | Read-only user, branch/dev database only. |
-| `db-migrate` | migrations and data changes | target repo migration commands | Load only for backend/data work and verify rollback. |
-| `electron-diagnostics` | Electron renderer/app investigation | Playwright `_electron`, Chrome DevTools MCP, vetted Electron MCP fork | Do not use the linked prototype directly without hardening. |
+| Capability             | Load When                                                                   | Primary Tooling                                                       | Notes                                                                       |
+| ---------------------- | --------------------------------------------------------------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `browser-e2e`          | UI, accessibility, screenshots, forms, e2e verification                     | Playwright MCP                                                        | Use isolated profiles and narrow tool allowlists.                           |
+| `chrome-diagnostics`   | console, network, performance, renderer debugging                           | Chrome DevTools MCP                                                   | Start slim and isolated; enable tracing only for performance tasks.         |
+| `github-mcp`           | issues, PRs, checks, release state, security context                        | Official GitHub MCP server with dynamic toolsets                      | Use read-only mode by default.                                              |
+| `github-write`         | comments, PRs, workflow dispatches                                          | Official GitHub MCP server or existing GitHub API client              | Enable only for specific delivery/release tasks.                            |
+| `github-cli`           | local branch, PR, workflow, and release operations                          | `gh` authenticated by env or mounted config                           | Prefer deterministic CLI commands for local gates and release verification. |
+| `deep-web-research`    | current ecosystem docs, source-backed investigation, external release notes | Web/search MCP or browser research                                    | Load on demand; cite sources and persist only durable findings.             |
+| `workspace-read`       | code search and repository inspection                                       | Native `rg`, `git`, file reads first                                  | MCP filesystem roots must stay inside the target repo.                      |
+| `workspace-write`      | patches and generated files                                                 | Native patch/edit tools first                                         | Requires diff review through existing workflow gates.                       |
+| `docs-library`         | library/framework research                                                  | Context/doc MCPs plus official docs                                   | Treat retrieval as research, not final authority.                           |
+| `security-local`       | pre-push/security checks                                                    | configured `security` command, Semgrep/Snyk if configured             | Never upload secrets or broad local paths.                                  |
+| `db-read`              | schema/query debugging                                                      | vendor MCPs against dev DBs                                           | Read-only user, branch/dev database only.                                   |
+| `db-migrate`           | migrations and data changes                                                 | target repo migration commands                                        | Load only for backend/data work and verify rollback.                        |
+| `electron-diagnostics` | Electron renderer/app investigation                                         | Playwright `_electron`, Chrome DevTools MCP, vetted Electron MCP fork | Do not use the linked prototype directly without hardening.                 |
 
 ## Activation Rules
 

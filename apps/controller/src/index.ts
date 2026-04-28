@@ -24,6 +24,8 @@ import {
   canTransition,
   ProjectCapabilityStatusSchema,
   ProjectConnectionInputSchema,
+  WorkItemStateSchema,
+  loadTargetRepoConfig,
   targetRepoConfigFromProjectConnection,
   type ProjectCapabilityStatus,
   type ProjectConnection,
@@ -41,7 +43,9 @@ import {
 
 const CreateWorkItemRequest = z.object({
   title: z.string().min(1),
-  requestType: z.enum(["feature", "bug", "performance", "security", "privacy", "refactor", "research"]).default("feature"),
+  requestType: z
+    .enum(["feature", "bug", "performance", "security", "privacy", "refactor", "research"])
+    .default("feature"),
   priority: z.enum(["low", "medium", "high", "urgent"]).default("medium"),
   dependencies: z.array(z.string().min(1)).default([]),
   acceptanceCriteria: z.array(z.string()).default([]),
@@ -141,45 +145,60 @@ const WorkItemProposalDecisionRequest = z.object({
   feedback: z.string().optional()
 });
 
+const EmergencyControlRequest = z.object({
+  scope: z.string().min(1).default("global"),
+  reason: z.string().trim().min(1)
+});
+
 const app = express();
 const store = createStore();
 const port = Number(process.env.PORT || 4310);
 const execFile = util.promisify(childProcess.execFile);
-const githubDeviceSessions = new Map<string, {
-  clientId: string;
-  deviceCode: string;
-  interval: number;
-  scope: string;
-  expiresAt: number;
-}>();
-const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:5173,http://127.0.0.1:5173")
+const githubDeviceSessions = new Map<
+  string,
+  {
+    clientId: string;
+    deviceCode: string;
+    interval: number;
+    scope: string;
+    expiresAt: number;
+  }
+>();
+const allowedOrigins = (process.env.CORS_ORIGINS || "http://127.0.0.1:5173")
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
 
 class HttpError extends Error {
-  constructor(message: string, public statusCode: number) {
+  constructor(
+    message: string,
+    public statusCode: number
+  ) {
     super(message);
   }
 }
 
-function boundedInteger(value: unknown, defaultValue: number, min: number, max: number): number {
+function strictIntegerQuery(value: unknown, name: string, defaultValue: number, min: number, max: number): number {
   const raw = Array.isArray(value) ? value[0] : value;
   if (raw === undefined || raw === null || raw === "") return defaultValue;
   const parsed = Number(raw);
-  if (!Number.isFinite(parsed)) return defaultValue;
-  return Math.min(Math.max(Math.floor(parsed), min), max);
+  if (!Number.isInteger(parsed) || parsed < min) {
+    throw new HttpError(`${name} must be an integer greater than or equal to ${min}.`, 400);
+  }
+  return Math.min(parsed, max);
 }
 
-app.use(cors({
-  origin(origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-      return;
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(new HttpError(`Origin ${origin} is not allowed by CORS policy.`, 403));
     }
-    callback(new HttpError(`Origin ${origin} is not allowed by CORS policy.`, 403));
-  }
-}));
+  })
+);
 app.use(express.json());
 
 app.get("/health", async (_req, res) => {
@@ -189,6 +208,10 @@ app.get("/health", async (_req, res) => {
     res.json({
       ok: true,
       service: "agent-team-controller",
+      services: {
+        postgres: "ok",
+        temporal: process.env.TEMPORAL_ADDRESS ? "ok" : "not_configured"
+      },
       postgres: "ok",
       temporal: process.env.TEMPORAL_ADDRESS ? "ok" : "not_configured"
     });
@@ -209,9 +232,34 @@ app.get("/api/status", async (_req, res, next) => {
   }
 });
 
-app.get("/api/work-items", async (_req, res, next) => {
+app.get("/api/work-items", async (req, res, next) => {
   try {
-    res.json(await store.listWorkItems());
+    const projectId = typeof req.query.projectId === "string" ? req.query.projectId : undefined;
+    const state = typeof req.query.state === "string" ? WorkItemStateSchema.parse(req.query.state) : undefined;
+    const workItems = (await store.listWorkItems()).filter(
+      (item) => (!projectId || item.projectId === projectId) && (!state || item.state === state)
+    );
+    res.json(workItems);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/work-items/:id", async (req, res, next) => {
+  try {
+    const result = await store.getWorkItemWithArtifacts(req.params.id);
+    if (!result) throw new HttpError(`Work item ${req.params.id} was not found.`, 404);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/artifacts/:id", async (req, res, next) => {
+  try {
+    const artifact = await store.getArtifact(req.params.id);
+    if (!artifact) throw new HttpError(`Artifact ${req.params.id} was not found.`, 404);
+    res.json(artifact);
   } catch (error) {
     next(error);
   }
@@ -220,7 +268,9 @@ app.get("/api/work-items", async (_req, res, next) => {
 app.get("/api/memories", async (req, res, next) => {
   try {
     const workItemId = typeof req.query.workItemId === "string" ? req.query.workItemId : undefined;
-    res.json(await store.listMemories(workItemId));
+    const projectId = typeof req.query.projectId === "string" ? req.query.projectId : undefined;
+    const memories = await store.listMemories(workItemId);
+    res.json(projectId ? memories.filter((memory) => memory.projectId === projectId) : workItemId ? memories : []);
   } catch (error) {
     next(error);
   }
@@ -228,8 +278,8 @@ app.get("/api/memories", async (req, res, next) => {
 
 app.get("/api/events", async (req, res, next) => {
   try {
-    const after = boundedInteger(req.query.after, 0, 0, Number.MAX_SAFE_INTEGER);
-    const limit = boundedInteger(req.query.limit, 50, 1, 100);
+    const after = strictIntegerQuery(req.query.after, "after", 0, 0, Number.MAX_SAFE_INTEGER);
+    const limit = strictIntegerQuery(req.query.limit, "limit", 50, 1, 500);
     res.json(await store.listEvents(after, limit));
   } catch (error) {
     next(error);
@@ -479,19 +529,21 @@ app.post("/api/opportunities/:id/promote", async (req, res, next) => {
     const existingWorkItem = opportunity.workItemId
       ? (await store.listWorkItems()).find((item) => item.id === opportunity.workItemId)
       : undefined;
-    const workItem = existingWorkItem || await store.createWorkItem({
-      title: opportunity.title,
-      requestType: "feature",
-      priority: opportunity.priority,
-      dependencies: [],
-      acceptanceCriteria: [opportunity.summary],
-      riskLevel: opportunity.priority === "urgent" || opportunity.priority === "high" ? "high" : "medium",
-      frontendNeeded: true,
-      backendNeeded: true,
-      rndNeeded: true,
-      projectId: scope.projectId,
-      repo: scope.repo
-    });
+    const workItem =
+      existingWorkItem ||
+      (await store.createWorkItem({
+        title: opportunity.title,
+        requestType: "feature",
+        priority: opportunity.priority,
+        dependencies: [],
+        acceptanceCriteria: [opportunity.summary],
+        riskLevel: opportunity.priority === "urgent" || opportunity.priority === "high" ? "high" : "medium",
+        frontendNeeded: true,
+        backendNeeded: true,
+        rndNeeded: true,
+        projectId: scope.projectId,
+        repo: scope.repo
+      }));
     const updated = await store.upsertOpportunity(scope, {
       ...opportunity,
       workItemId: workItem.id,
@@ -571,16 +623,19 @@ app.post("/api/github/device/start", async (_req, res, next) => {
     if (!clientId) {
       throw new HttpError("Set GITHUB_OAUTH_CLIENT_ID to enable dashboard GitHub account connection.", 400);
     }
-    const scope = process.env.GITHUB_OAUTH_SCOPES?.trim() || "repo workflow read:org";
+    const scope = process.env.GITHUB_OAUTH_SCOPES?.trim() || "";
+    const body = new URLSearchParams({ client_id: clientId });
+    if (scope) body.set("scope", scope);
     const response = await fetch("https://github.com/login/device/code", {
       method: "POST",
       headers: {
         Accept: "application/json",
         "Content-Type": "application/x-www-form-urlencoded"
       },
-      body: new URLSearchParams({ client_id: clientId, scope })
+      body,
+      signal: AbortSignal.timeout(10_000)
     });
-    const data = await response.json() as {
+    const data = (await response.json()) as {
       device_code?: string;
       user_code?: string;
       verification_uri?: string;
@@ -639,9 +694,10 @@ app.post("/api/github/device/poll", async (req, res, next) => {
         client_id: session.clientId,
         device_code: session.deviceCode,
         grant_type: "urn:ietf:params:oauth:grant-type:device_code"
-      })
+      }),
+      signal: AbortSignal.timeout(10_000)
     });
-    const data = await response.json() as {
+    const data = (await response.json()) as {
       access_token?: string;
       token_type?: string;
       scope?: string;
@@ -711,9 +767,10 @@ app.post("/api/github/disconnect", async (_req, res, next) => {
     }
     res.json({
       disconnected: false,
-      message: source?.source === "env"
-        ? `GitHub auth is managed by ${source.sourceName}; remove that environment token to disconnect.`
-        : "No dashboard-managed GitHub account is connected.",
+      message:
+        source?.source === "env"
+          ? `GitHub auth is managed by ${source.sourceName}; remove that environment token to disconnect.`
+          : "No dashboard-managed GitHub account is connected.",
       account: await getGitHubAccountStatus()
     });
   } catch (error) {
@@ -728,9 +785,16 @@ app.get("/api/github/status", async (req, res, next) => {
       repoName: req.query.repoName,
       defaultBranch: req.query.defaultBranch || "main",
       localPath: req.query.localPath,
-      webResearchEnabled: req.query.webResearchEnabled === undefined ? true : /^(1|true|yes)$/i.test(String(req.query.webResearchEnabled)),
-      githubMcpEnabled: req.query.githubMcpEnabled === undefined ? true : /^(1|true|yes)$/i.test(String(req.query.githubMcpEnabled)),
-      githubWriteEnabled: req.query.githubWriteEnabled === undefined ? false : /^(1|true|yes)$/i.test(String(req.query.githubWriteEnabled)),
+      webResearchEnabled:
+        req.query.webResearchEnabled === undefined
+          ? true
+          : /^(1|true|yes)$/i.test(String(req.query.webResearchEnabled)),
+      githubMcpEnabled:
+        req.query.githubMcpEnabled === undefined ? true : /^(1|true|yes)$/i.test(String(req.query.githubMcpEnabled)),
+      githubWriteEnabled:
+        req.query.githubWriteEnabled === undefined
+          ? false
+          : /^(1|true|yes)$/i.test(String(req.query.githubWriteEnabled)),
       active: true
     });
     res.json(await inspectProjectConnection(input));
@@ -773,13 +837,37 @@ app.post("/api/projects/:id/activate", async (req, res, next) => {
   }
 });
 
+app.delete("/api/projects/:id", async (req, res, next) => {
+  try {
+    const project = await store.deactivateProjectConnection(req.params.id);
+    await removeTargetRepoConfig(project);
+    await store.addEvent({
+      level: "info",
+      type: "system",
+      message: `Deactivated project ${project.name} for ${project.repo}.`
+    });
+    res.json(project);
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/events/stream", async (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders?.();
 
-  let lastSequence = boundedInteger(req.query.after, 0, 0, Number.MAX_SAFE_INTEGER);
+  let lastSequence: number;
+  try {
+    lastSequence = strictIntegerQuery(req.query.after, "after", 0, 0, Number.MAX_SAFE_INTEGER);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid event stream cursor.";
+    res.write(`event: stream-error\n`);
+    res.write(`data: ${JSON.stringify({ error: message })}\n\n`);
+    res.end();
+    return;
+  }
 
   const sendEvents = async (): Promise<boolean> => {
     const events = await store.listEvents(lastSequence, 50);
@@ -805,9 +893,11 @@ app.get("/api/events/stream", async (req, res) => {
       })
       .catch((error) => {
         res.write(`event: stream-error\n`);
-        res.write(`data: ${JSON.stringify({ error: error instanceof Error ? error.message : "event stream failed" })}\n\n`);
+        res.write(
+          `data: ${JSON.stringify({ error: error instanceof Error ? error.message : "event stream failed" })}\n\n`
+        );
       });
-  }, 2000);
+  }, 15_000);
 
   const wroteInitialEvents = await sendEvents().catch(() => false);
   if (!wroteInitialEvents) sendHeartbeat();
@@ -823,7 +913,44 @@ async function writeTargetRepoConfig(project: ProjectConnection): Promise<void> 
   await fs.writeFile(path.join(projectConfigDir, `${safeFileSegment(project.projectId)}.yaml`), yaml, "utf8");
 }
 
-type ProjectConnectionDiagnostics = Partial<Pick<ProjectConnection, "remoteUrl" | "ghAvailable" | "ghAuthed" | "githubCliVersion" | "githubMcpAvailable" | "githubMcpAuthenticated" | "githubMcpVersion" | "githubSdkConnected" | "githubSdkVersion" | "githubConnected" | "remoteMatches" | "defaultBranchVerified" | "capabilities" | "validationErrors" | "lastValidatedAt" | "status">>;
+async function removeTargetRepoConfig(project: ProjectConnection): Promise<void> {
+  const projectConfigDir = process.env.AGENT_TEAM_PROJECT_CONFIG_DIR || ".agent-team/projects";
+  await fs.rm(path.join(projectConfigDir, `${safeFileSegment(project.projectId)}.yaml`), { force: true });
+
+  const configPath = process.env.AGENT_TEAM_CONFIG || "agent-team.config.yaml";
+  try {
+    const config = loadTargetRepoConfig(configPath);
+    const matchesDeactivatedProject =
+      config.project.id === project.projectId &&
+      config.repo.owner === project.repoOwner &&
+      config.repo.name === project.repoName;
+    if (matchesDeactivatedProject) await fs.rm(configPath, { force: true });
+  } catch {
+    // If the global config is absent or invalid, the project-scoped cleanup above is still sufficient.
+  }
+}
+
+type ProjectConnectionDiagnostics = Partial<
+  Pick<
+    ProjectConnection,
+    | "remoteUrl"
+    | "ghAvailable"
+    | "ghAuthed"
+    | "githubCliVersion"
+    | "githubMcpAvailable"
+    | "githubMcpAuthenticated"
+    | "githubMcpVersion"
+    | "githubSdkConnected"
+    | "githubSdkVersion"
+    | "githubConnected"
+    | "remoteMatches"
+    | "defaultBranchVerified"
+    | "capabilities"
+    | "validationErrors"
+    | "lastValidatedAt"
+    | "status"
+  >
+>;
 
 async function inspectProjectConnection(input: ProjectConnectionInput): Promise<ProjectConnectionDiagnostics> {
   const validationErrors: string[] = [];
@@ -882,10 +1009,16 @@ async function inspectProjectConnection(input: ProjectConnectionInput): Promise<
     const authStatus = await runTool("gh", ["auth", "status", "--hostname", "github.com"], input.localPath);
     diagnostics.ghAuthed = authStatus.ok || Boolean(githubToken());
     if (!diagnostics.ghAuthed) {
-      validationErrors.push("GitHub CLI is not authenticated. Connect GitHub in the dashboard, set GH_TOKEN/GITHUB_TOKEN, or mount gh config.");
+      validationErrors.push(
+        "GitHub CLI is not authenticated. Connect GitHub in the dashboard, set GH_TOKEN/GITHUB_TOKEN, or mount gh config."
+      );
     }
 
-    const repoView = await runTool("gh", ["repo", "view", `${input.repoOwner}/${input.repoName}`, "--json", "name,owner,url,defaultBranchRef"], input.localPath);
+    const repoView = await runTool(
+      "gh",
+      ["repo", "view", `${input.repoOwner}/${input.repoName}`, "--json", "name,owner,url,defaultBranchRef"],
+      input.localPath
+    );
     if (repoView.ok) {
       try {
         const data = JSON.parse(repoView.stdout || "{}") as {
@@ -913,7 +1046,9 @@ async function inspectProjectConnection(input: ProjectConnectionInput): Promise<
     validationErrors.push("Official GitHub MCP server is not available in this runtime.");
   }
   if (input.githubMcpEnabled && diagnostics.githubMcpAvailable && !diagnostics.githubMcpAuthenticated) {
-    validationErrors.push("GitHub MCP needs a connected dashboard GitHub account, GITHUB_PERSONAL_ACCESS_TOKEN, GH_TOKEN, or GITHUB_TOKEN.");
+    validationErrors.push(
+      "GitHub MCP needs a connected dashboard GitHub account, GITHUB_PERSONAL_ACCESS_TOKEN, GH_TOKEN, or GITHUB_TOKEN."
+    );
   }
 
   const sdkResult = await inspectGitHubSdk(input);
@@ -922,19 +1057,20 @@ async function inspectProjectConnection(input: ProjectConnectionInput): Promise<
   if (!sdkResult.connected) validationErrors.push(sdkResult.message);
 
   if (!diagnostics.defaultBranchVerified) {
-    const branch = await runTool("git", ["ls-remote", "--exit-code", "--heads", "origin", defaultBranch], input.localPath);
+    const branch = await runTool(
+      "git",
+      ["ls-remote", "--exit-code", "--heads", "origin", defaultBranch],
+      input.localPath
+    );
     diagnostics.defaultBranchVerified = branch.ok;
     if (!branch.ok) validationErrors.push(`Default branch ${defaultBranch} was not verified on origin.`);
   }
 
-  const status: ProjectConnection["status"] = !diagnostics.remoteMatches && !diagnostics.githubConnected
-    ? "remote_mismatch"
-    : !diagnostics.ghAvailable ||
-      !diagnostics.ghAuthed ||
-      !diagnostics.githubSdkConnected ||
-      (input.githubMcpEnabled && (!diagnostics.githubMcpAvailable || !diagnostics.githubMcpAuthenticated))
-      ? "needs_github_auth"
-      : "connected";
+  const status: ProjectConnection["status"] = validationErrors.length
+    ? !diagnostics.remoteMatches && !diagnostics.githubConnected
+      ? "remote_mismatch"
+      : "needs_github_auth"
+    : "connected";
 
   const finalDiagnostics = {
     ...diagnostics,
@@ -947,7 +1083,11 @@ async function inspectProjectConnection(input: ProjectConnectionInput): Promise<
   };
 }
 
-async function runTool(command: string, args: string[], cwd: string): Promise<{ ok: boolean; stdout: string; stderr: string }> {
+async function runTool(
+  command: string,
+  args: string[],
+  cwd: string
+): Promise<{ ok: boolean; stdout: string; stderr: string }> {
   try {
     const result = await execFile(command, args, {
       cwd,
@@ -978,7 +1118,9 @@ function parseGitHubRemote(remoteUrl: string): { owner: string; repo: string } |
   return null;
 }
 
-async function inspectGitHubSdk(input: ProjectConnectionInput): Promise<{ connected: boolean; version: string; message: string }> {
+async function inspectGitHubSdk(
+  input: ProjectConnectionInput
+): Promise<{ connected: boolean; version: string; message: string }> {
   const token = githubToken();
   try {
     const octokit = new Octokit({
@@ -994,9 +1136,10 @@ async function inspectGitHubSdk(input: ProjectConnectionInput): Promise<{ connec
     return {
       connected: actualRepo === expectedRepo,
       version: "@octokit/rest",
-      message: actualRepo === expectedRepo
-        ? "GitHub SDK/Octokit can read repository metadata."
-        : `GitHub SDK/Octokit returned ${actualRepo || "an unexpected repository"}.`
+      message:
+        actualRepo === expectedRepo
+          ? "GitHub SDK/Octokit can read repository metadata."
+          : `GitHub SDK/Octokit returned ${actualRepo || "an unexpected repository"}.`
     };
   } catch (error) {
     return {
@@ -1009,7 +1152,10 @@ async function inspectGitHubSdk(input: ProjectConnectionInput): Promise<{ connec
   }
 }
 
-function buildProjectCapabilities(input: ProjectConnectionInput, diagnostics: ProjectConnectionDiagnostics): ProjectCapabilityStatus[] {
+function buildProjectCapabilities(
+  input: ProjectConnectionInput,
+  diagnostics: ProjectConnectionDiagnostics
+): ProjectCapabilityStatus[] {
   const remoteReady = Boolean(diagnostics.remoteMatches || diagnostics.githubConnected);
   return [
     {
@@ -1017,11 +1163,14 @@ function buildProjectCapabilities(input: ProjectConnectionInput, diagnostics: Pr
       label: "GitHub CLI",
       kind: "github_cli",
       enabled: true,
-      status: diagnostics.ghAvailable ? diagnostics.ghAuthed ? "ready" : "needs_auth" : "missing",
+      status: diagnostics.ghAvailable ? (diagnostics.ghAuthed ? "ready" : "needs_auth") : "missing",
       summary: diagnostics.ghAvailable
         ? "gh is installed for deterministic branch, PR, Actions, release, and sync operations."
         : "gh is missing from this runtime.",
-      details: [diagnostics.githubCliVersion || "", diagnostics.ghAuthed ? "authenticated or token-backed" : "authentication required"].filter(Boolean)
+      details: [
+        diagnostics.githubCliVersion || "",
+        diagnostics.ghAuthed ? "authenticated or token-backed" : "authentication required"
+      ].filter(Boolean)
     },
     {
       id: "github-mcp",
@@ -1031,10 +1180,18 @@ function buildProjectCapabilities(input: ProjectConnectionInput, diagnostics: Pr
       status: !input.githubMcpEnabled
         ? "disabled"
         : diagnostics.githubMcpAvailable
-          ? diagnostics.githubMcpAuthenticated ? "ready" : "needs_auth"
+          ? diagnostics.githubMcpAuthenticated
+            ? "ready"
+            : "needs_auth"
           : "missing",
-      summary: "Official GitHub MCP server provides dynamic toolsets for repo, issue, PR, Actions, code security, and release context.",
-      details: [diagnostics.githubMcpVersion || "", "stdio", "dynamic toolsets", input.githubWriteEnabled ? "write-capable by policy" : "read-only by default"].filter(Boolean)
+      summary:
+        "Official GitHub MCP server provides dynamic toolsets for repo, issue, PR, Actions, code security, and release context.",
+      details: [
+        diagnostics.githubMcpVersion || "",
+        "stdio",
+        "dynamic toolsets",
+        input.githubWriteEnabled ? "write-capable by policy" : "read-only by default"
+      ].filter(Boolean)
     },
     {
       id: "github-sdk",
@@ -1069,8 +1226,13 @@ function buildProjectCapabilities(input: ProjectConnectionInput, diagnostics: Pr
       kind: "research",
       enabled: input.webResearchEnabled ?? true,
       status: input.webResearchEnabled ? "available" : "disabled",
-      summary: "Hosted web search and research MCPs load only for current docs, advisories, ecosystem changes, and hard debugging.",
-      details: [process.env.TAVILY_API_KEY ? "Tavily MCP token configured" : "OpenAI hosted web search available in live agent mode"]
+      summary:
+        "Hosted web search and research MCPs load only for current docs, advisories, ecosystem changes, and hard debugging.",
+      details: [
+        process.env.TAVILY_API_KEY
+          ? "Tavily MCP token configured"
+          : "OpenAI hosted web search available in live agent mode"
+      ]
     },
     {
       id: "security-release",
@@ -1078,7 +1240,8 @@ function buildProjectCapabilities(input: ProjectConnectionInput, diagnostics: Pr
       kind: "security",
       enabled: true,
       status: "ready",
-      summary: "Local checks, secret scan, dependency audit, GitHub Actions, rollback, and sync gates remain controller-owned.",
+      summary:
+        "Local checks, secret scan, dependency audit, GitHub Actions, rollback, and sync gates remain controller-owned.",
       details: ["cannot be bypassed by MCP tools"]
     }
   ].map((capability) => ProjectCapabilityStatusSchema.parse(capability));
@@ -1115,9 +1278,13 @@ async function getGitHubAccountStatus(): Promise<{
 
   try {
     const user = await fetchGitHubUser(source.token);
-    const storedScopes = source.source === "local"
-      ? source.auth.scope.split(/[,\s]+/).map((scope) => scope.trim()).filter(Boolean)
-      : [];
+    const storedScopes =
+      source.source === "local"
+        ? source.auth.scope
+            .split(/[,\s]+/)
+            .map((scope) => scope.trim())
+            .filter(Boolean)
+        : [];
     const scopes = storedScopes.length ? storedScopes : user.scopes;
     return {
       connected: true,
@@ -1130,9 +1297,10 @@ async function getGitHubAccountStatus(): Promise<{
       utilities: buildGitHubConnectedUtilities(true, scopes),
       clientIdConfigured,
       authFile: source.source === "local" ? githubAuthFilePath() : undefined,
-      message: source.source === "local"
-        ? "Dashboard-managed GitHub account is connected across GitHub CLI, SDK, MCP, Actions, PRs, releases, and repo memory."
-        : `GitHub account is connected through ${source.sourceName} across GitHub CLI, SDK, MCP, Actions, PRs, releases, and repo memory.`
+      message:
+        source.source === "local"
+          ? "Dashboard-managed GitHub account is connected across GitHub CLI, SDK, MCP, Actions, PRs, releases, and repo memory."
+          : `GitHub account is connected through ${source.sourceName} across GitHub CLI, SDK, MCP, Actions, PRs, releases, and repo memory.`
     };
   } catch (error) {
     return {
@@ -1206,7 +1374,8 @@ function buildGitHubConnectedUtilities(connected: boolean, scopes: string[]): Gi
       id: "copilot-agent",
       label: "Copilot agent",
       scopes: ["repo"],
-      summary: "Optional GitHub MCP Copilot toolset for tracking or delegating Copilot coding-agent work when available."
+      summary:
+        "Optional GitHub MCP Copilot toolset for tracking or delegating Copilot coding-agent work when available."
     }
   ];
 
@@ -1222,12 +1391,12 @@ function scopeStatus(scopes: string[], requiredScopes: string[]): GitHubConnecte
   if (!requiredScopes.length) return "ready";
   if (!scopes.length) return "available";
   const normalized = scopes.map((scope) => scope.toLowerCase());
-  return requiredScopes.some((scope) => normalized.includes(scope.toLowerCase()))
-    ? "ready"
-    : "needs_scope";
+  return requiredScopes.some((scope) => normalized.includes(scope.toLowerCase())) ? "ready" : "needs_scope";
 }
 
-async function fetchGitHubUser(token: string): Promise<{ login: string; name: string | null; avatarUrl?: string; scopes: string[] }> {
+async function fetchGitHubUser(
+  token: string
+): Promise<{ login: string; name: string | null; avatarUrl?: string; scopes: string[] }> {
   const octokit = new Octokit({
     auth: token,
     userAgent: "five-agent-dev-team/0.1.0"
@@ -1238,30 +1407,40 @@ async function fetchGitHubUser(token: string): Promise<{ login: string; name: st
     login: response.data.login,
     name: response.data.name || null,
     avatarUrl: response.data.avatar_url || undefined,
-    scopes: typeof scopeHeader === "string"
-      ? scopeHeader.split(",").map((scope) => scope.trim()).filter(Boolean)
-      : []
+    scopes:
+      typeof scopeHeader === "string"
+        ? scopeHeader
+            .split(",")
+            .map((scope) => scope.trim())
+            .filter(Boolean)
+        : []
   };
 }
 
 function firstLine(value: string): string {
-  return value.split(/\r?\n/).map((line) => line.trim()).find(Boolean) || "";
+  return (
+    value
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean) || ""
+  );
 }
 
 function safeFileSegment(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "") || "project";
+  return (
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "") || "project"
+  );
 }
 
 async function requireStrictProjectScope(input: unknown): Promise<StrictProjectScope> {
   const scope = ProjectScopeRequest.parse(input);
   const projects = await store.listProjectConnections();
-  const project = projects.find((candidate) =>
-    candidate.projectId === scope.projectId &&
-    candidate.repo === scope.repo
+  const project = projects.find(
+    (candidate) => candidate.projectId === scope.projectId && candidate.repo === scope.repo
   );
   if (!project) {
     throw new HttpError(`Connected project was not found for ${scope.projectId}/${scope.repo}.`, 400);
@@ -1342,10 +1521,8 @@ async function decideProposalById(proposalId: string, input: z.infer<typeof Prop
 }
 
 async function scanLeanOpportunity(scope: StrictProjectScope): Promise<Opportunity> {
-  const existing = (await store.listOpportunities(scope)).find((item) =>
-    item.status !== "accepted" &&
-    item.status !== "rejected" &&
-    item.tags.includes("autonomous-scan")
+  const existing = (await store.listOpportunities(scope)).find(
+    (item) => item.status !== "accepted" && item.status !== "rejected" && item.tags.includes("autonomous-scan")
   );
   if (existing) return existing;
 
@@ -1398,7 +1575,9 @@ async function decideWorkItemProposal(workItemId: string, decision: "accept" | "
   return { proposal: mapProposalForUi(updated), workItemId: workItem.id, nextState, signaled };
 }
 
-async function startWorkflowIfSafe(workItem: WorkItem): Promise<{ workflowId: string | null; queued: boolean; reason?: string }> {
+async function startWorkflowIfSafe(
+  workItem: WorkItem
+): Promise<{ workflowId: string | null; queued: boolean; reason?: string }> {
   const status = await store.getStatus();
   if (status.system.emergencyStop) {
     return {
@@ -1409,11 +1588,12 @@ async function startWorkflowIfSafe(workItem: WorkItem): Promise<{ workflowId: st
   }
 
   if (workItem.projectId && workItem.repo) {
-    const activeSameProject = status.workItems.some((item) =>
-      item.id !== workItem.id &&
-      item.projectId === workItem.projectId &&
-      item.repo === workItem.repo &&
-      !["NEW", "CLOSED", "BLOCKED"].includes(item.state)
+    const activeSameProject = status.workItems.some(
+      (item) =>
+        item.id !== workItem.id &&
+        item.projectId === workItem.projectId &&
+        item.repo === workItem.repo &&
+        !["NEW", "CLOSED", "BLOCKED"].includes(item.state)
     );
     if (activeSameProject) {
       return {
@@ -1442,12 +1622,15 @@ async function startWorkflowIfSafe(workItem: WorkItem): Promise<{ workflowId: st
     if (workflowId) {
       await store.updateWorkItemState(workItem.id, "INTAKE");
       if (workItem.projectId && workItem.repo) {
-        await store.upsertLoopRun({ projectId: workItem.projectId, repo: workItem.repo }, {
-          id: `loop-${workItem.id}`,
-          workItemId: workItem.id,
-          status: "running",
-          summary: `Autonomous loop started for ${workItem.title}.`
-        });
+        await store.upsertLoopRun(
+          { projectId: workItem.projectId, repo: workItem.repo },
+          {
+            id: `loop-${workItem.id}`,
+            workItemId: workItem.id,
+            status: "running",
+            summary: `Autonomous loop started for ${workItem.title}.`
+          }
+        );
       }
     } else {
       await store.releaseWorkItemWorkflowClaim(workItem.id);
@@ -1461,8 +1644,10 @@ async function startWorkflowIfSafe(workItem: WorkItem): Promise<{ workflowId: st
 
 function mapDirectionForUi(direction: Direction, alias?: z.infer<typeof DirectionAliasRequest>) {
   const pause = alias?.pauseNewLoopsAfterCurrent ?? direction.constraints.some((item) => /pause new loops/i.test(item));
-  const standingDirection = alias?.mode === "standing" || /standing/i.test(direction.title) ? direction.summary : undefined;
-  const nextLoopDirection = alias?.mode !== "standing" && !/standing/i.test(direction.title) ? direction.summary : undefined;
+  const standingDirection =
+    alias?.mode === "standing" || /standing/i.test(direction.title) ? direction.summary : undefined;
+  const nextLoopDirection =
+    alias?.mode !== "standing" && !/standing/i.test(direction.title) ? direction.summary : undefined;
   return {
     ...direction,
     standingDirection,
@@ -1494,7 +1679,8 @@ function mapLoopRunForUi(run: LoopRun) {
     startedAt: run.createdAt,
     closureSummary: run.status === "closed" ? run.summary : undefined,
     blockingReason: run.status === "blocked" ? run.summary : undefined,
-    nextRecommendedLoop: run.status === "closed" ? "Scan for the next highest-value queued work or opportunity." : undefined,
+    nextRecommendedLoop:
+      run.status === "closed" ? "Scan for the next highest-value queued work or opportunity." : undefined,
     releaseState: run.status
   };
 }
@@ -1503,7 +1689,14 @@ function mapOpportunityForUi(opportunity: Opportunity) {
   return {
     ...opportunity,
     risk: opportunity.priority === "urgent" || opportunity.priority === "high" ? "high" : "medium",
-    score: opportunity.priority === "urgent" ? 95 : opportunity.priority === "high" ? 85 : opportunity.priority === "medium" ? 70 : 50,
+    score:
+      opportunity.priority === "urgent"
+        ? 95
+        : opportunity.priority === "high"
+          ? 85
+          : opportunity.priority === "medium"
+            ? 70
+            : 50,
     evidence: opportunity.tags
   };
 }
@@ -1516,7 +1709,9 @@ function mapProposalForUi(proposal: Proposal) {
     recommendedApproach: proposal.recommendation,
     tasks: proposal.implementationPlan,
     validationPlan: proposal.validationPlan.join("; "),
-    rollbackPlan: proposal.risks.find((risk) => /rollback/i.test(risk)) || "Use the existing release rollback path and block release if rollback cannot be proven.",
+    rollbackPlan:
+      proposal.risks.find((risk) => /rollback/i.test(risk)) ||
+      "Use the existing release rollback path and block release if rollback cannot be proven.",
     autoAcceptEligible: proposal.status === "accepted"
   };
 }
@@ -1554,36 +1749,46 @@ async function requireConnectedProjectForWork(input: z.infer<typeof CreateWorkIt
   if (!projects.length) {
     throw new HttpError("Connect a target GitHub repository before starting autonomous work.", 400);
   }
-  const project = input.projectId || input.repo
-    ? projects.find((candidate) =>
-      (input.projectId ? candidate.projectId === input.projectId : true) &&
-      (input.repo ? candidate.repo === input.repo : true)
-    )
-    : projects.find((candidate) => candidate.active);
+  const project =
+    input.projectId || input.repo
+      ? projects.find(
+          (candidate) =>
+            (input.projectId ? candidate.projectId === input.projectId : true) &&
+            (input.repo ? candidate.repo === input.repo : true)
+        )
+      : projects.find((candidate) => candidate.active);
   if (!project) {
-    throw new HttpError(`Connected project was not found for ${input.projectId || input.repo || "the requested work item"}.`, 400);
+    throw new HttpError(
+      `Connected project was not found for ${input.projectId || input.repo || "the requested work item"}.`,
+      400
+    );
   }
   if (!project.active) {
     throw new HttpError(`Project ${project.repo} is not enabled for autonomous work.`, 400);
   }
   if (project.status !== "connected") {
-    throw new HttpError(`Project ${project.repo} is not fully connected: ${project.validationErrors.join("; ") || project.status}.`, 400);
+    throw new HttpError(
+      `Project ${project.repo} is not fully connected: ${project.validationErrors.join("; ") || project.status}.`,
+      400
+    );
   }
 }
 
 app.post("/api/emergency-stop", async (req, res, next) => {
   try {
-    await store.setEmergencyStop(true, String(req.body?.reason || "Operator emergency stop"));
-    res.json({ emergencyStop: true });
+    const input = EmergencyControlRequest.parse(req.body);
+    await store.setEmergencyStop(true, `[${input.scope}] ${input.reason}`);
+    res.json({ emergencyStop: true, scope: input.scope, reason: input.reason });
   } catch (error) {
     next(error);
   }
 });
 
-app.post("/api/emergency-resume", async (_req, res, next) => {
+app.post("/api/emergency-resume", async (req, res, next) => {
   try {
+    const input = EmergencyControlRequest.parse(req.body);
     await store.setEmergencyStop(false);
-    res.json({ emergencyStop: false });
+    res.json({ emergencyStop: false, scope: input.scope, reason: input.reason });
   } catch (error) {
     next(error);
   }
@@ -1592,16 +1797,29 @@ app.post("/api/emergency-resume", async (_req, res, next) => {
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   const message = error instanceof Error ? error.message : "Unknown error";
   if (error instanceof z.ZodError) {
-    res.status(400).json({ error: message });
+    res.status(400).type("application/problem+json").json({
+      type: "https://five-agent-dev-team.local/problems/invalid-request",
+      title: "Invalid request",
+      status: 400,
+      detail: message
+    });
     return;
   }
   const statusCode = error instanceof HttpError ? error.statusCode : 500;
-  res.status(statusCode).json({ error: message });
+  res
+    .status(statusCode)
+    .type("application/problem+json")
+    .json({
+      type: "https://five-agent-dev-team.local/problems/request-failed",
+      title: statusCode >= 500 ? "Internal server error" : "Request failed",
+      status: statusCode,
+      detail: message
+    });
 });
 
 store.init().then(() => {
   startSmartScheduler(store);
-  app.listen(port, () => {
-    console.log(`AI Dev Team controller listening on http://localhost:${port}`);
+  app.listen(port, "127.0.0.1", () => {
+    console.log(`AI Dev Team controller listening on http://127.0.0.1:${port}`);
   });
 });

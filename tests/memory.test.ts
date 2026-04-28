@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { createSampleArtifacts, createSampleWorkItems, memoryFromArtifact, selectRelevantMemories, type MemoryRecord } from "../packages/shared/src";
+import {
+  createSampleArtifacts,
+  createSampleWorkItems,
+  memoryFromArtifact,
+  selectRelevantMemories,
+  type MemoryRecord
+} from "../packages/shared/src";
 
 describe("permanent smart memory", () => {
   it("promotes important artifact decisions into durable memory", () => {
@@ -14,10 +20,7 @@ describe("permanent smart memory", () => {
       status: "blocked" as const,
       nextStage: "BLOCKED" as const
     };
-    const memories = [
-      ...memoryFromArtifact(createSampleArtifacts()[0]),
-      ...memoryFromArtifact(releaseArtifact)
-    ];
+    const memories = [...memoryFromArtifact(createSampleArtifacts()[0]), ...memoryFromArtifact(releaseArtifact)];
     expect(memories.some((memory) => memory.kind === "research")).toBe(true);
     expect(memories.some((memory) => memory.kind === "release")).toBe(true);
     expect(memories.some((memory) => memory.kind === "failure")).toBe(true);

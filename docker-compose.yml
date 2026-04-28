@@ -55,7 +55,7 @@ services:
       PORT: 4310
       DATABASE_URL: postgres://agent_team:agent_team@postgres:5432/agent_team
       TEMPORAL_ADDRESS: temporal:7233
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:${DASHBOARD_PORT:-5173},http://127.0.0.1:${DASHBOARD_PORT:-5173}}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://127.0.0.1:${DASHBOARD_PORT:-5173}}
       AGENT_TEAM_PROJECT_CONFIG_DIR: ${AGENT_TEAM_PROJECT_CONFIG_DIR:-.agent-team/projects}
       TARGET_REPO_CONTAINER_PATH: ${TARGET_REPO_CONTAINER_PATH:-/workspace/target-repo}
       GH_TOKEN: ${GH_TOKEN:-}
@@ -63,7 +63,7 @@ services:
       GITHUB_PERSONAL_ACCESS_TOKEN: ${GITHUB_PERSONAL_ACCESS_TOKEN:-}
       GITHUB_HOST: ${GITHUB_HOST:-}
       GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}
-      GITHUB_OAUTH_SCOPES: ${GITHUB_OAUTH_SCOPES:-repo workflow read:org}
+      GITHUB_OAUTH_SCOPES: ${GITHUB_OAUTH_SCOPES:-}
       AGENT_TEAM_GITHUB_AUTH_FILE: ${AGENT_TEAM_GITHUB_AUTH_FILE:-.agent-team/github-auth.json}
       TAVILY_API_KEY: ${TAVILY_API_KEY:-}
     ports:
@@ -78,7 +78,11 @@ services:
         source: ${GH_CONFIG_DIR:-gh-config}
         target: /root/.config/gh
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:4310/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      test:
+        [
+          "CMD-SHELL",
+          'node -e "fetch(''http://127.0.0.1:4310/health'').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"'
+        ]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -118,7 +122,11 @@ services:
         source: ${GH_CONFIG_DIR:-gh-config}
         target: /root/.config/gh
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"const fs=require('fs'); const file=process.env.WORKER_READY_FILE||'/tmp/agent-team-worker-ready'; const max=Number(process.env.WORKER_READY_MAX_AGE_MS||30000); const stat=fs.statSync(file); if(Date.now()-stat.mtimeMs>max) process.exit(1); const {Connection}=require('@temporalio/client'); Connection.connect({address:process.env.TEMPORAL_ADDRESS||'temporal:7233'}).then((connection)=>connection.close()).then(()=>process.exit(0)).catch(()=>process.exit(1));\""]
+      test:
+        [
+          "CMD-SHELL",
+          'node -e "const fs=require(''fs''); const file=process.env.WORKER_READY_FILE||''/tmp/agent-team-worker-ready''; const max=Number(process.env.WORKER_READY_MAX_AGE_MS||30000); const stat=fs.statSync(file); if(Date.now()-stat.mtimeMs>max) process.exit(1); const {Connection}=require(''@temporalio/client''); Connection.connect({address:process.env.TEMPORAL_ADDRESS||''temporal:7233''}).then((connection)=>connection.close()).then(()=>process.exit(0)).catch(()=>process.exit(1));"'
+        ]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -135,14 +143,18 @@ services:
         required: false
     environment:
       DASHBOARD_PORT: 5173
-      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:${CONTROLLER_PORT:-4310}}
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://127.0.0.1:${CONTROLLER_PORT:-4310}}
     ports:
       - "127.0.0.1:${DASHBOARD_PORT:-5173}:5173"
     volumes:
       - .:/app
       - node-modules:/app/node_modules
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:5173').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      test:
+        [
+          "CMD-SHELL",
+          'node -e "fetch(''http://127.0.0.1:5173'').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"'
+        ]
       interval: 10s
       timeout: 5s
       retries: 12
