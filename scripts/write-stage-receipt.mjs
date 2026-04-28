@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, appendFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { capture } from "./verify-lib.mjs";
@@ -18,14 +18,14 @@ const receipt = {
   claimId: argValue("--claim") || null,
   baseSha: await maybeGit(["rev-parse", "origin/main"]),
   headSha: await maybeGit(["rev-parse", "HEAD"]),
-  branch: argValue("--branch") || await maybeGit(["branch", "--show-current"]),
+  branch: argValue("--branch") || (await maybeGit(["branch", "--show-current"])),
   pr: numericArg("--pr"),
   filesTouched: listArg("--files"),
   checksRun: listArg("--checks"),
   checksPassed: boolArg("--passed"),
   blockers: listArg("--blockers"),
   handoff: argValue("--handoff") || "",
-  writtenAt: now.toISOString(),
+  writtenAt: now.toISOString()
 };
 
 const path = join(runDir, `${stage}.json`);
@@ -56,7 +56,12 @@ function argValue(name) {
 
 function listArg(name) {
   const value = argValue(name);
-  return value ? value.split(",").map((item) => item.trim()).filter(Boolean) : [];
+  return value
+    ? value
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean)
+    : [];
 }
 
 function numericArg(name) {

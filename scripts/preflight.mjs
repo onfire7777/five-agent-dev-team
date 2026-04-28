@@ -22,7 +22,9 @@ if (control.integrationLock && !allowLock) {
 
 const expiredClaims = (control.claims || []).filter((claim) => Date.parse(claim.expiresAt) <= Date.now());
 if (expiredClaims.length) {
-  throw new Error(`preflight refused for ${stage}: ${expiredClaims.length} expired claim(s) require Captain/Janitor review`);
+  throw new Error(
+    `preflight refused for ${stage}: ${expiredClaims.length} expired claim(s) require Captain/Janitor review`
+  );
 }
 
 verifySpecHashes(control.specHashes || {});
@@ -40,21 +42,29 @@ if (behind > 0 && !allowBehind) {
   throw new Error(`preflight refused for ${stage}: branch is behind origin/main by ${behind} commit(s)`);
 }
 
-console.log(JSON.stringify({ stage, paused: Boolean(control.paused), lock: null, activeClaims: (control.claims || []).length, ahead, behind }, null, 2));
+console.log(
+  JSON.stringify(
+    { stage, paused: Boolean(control.paused), lock: null, activeClaims: (control.claims || []).length, ahead, behind },
+    null,
+    2
+  )
+);
 
 function verifySpecHashes(expected) {
   const files = {
     buildSpec: join(stateRoot, "specs", "five-agent-dev-team.md"),
     automationGuide: join(stateRoot, "specs", "five-agent-dev-team-automation-team.md"),
     swarmState: join(stateRoot, "state", "five-agent-dev-team-swarm.md"),
-    queue: join(stateRoot, "state", "five-agent-dev-team-queue.json"),
+    queue: join(stateRoot, "state", "five-agent-dev-team-queue.json")
   };
 
   for (const [key, file] of Object.entries(files)) {
     if (!expected[key] || !existsSync(file)) continue;
     const actual = `sha256:${createHash("sha256").update(readFileSync(file)).digest("hex")}`;
     if (actual !== expected[key]) {
-      throw new Error(`preflight refused for ${stage}: ${key} hash drift; run node scripts/spec-hash.mjs --write after intentional state/spec updates`);
+      throw new Error(
+        `preflight refused for ${stage}: ${key} hash drift; run node scripts/spec-hash.mjs --write after intentional state/spec updates`
+      );
     }
   }
 }

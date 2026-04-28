@@ -34,7 +34,10 @@ function clearGitHubEnv(): void {
 
 describe("github auth helpers", () => {
   beforeEach(() => {
-    process.env.AGENT_TEAM_GITHUB_AUTH_FILE = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "agent-team-auth-")), "github-auth.json");
+    process.env.AGENT_TEAM_GITHUB_AUTH_FILE = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), "agent-team-auth-")),
+      "github-auth.json"
+    );
     clearGitHubEnv();
   });
 
@@ -116,11 +119,13 @@ describe("github auth helpers", () => {
       login: "octo"
     });
 
-    expect(githubAuthEnv({
-      GIT_CONFIG_COUNT: "1",
-      GIT_CONFIG_KEY_0: "safe.directory",
-      GIT_CONFIG_VALUE_0: "*"
-    } as NodeJS.ProcessEnv)).toMatchObject({
+    expect(
+      githubAuthEnv({
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "safe.directory",
+        GIT_CONFIG_VALUE_0: "*"
+      } as NodeJS.ProcessEnv)
+    ).toMatchObject({
       GIT_CONFIG_COUNT: "4",
       GIT_CONFIG_KEY_0: "safe.directory",
       GIT_CONFIG_VALUE_0: "*",

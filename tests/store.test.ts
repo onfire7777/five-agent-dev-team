@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MemoryStore } from "../apps/controller/src/store";
-import type { MemoryRecord, StageArtifact } from "../packages/shared/src";
+import { StageArtifactSchema, type MemoryRecord, type StageArtifact } from "../packages/shared/src";
 
 describe("controller store workflow claims", () => {
   it("prevents duplicate workflow claims for the same item", async () => {
@@ -108,18 +108,20 @@ describe("controller store workflow claims", () => {
     expect(workItem.projectId).toBe("owner-repo-b");
     expect(workItem.repo).toBe("owner/repo-b");
     expect(workItem.acceptanceCriteria).toEqual(["B only"]);
-    await expect(store.createWorkItem({
-      title: "Unknown repo",
-      requestType: "feature",
-      priority: "medium",
-      dependencies: [],
-      acceptanceCriteria: [],
-      riskLevel: "medium",
-      frontendNeeded: true,
-      backendNeeded: true,
-      rndNeeded: true,
-      projectId: "missing"
-    })).rejects.toThrow(/Connected project was not found/);
+    await expect(
+      store.createWorkItem({
+        title: "Unknown repo",
+        requestType: "feature",
+        priority: "medium",
+        dependencies: [],
+        acceptanceCriteria: [],
+        riskLevel: "medium",
+        frontendNeeded: true,
+        backendNeeded: true,
+        rndNeeded: true,
+        projectId: "missing"
+      })
+    ).rejects.toThrow(/Connected project was not found/);
   });
 
   it("scopes repo and global memory when listing memories for a work item", async () => {
@@ -162,6 +164,69 @@ describe("controller store workflow claims", () => {
     expect(memories.map((memory) => memory.id).sort()).toEqual(["same-repo", "same-work"]);
   });
 
+  it("retrieves work item artifacts by work item and artifact id", async () => {
+    const store = new MemoryStore();
+    const workItem = await store.createWorkItem({
+      title: "Artifact lookup",
+      requestType: "feature",
+      priority: "medium",
+      dependencies: [],
+      acceptanceCriteria: [],
+      riskLevel: "medium",
+      frontendNeeded: true,
+      backendNeeded: false,
+      rndNeeded: false,
+      projectId: "project-a",
+      repo: "owner/repo-a"
+    });
+    const artifact = StageArtifactSchema.parse({
+      artifactId: "artifact-lookup-1",
+      artifactKind: "BackendImplSummary",
+      workItemId: workItem.id,
+      projectId: "project-a",
+      repo: "owner/repo-a",
+      stage: "BACKEND_BUILD",
+      ownerAgent: "backend-systems-engineering",
+      status: "passed",
+      title: "Backend implementation summary",
+      summary: "Lookup endpoints implemented.",
+      nextStage: "VERIFY",
+      bodyJson: {
+        workItemId: workItem.id,
+        projectId: "project-a",
+        apiChanges: ["GET /api/work-items/:id", "GET /api/artifacts/:id"]
+      },
+      createdAt: new Date().toISOString()
+    });
+
+    await store.addArtifact(artifact);
+
+    await expect(store.getArtifact("artifact-lookup-1")).resolves.toMatchObject({
+      artifactId: "artifact-lookup-1",
+      workItemId: workItem.id
+    });
+    await expect(store.getWorkItemWithArtifacts(workItem.id)).resolves.toMatchObject({
+      workItem: { id: workItem.id },
+      artifacts: [{ artifactId: "artifact-lookup-1" }]
+    });
+  });
+
+  it("deactivates connected projects without deleting historical work", async () => {
+    const store = new MemoryStore();
+    const project = await store.upsertProjectConnection({
+      repoOwner: "owner",
+      repoName: "repo-a",
+      localPath: "C:/repos/a",
+      active: true
+    });
+
+    const deactivated = await store.deactivateProjectConnection(project.id);
+
+    expect(deactivated.active).toBe(false);
+    expect((await store.listProjectConnections()).find((item) => item.id === project.id)?.active).toBe(false);
+    await expect(store.deactivateProjectConnection("missing")).rejects.toThrow(/not found/);
+  });
+
   it("makes the latest closed loop memory available to the next work item in the same repo", async () => {
     const store = new MemoryStore();
     const first = await store.createWorkItem({
@@ -179,6 +244,8 @@ describe("controller store workflow claims", () => {
     });
     const now = new Date().toISOString();
     const closure: StageArtifact = {
+      artifactId: "loop-closure-first",
+      artifactKind: "LoopClosureSummary",
       workItemId: first.id,
       projectId: "project-a",
       repo: "owner/repo-a",
@@ -193,6 +260,16 @@ describe("controller store workflow claims", () => {
       testsRun: ["git-sync:passed"],
       releaseReadiness: "ready",
       nextStage: null,
+      promptHash: "test-prompt",
+      skillIds: ["handoff-discipline"],
+      capabilityIds: [],
+      bodyJson: {
+        loopRunId: "test-loop",
+        workItemId: first.id,
+        projectId: "project-a",
+        repo: "owner/repo-a",
+        status: "closed"
+      },
       createdAt: now
     };
     await store.addArtifact(closure);
@@ -211,6 +288,8 @@ describe("controller store workflow claims", () => {
     });
 
     const memories = await store.listMemories(second.id);
-    expect(memories.some((memory) => memory.tags.includes("latest-loop") && memory.content.includes("Loop complete"))).toBe(true);
+    expect(
+      memories.some((memory) => memory.tags.includes("latest-loop") && memory.content.includes("Loop complete"))
+    ).toBe(true);
   });
 });

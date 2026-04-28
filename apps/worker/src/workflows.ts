@@ -36,12 +36,14 @@ export async function autonomousDevelopmentWorkflow(workItem: WorkItem) {
   try {
     const artifacts: StageArtifact[] = [];
     const append = (...items: Array<StageArtifact | null | undefined>) => {
-      artifacts.push(...items.filter(Boolean) as StageArtifact[]);
+      artifacts.push(...(items.filter(Boolean) as StageArtifact[]));
     };
     const blockAndClose = async () => {
       const blocker = artifacts[artifacts.length - 1];
       if (blocker?.stage !== "BLOCKED") {
-        append(await activity.runAgentStage({ workItem, stage: "BLOCKED", previousArtifacts: blocker ? [blocker] : [] }));
+        append(
+          await activity.runAgentStage({ workItem, stage: "BLOCKED", previousArtifacts: blocker ? [blocker] : [] })
+        );
       }
       const closure = await activity.closeWorkLoop(workItem, artifacts);
       return {
@@ -109,11 +111,13 @@ export async function autonomousDevelopmentWorkflow(workItem: WorkItem) {
           if (proposalDecisionArtifact.nextStage === "RND") {
             proposalDecision = null;
             if (proposalAttempts >= 3) {
-              append(await activity.runAgentStage({
-                workItem,
-                stage: "BLOCKED",
-                previousArtifacts: [proposalDecisionArtifact]
-              }));
+              append(
+                await activity.runAgentStage({
+                  workItem,
+                  stage: "BLOCKED",
+                  previousArtifacts: [proposalDecisionArtifact]
+                })
+              );
               return blockAndClose();
             }
             const revisedRnd = await activity.runAgentStage({
@@ -209,9 +213,7 @@ export async function autonomousDevelopmentWorkflow(workItem: WorkItem) {
 }
 
 function isBlockingArtifact(artifact: StageArtifact | null | undefined): boolean {
-  return Boolean(artifact && (
-    artifact.status === "blocked" ||
-    artifact.status === "failed" ||
-    artifact.nextStage === "BLOCKED"
-  ));
+  return Boolean(
+    artifact && (artifact.status === "blocked" || artifact.status === "failed" || artifact.nextStage === "BLOCKED")
+  );
 }

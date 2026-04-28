@@ -1,6 +1,6 @@
 import { run, runNpmScript } from "./verify-lib.mjs";
 
-await run("npm", ["ci"]);
+await run("npm", ["ci", "--include=dev"]);
 await runNpmScript("check");
 await runNpmScript("audit:security");
 await run("git", ["diff", "--check"]);

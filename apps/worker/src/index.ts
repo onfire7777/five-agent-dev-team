@@ -20,7 +20,7 @@ async function connectToTemporal(address: string): Promise<NativeConnection> {
 }
 
 async function main() {
-  const address = process.env.TEMPORAL_ADDRESS || "localhost:7233";
+  const address = process.env.TEMPORAL_ADDRESS || "127.0.0.1:7233";
   const connection = await connectToTemporal(address);
   const readyFile = process.env.WORKER_READY_FILE || "/tmp/agent-team-worker-ready";
   let readyTimer: NodeJS.Timeout | null = null;
@@ -44,7 +44,9 @@ async function main() {
   console.log(`AI Dev Team worker listening on Temporal task queue ${process.env.TEMPORAL_TASK_QUEUE || "agent-team"}`);
   await markReady();
   readyTimer = setInterval(() => {
-    markReady().catch((error) => console.warn(`Worker readiness heartbeat failed: ${error instanceof Error ? error.message : String(error)}`));
+    markReady().catch((error) =>
+      console.warn(`Worker readiness heartbeat failed: ${error instanceof Error ? error.message : String(error)}`)
+    );
   }, 5000);
   process.once("SIGINT", () => {
     cleanupReadyFile().finally(() => process.exit(130));
