@@ -83,7 +83,8 @@ renameSync(tempPath, receiptPath);
 const ledgerPath = join(stateDir, "five-agent-dev-team-ledger.ndjson");
 appendFileSync(ledgerPath, `${JSON.stringify(receipt)}\n`);
 
-console.log(JSON.stringify({ receipt: receiptPath, mode, stage: stageInfo.id }, null, 2));
+const receiptRef = `runs/${cycleId}/${stageInfo.id}.json`;
+console.log(JSON.stringify({ receipt: receiptRef, mode, stage: stageInfo.id }, null, 2));
 
 async function maybeGit(args) {
   try {
