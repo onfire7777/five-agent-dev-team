@@ -153,6 +153,7 @@ const EmergencyControlRequest = z.object({
 const app = express();
 const store = createStore();
 const port = Number(process.env.PORT || 4310);
+const host = process.env.HOST || "127.0.0.1";
 const execFile = util.promisify(childProcess.execFile);
 const githubDeviceSessions = new Map<
   string,
@@ -1819,7 +1820,7 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
 
 store.init().then(() => {
   startSmartScheduler(store);
-  app.listen(port, "127.0.0.1", () => {
-    console.log(`AI Dev Team controller listening on http://127.0.0.1:${port}`);
+  app.listen(port, host, () => {
+    console.log(`AI Dev Team controller listening on http://${host}:${port}`);
   });
 });
