@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_RELEASE_COMMAND,
   buildSharedContext,
   createSampleWorkItems,
   loadRepoContextMemories,
@@ -33,7 +34,7 @@ function configFor(repoPath: string): TargetRepoConfig {
       test: "npm test",
       build: "npm run build",
       security: "npm audit --audit-level=high",
-      release: 'gh release create "$AGENT_RELEASE_TAG" --notes-file release/notes.md --verify-tag'
+      release: DEFAULT_RELEASE_COMMAND
     },
     context: {
       includeDefaultContextDir: true,

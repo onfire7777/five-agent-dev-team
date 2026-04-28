@@ -22,6 +22,7 @@ import { checkTemporalConnection, signalProposalDecision, startAutonomousWorkflo
 import { startSmartScheduler } from "./scheduler";
 import {
   canTransition,
+  EmergencyControlRequestSchema,
   ProjectCapabilityStatusSchema,
   ProjectConnectionInputSchema,
   WorkItemStateSchema,
@@ -143,11 +144,6 @@ const DirectionAliasRequest = z.object({
 
 const WorkItemProposalDecisionRequest = z.object({
   feedback: z.string().optional()
-});
-
-const EmergencyControlRequest = z.object({
-  scope: z.string().min(1).default("global"),
-  reason: z.string().trim().min(1)
 });
 
 const app = express();
@@ -1777,7 +1773,7 @@ async function requireConnectedProjectForWork(input: z.infer<typeof CreateWorkIt
 
 app.post("/api/emergency-stop", async (req, res, next) => {
   try {
-    const input = EmergencyControlRequest.parse(req.body);
+    const input = EmergencyControlRequestSchema.parse(req.body);
     await store.setEmergencyStop(true, `[${input.scope}] ${input.reason}`);
     res.json({ emergencyStop: true, scope: input.scope, reason: input.reason });
   } catch (error) {
@@ -1787,7 +1783,7 @@ app.post("/api/emergency-stop", async (req, res, next) => {
 
 app.post("/api/emergency-resume", async (req, res, next) => {
   try {
-    const input = EmergencyControlRequest.parse(req.body);
+    const input = EmergencyControlRequestSchema.parse(req.body);
     await store.setEmergencyStop(false);
     res.json({ emergencyStop: false, scope: input.scope, reason: input.reason });
   } catch (error) {

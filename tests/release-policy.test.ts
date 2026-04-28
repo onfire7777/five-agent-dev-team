@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { evaluateReleasePolicy, type TargetRepoConfig, type VerificationSignal } from "../packages/shared/src";
+import {
+  DEFAULT_RELEASE_COMMAND,
+  evaluateReleasePolicy,
+  type TargetRepoConfig,
+  type VerificationSignal
+} from "../packages/shared/src";
 
 const config: TargetRepoConfig = {
   project: {
@@ -22,7 +27,7 @@ const config: TargetRepoConfig = {
     test: "npm test",
     build: "npm run build",
     security: "npm audit --audit-level=high",
-    release: 'gh release create "$AGENT_RELEASE_TAG" --notes-file release/notes.md --verify-tag'
+    release: DEFAULT_RELEASE_COMMAND
   },
   context: {
     includeDefaultContextDir: true,

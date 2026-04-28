@@ -8,7 +8,12 @@ import {
   mergePluginContributions,
   parseLifecycleCommand
 } from "../packages/agents/src";
-import { type AgentTeamPlugin, TargetRepoConfigSchema, type TargetRepoConfig } from "../packages/shared/src";
+import {
+  DEFAULT_RELEASE_COMMAND,
+  type AgentTeamPlugin,
+  TargetRepoConfigSchema,
+  type TargetRepoConfig
+} from "../packages/shared/src";
 
 function configWithPlugins(plugins: AgentTeamPlugin[], localPath = process.cwd()): TargetRepoConfig {
   return TargetRepoConfigSchema.parse({
@@ -33,7 +38,7 @@ function configWithPlugins(plugins: AgentTeamPlugin[], localPath = process.cwd()
       test: "npm test",
       build: "npm run build",
       security: "npm audit --audit-level=high",
-      release: 'gh release create "$AGENT_RELEASE_TAG" --notes-file release/notes.md --verify-tag'
+      release: DEFAULT_RELEASE_COMMAND
     },
     context: {
       includeDefaultContextDir: true,

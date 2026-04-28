@@ -9,6 +9,9 @@ import {
 } from "./schemas";
 import { projectIdForConfig, repoKeyForConfig } from "./context";
 
+export const DEFAULT_RELEASE_COMMAND =
+  'gh release create "$AGENT_RELEASE_TAG" --title "$AGENT_RELEASE_TAG" --generate-notes';
+
 export function loadTargetRepoConfig(path = "agent-team.config.yaml"): TargetRepoConfig {
   const raw = fs.readFileSync(path, "utf8");
   return TargetRepoConfigSchema.parse(YAML.parse(raw));
@@ -40,7 +43,7 @@ export function targetRepoConfigFromProjectConnection(project: ProjectConnection
       test: "npm test --if-present",
       build: "npm run build --if-present",
       security: "npm audit --audit-level=high",
-      release: `gh release create "$AGENT_RELEASE_TAG" --notes-file release/notes.md --verify-tag`
+      release: DEFAULT_RELEASE_COMMAND
     },
     context: {
       includeDefaultContextDir: true,

@@ -2,7 +2,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { StageArtifact, TargetRepoConfig, WorkItem } from "../packages/shared/src";
+import type { AgentEvent, ProjectConnection, StageArtifact, TargetRepoConfig, WorkItem } from "../packages/shared/src";
+import type {
+  ControllerStore,
+  Direction,
+  LoopRun,
+  Opportunity,
+  Proposal,
+  StrictProjectScope,
+  TeamBusMessage
+} from "../apps/controller/src/store";
 
 const envKeys = [
   "AGENT_TEAM_CONFIG",
@@ -181,9 +190,14 @@ async function loadActivities(store: ReturnType<typeof fakeStore>) {
   return import("../apps/worker/src/activities.js");
 }
 
-function fakeStore() {
+type FakeStore = ControllerStore & {
+  updatedStates: Array<{ id: string; state: string }>;
+};
+
+function fakeStore(): FakeStore {
+  const updatedStates: Array<{ id: string; state: string }> = [];
   return {
-    updatedStates: [] as Array<{ id: string; state: string }>,
+    updatedStates,
     async init() {},
     async getStatus() {
       return {
@@ -191,16 +205,239 @@ function fakeStore() {
           emergencyStop: false,
           emergencyReason: ""
         }
+      } as Awaited<ReturnType<ControllerStore["getStatus"]>>;
+    },
+    async listWorkItems() {
+      return [];
+    },
+    async getWorkItemWithArtifacts() {
+      return null;
+    },
+    async createWorkItem(input) {
+      const now = new Date().toISOString();
+      return {
+        id: "WI-FAKE",
+        projectId: input.projectId,
+        repo: input.repo,
+        title: input.title,
+        requestType: input.requestType,
+        priority: input.priority,
+        state: "NEW",
+        dependencies: input.dependencies,
+        acceptanceCriteria: input.acceptanceCriteria,
+        riskLevel: input.riskLevel,
+        frontendNeeded: input.frontendNeeded,
+        backendNeeded: input.backendNeeded,
+        rndNeeded: input.rndNeeded,
+        createdAt: now,
+        updatedAt: now
       };
     },
     async listProjectConnections() {
       return [];
     },
     async addArtifact() {},
-    async addEvent() {},
+    async getArtifact() {
+      return null;
+    },
+    async addEvent(event) {
+      return {
+        sequence: event.sequence ?? 0,
+        workItemId: event.workItemId,
+        stage: event.stage,
+        ownerAgent: event.ownerAgent,
+        level: event.level ?? "info",
+        type: event.type,
+        message: event.message,
+        createdAt: event.createdAt ?? new Date().toISOString()
+      } satisfies AgentEvent;
+    },
+    async listEvents() {
+      return [];
+    },
+    async listMemories() {
+      return [];
+    },
+    async addMemories() {},
+    async upsertProjectConnection() {
+      return fakeProjectConnection();
+    },
+    async activateProjectConnection() {
+      return fakeProjectConnection();
+    },
+    async deactivateProjectConnection() {
+      return fakeProjectConnection({ active: false });
+    },
+    async listTeamBusMessages() {
+      return [];
+    },
+    async addTeamBusMessage(scope, input) {
+      return {
+        id: input.id || "bus-fake",
+        ...scope,
+        workItemId: input.workItemId,
+        loopRunId: input.loopRunId,
+        from: input.from,
+        to: input.to || [],
+        kind: input.kind,
+        topic: input.topic,
+        body: input.body,
+        payload: input.payload || {},
+        createdAt: new Date().toISOString()
+      } satisfies TeamBusMessage;
+    },
+    async listLoopRuns() {
+      return [];
+    },
+    async upsertLoopRun(scope, input) {
+      const now = new Date().toISOString();
+      return {
+        id: input.id || "loop-fake",
+        ...scope,
+        workItemId: input.workItemId,
+        directionId: input.directionId,
+        opportunityId: input.opportunityId,
+        proposalId: input.proposalId,
+        status: input.status || "running",
+        summary: input.summary || "Fake loop run.",
+        createdAt: now,
+        updatedAt: now,
+        closedAt: input.closedAt
+      } satisfies LoopRun;
+    },
+    async getDirection() {
+      return null;
+    },
+    async upsertDirection(scope, input) {
+      const now = new Date().toISOString();
+      return {
+        id: input.id || "direction-fake",
+        ...scope,
+        title: input.title,
+        summary: input.summary,
+        goals: input.goals || [],
+        constraints: input.constraints || [],
+        acceptanceCriteria: input.acceptanceCriteria || [],
+        createdAt: now,
+        updatedAt: now
+      } satisfies Direction;
+    },
+    async listOpportunities() {
+      return [];
+    },
+    async upsertOpportunity(scope, input) {
+      const now = new Date().toISOString();
+      return {
+        id: input.id || "opportunity-fake",
+        ...scope,
+        workItemId: input.workItemId,
+        title: input.title,
+        summary: input.summary,
+        source: input.source || "system",
+        priority: input.priority || "medium",
+        status: input.status || "new",
+        tags: input.tags || [],
+        createdAt: now,
+        updatedAt: now
+      } satisfies Opportunity;
+    },
+    async listProposals() {
+      return [];
+    },
+    async upsertProposal(scope, input) {
+      return fakeProposal(scope, input);
+    },
+    async decideProposal(scope, proposalId, input) {
+      return {
+        ...fakeProposal(scope, {
+          id: proposalId,
+          title: "Fake proposal",
+          summary: "Fake proposal.",
+          recommendation: "Proceed."
+        }),
+        status: input.decision === "reject" ? "rejected" : input.decision === "revise" ? "revising" : "accepted",
+        decision: {
+          decision: input.decision,
+          decidedBy: input.decidedBy,
+          reason: input.reason,
+          requestedChanges: input.requestedChanges || [],
+          decidedAt: new Date().toISOString()
+        }
+      } satisfies Proposal;
+    },
+    async claimWorkItemForWorkflow() {
+      return true;
+    },
+    async listWorkflowClaims() {
+      return [];
+    },
+    async releaseWorkItemWorkflowClaim() {},
+    async setEmergencyStop() {},
     async updateWorkItemState(id: string, state: string) {
-      this.updatedStates.push({ id, state });
+      updatedStates.push({ id, state });
     }
+  };
+}
+
+function fakeProjectConnection(overrides: Partial<ProjectConnection> = {}): ProjectConnection {
+  const now = new Date().toISOString();
+  return {
+    id: "fake-project",
+    projectId: "owner-repo",
+    name: "Fake Project",
+    repo: "owner/repo",
+    repoOwner: "owner",
+    repoName: "repo",
+    defaultBranch: "main",
+    localPath: process.cwd(),
+    githubUrl: undefined,
+    webResearchEnabled: true,
+    githubMcpEnabled: true,
+    githubWriteEnabled: false,
+    active: true,
+    memoryNamespace: "owner-repo",
+    contextDir: ".agent-team/context",
+    status: "connected",
+    ghAvailable: false,
+    ghAuthed: false,
+    githubMcpAvailable: false,
+    githubMcpAuthenticated: false,
+    githubSdkConnected: false,
+    githubConnected: false,
+    remoteMatches: false,
+    defaultBranchVerified: false,
+    capabilities: [],
+    validationErrors: [],
+    createdAt: now,
+    updatedAt: now,
+    ...overrides
+  };
+}
+
+function fakeProposal(
+  scope: StrictProjectScope,
+  input: Pick<Proposal, "title" | "summary" | "recommendation"> & Partial<Proposal>
+): Proposal {
+  const now = new Date().toISOString();
+  return {
+    id: input.id || "proposal-fake",
+    ...scope,
+    workItemId: input.workItemId,
+    loopRunId: input.loopRunId,
+    opportunityId: input.opportunityId,
+    title: input.title,
+    summary: input.summary,
+    researchFindings: input.researchFindings || [],
+    options: input.options || [],
+    recommendation: input.recommendation,
+    acceptanceCriteria: input.acceptanceCriteria || [],
+    implementationPlan: input.implementationPlan || [],
+    validationPlan: input.validationPlan || [],
+    risks: input.risks || [],
+    status: input.status || "draft",
+    decision: input.decision,
+    createdAt: now,
+    updatedAt: now
   };
 }
 

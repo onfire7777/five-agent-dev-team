@@ -10,6 +10,7 @@ import {
   projectIdForConfig,
   scopeWorkItemToProject,
   selectRelevantMemories,
+  DEFAULT_RELEASE_COMMAND,
   ReleasePacketSchema,
   StageArtifactSchema,
   targetConfigMatchesWorkItem,
@@ -1263,7 +1264,7 @@ function createDefaultReleaseConfig(): TargetRepoConfig {
       test: "npm test --if-present",
       build: "npm run build --if-present",
       security: "npm audit --audit-level=high",
-      release: 'gh release create "$AGENT_RELEASE_TAG" --notes-file release/notes.md --verify-tag'
+      release: DEFAULT_RELEASE_COMMAND
     },
     context: {
       includeDefaultContextDir: true,
