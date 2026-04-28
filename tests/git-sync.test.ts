@@ -3,12 +3,14 @@ import { evaluateGitSync } from "../packages/shared/src";
 
 describe("local/remote sync", () => {
   it("passes when local and remote are clean and aligned", () => {
-    expect(evaluateGitSync({
-      cleanWorktree: true,
-      ahead: 0,
-      behind: 0,
-      duplicateAutomationBranches: 0
-    })).toEqual({ synced: true, reasons: [] });
+    expect(
+      evaluateGitSync({
+        cleanWorktree: true,
+        ahead: 0,
+        behind: 0,
+        duplicateAutomationBranches: 0
+      })
+    ).toEqual({ synced: true, reasons: [] });
   });
 
   it("reports every sync blocker", () => {

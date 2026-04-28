@@ -25,7 +25,7 @@ commands:
   test: npm test
   build: npm run build
   security: npm audit --audit-level=high
-  release: gh workflow run agent-release.yml --ref main
+  release: gh release create "$AGENT_RELEASE_TAG" --notes-file release/notes.md --verify-tag
 context:
   # Lean AutoMaker-inspired context packs. Put only durable repo rules here:
   # architecture decisions, command conventions, safety rules, and recurring gotchas.
@@ -47,7 +47,7 @@ integrations:
     preferredAutomation: playwright_test
     # appPath: apps/desktop
     # launchCommand: npm run electron:dev
-    # devServerUrl: http://localhost:5173
+    # devServerUrl: http://127.0.0.1:5173
     # debugPort: 9222
     # testCommand: npm run test:electron
     artifactsDir: .agent-team/artifacts/electron

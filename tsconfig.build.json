@@ -1,14 +1,5 @@
 {
   "extends": "./tsconfig.json",
-  "include": [
-    "apps/**/*.ts",
-    "apps/**/*.tsx",
-    "packages/**/*.ts"
-  ],
-  "exclude": [
-    "dist",
-    "node_modules",
-    "tests",
-    "apps/dashboard/vite.config.ts"
-  ]
+  "include": ["apps/**/*.ts", "apps/**/*.tsx", "packages/**/*.ts"],
+  "exclude": ["dist", "node_modules", "tests", "apps/dashboard/vite.config.ts"]
 }

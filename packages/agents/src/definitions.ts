@@ -19,7 +19,13 @@ export const AGENT_DEFINITIONS: AgentDefinition[] = [
     shortName: "Product",
     owns: ["Intake", "Priority", "Scope", "Acceptance criteria", "Routing", "Final summary"],
     doesNotOwn: ["Technical architecture", "Implementation", "Independent release approval"],
-    requiredOutputs: ["Work Item Brief", "Routing Plan", "Delivery Status", "Final Work Summary", "Follow-up Work Items"],
+    requiredOutputs: [
+      "Work Item Brief",
+      "Routing Plan",
+      "Delivery Status",
+      "Final Work Summary",
+      "Follow-up Work Items"
+    ],
     primaryStages: ["INTAKE", "CLOSED"],
     proposalInstructions: [
       "Before downstream agents act, propose the smallest bounded loop that satisfies the user goal.",
@@ -40,7 +46,13 @@ export const AGENT_DEFINITIONS: AgentDefinition[] = [
     shortName: "R&D",
     owns: ["Research", "Feasibility", "Architecture options", "Prototype plan", "ADR", "Implementation strategy"],
     doesNotOwn: ["Product priority", "Production code ownership", "Release approval"],
-    requiredOutputs: ["Research Brief", "Technical Options Analysis", "Recommended Architecture", "ADR", "Implementation Strategy"],
+    requiredOutputs: [
+      "Research Brief",
+      "Technical Options Analysis",
+      "Recommended Architecture",
+      "ADR",
+      "Implementation Strategy"
+    ],
     primaryStages: ["RND", "CONTRACT"],
     proposalInstructions: [
       "Before implementation, propose the technical contract the builders should follow.",
@@ -61,7 +73,13 @@ export const AGENT_DEFINITIONS: AgentDefinition[] = [
     shortName: "Frontend",
     owns: ["User flows", "UI states", "Components", "Accessibility", "Responsive behavior", "Frontend tests"],
     doesNotOwn: ["Product priority", "Backend architecture", "Release approval"],
-    requiredOutputs: ["Frontend Implementation Plan", "UI State Map", "Component Changes", "Accessibility Notes", "Frontend Test Notes"],
+    requiredOutputs: [
+      "Frontend Implementation Plan",
+      "UI State Map",
+      "Component Changes",
+      "Accessibility Notes",
+      "Frontend Test Notes"
+    ],
     primaryStages: ["FRONTEND_BUILD"],
     proposalInstructions: [
       "Before building, propose the user-facing states, component touch points, accessibility checks, and tests.",
@@ -81,7 +99,13 @@ export const AGENT_DEFINITIONS: AgentDefinition[] = [
     shortName: "Backend",
     owns: ["APIs", "Services", "Data models", "Migrations", "Integrations", "Auth implementation", "Backend tests"],
     doesNotOwn: ["Product priority", "UI/UX decisions", "Independent release approval"],
-    requiredOutputs: ["Backend Implementation Plan", "API Contract", "Data Change Summary", "Migration Notes", "Backend Test Notes"],
+    requiredOutputs: [
+      "Backend Implementation Plan",
+      "API Contract",
+      "Data Change Summary",
+      "Migration Notes",
+      "Backend Test Notes"
+    ],
     primaryStages: ["BACKEND_BUILD", "INTEGRATION"],
     proposalInstructions: [
       "Before building or integrating, propose the API/data/service changes and how they compose with teammate work.",
@@ -99,9 +123,25 @@ export const AGENT_DEFINITIONS: AgentDefinition[] = [
     role: "quality-security-privacy-release",
     displayName: "Quality, Security, Privacy & Release Agent",
     shortName: "Quality",
-    owns: ["Verification", "Regression testing", "Performance", "Security review", "Privacy review", "Rollback plan", "Go/no-go"],
+    owns: [
+      "Verification",
+      "Regression testing",
+      "Performance",
+      "Security review",
+      "Privacy review",
+      "Rollback plan",
+      "Go/no-go"
+    ],
     doesNotOwn: ["Product scope", "Main implementation", "Architecture invention"],
-    requiredOutputs: ["Test Plan", "Verification Report", "Security Review", "Privacy Review", "Release Checklist", "Rollback Plan", "Go/No-Go"],
+    requiredOutputs: [
+      "Test Plan",
+      "Verification Report",
+      "Security Review",
+      "Privacy Review",
+      "Release Checklist",
+      "Rollback Plan",
+      "Go/No-Go"
+    ],
     primaryStages: ["VERIFY", "RELEASE", "BLOCKED"],
     proposalInstructions: [
       "Before final verification or release, propose the proof plan and release gate sequence.",

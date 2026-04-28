@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildSharedContext, createSampleArtifacts, createSampleWorkItems, formatSharedContext, type MemoryRecord } from "../packages/shared/src";
+import {
+  buildSharedContext,
+  createSampleArtifacts,
+  createSampleWorkItems,
+  formatSharedContext,
+  type MemoryRecord
+} from "../packages/shared/src";
 
 describe("shared team context", () => {
   it("builds teammate and research awareness from prior artifacts", () => {

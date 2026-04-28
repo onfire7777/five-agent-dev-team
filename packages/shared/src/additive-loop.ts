@@ -26,10 +26,11 @@ export function createInMemoryTeamBus() {
       return parsed;
     },
     async listMessages(scope: Scope): Promise<AgentMessage[]> {
-      return messages.filter((message) =>
-        message.projectId === scope.projectId &&
-        message.repo === scope.repo &&
-        (!scope.loopRunId || message.loopRunId === scope.loopRunId)
+      return messages.filter(
+        (message) =>
+          message.projectId === scope.projectId &&
+          message.repo === scope.repo &&
+          (!scope.loopRunId || message.loopRunId === scope.loopRunId)
       );
     }
   };
@@ -76,10 +77,8 @@ export function createInMemoryDirectionStore() {
       return parsed;
     },
     async listActiveDirections(scope: { projectId: string; repo: string }): Promise<ProjectDirection[]> {
-      return [...directions.values()].filter((direction) =>
-        direction.projectId === scope.projectId &&
-        direction.repo === scope.repo &&
-        direction.active
+      return [...directions.values()].filter(
+        (direction) => direction.projectId === scope.projectId && direction.repo === scope.repo && direction.active
       );
     },
     async markDirectionConsumed(id: string, consumedAt: string): Promise<ProjectDirection> {
@@ -103,23 +102,16 @@ export function scoreOpportunityCandidate(candidate: unknown): number {
   const confidence = boundedScore(value.confidence, 3);
   const urgency = boundedScore(value.urgency, 3);
   const implementationSize = boundedScore(value.implementationSize, 3);
-  return Math.max(1, Math.min(100, Math.round(
-    impact * 20 +
-    confidence * 12 +
-    urgency * 10 -
-    implementationSize * 7
-  )));
+  return Math.max(1, Math.min(100, Math.round(impact * 20 + confidence * 12 + urgency * 10 - implementationSize * 7)));
 }
 
 export function dedupeOpportunityCandidates(candidates: unknown[]): OpportunityCandidate[] {
   const parsed = candidates.map((candidate) => OpportunityCandidateSchema.parse(candidate));
   const groups = new Map<string, OpportunityCandidate[]>();
   for (const candidate of parsed) {
-    const key = [
-      candidate.projectId,
-      candidate.repo,
-      candidate.duplicateKey || candidate.title.toLowerCase()
-    ].join("::");
+    const key = [candidate.projectId, candidate.repo, candidate.duplicateKey || candidate.title.toLowerCase()].join(
+      "::"
+    );
     groups.set(key, [...(groups.get(key) || []), candidate]);
   }
 
@@ -142,8 +134,16 @@ export function evaluateProposalAcceptancePolicy(proposal: unknown, context: unk
   const lowRisk = parsed.riskLevel === "low" || parsed.risks.length === 0;
   const autoAccept = parsed.autoAcceptEligible && lowRisk && ctx.githubWriteEnabled !== true;
   return autoAccept
-    ? { decision: "auto_accept", status: "auto_accepted", reason: "Low-risk proposal is eligible for policy auto-accept." }
-    : { decision: "await_human", status: "awaiting_acceptance", reason: "Proposal requires explicit acceptance before build." };
+    ? {
+        decision: "auto_accept",
+        status: "auto_accepted",
+        reason: "Low-risk proposal is eligible for policy auto-accept."
+      }
+    : {
+        decision: "await_human",
+        status: "awaiting_acceptance",
+        reason: "Proposal requires explicit acceptance before build."
+      };
 }
 
 export function applyProposalAcceptanceDecision(input: unknown): {
@@ -161,7 +161,9 @@ export function applyProposalAcceptanceDecision(input: unknown): {
   const workItem = WorkItemSchema.parse(value.workItem);
   const proposal = ProposalArtifactSchema.parse(value.proposal);
   const rawDecision = value.decision as Record<string, unknown>;
-  const fallbackTime = String(rawDecision.createdAt || proposal.updatedAt || workItem.updatedAt || new Date().toISOString());
+  const fallbackTime = String(
+    rawDecision.createdAt || proposal.updatedAt || workItem.updatedAt || new Date().toISOString()
+  );
   const loopRun = LoopRunSchema.parse({
     createdAt: fallbackTime,
     updatedAt: fallbackTime,
@@ -173,8 +175,16 @@ export function applyProposalAcceptanceDecision(input: unknown): {
   const decisionName = String(rawDecision.decision || "");
   if (decisionName === "request_acceptance") {
     return {
-      workItem: WorkItemSchema.parse({ ...workItem, state: "AWAITING_ACCEPTANCE", updatedAt: rawDecision.createdAt || workItem.updatedAt }),
-      proposal: ProposalArtifactSchema.parse({ ...proposal, status: "awaiting_acceptance", updatedAt: rawDecision.createdAt || proposal.updatedAt }),
+      workItem: WorkItemSchema.parse({
+        ...workItem,
+        state: "AWAITING_ACCEPTANCE",
+        updatedAt: rawDecision.createdAt || workItem.updatedAt
+      }),
+      proposal: ProposalArtifactSchema.parse({
+        ...proposal,
+        status: "awaiting_acceptance",
+        updatedAt: rawDecision.createdAt || proposal.updatedAt
+      }),
       loopRun: LoopRunSchema.parse({
         ...loopRun,
         status: "awaiting_acceptance",
@@ -201,8 +211,18 @@ export function applyProposalAcceptanceDecision(input: unknown): {
   if (decision.decision === "accept" || decision.decision === "edit_accept" || decision.decision === "auto_accept") {
     return {
       workItem: WorkItemSchema.parse({ ...workItem, state: "CONTRACT", updatedAt: decision.createdAt }),
-      proposal: ProposalArtifactSchema.parse({ ...proposal, status: decision.decision === "auto_accept" ? "auto_accepted" : "accepted", updatedAt: decision.createdAt }),
-      loopRun: LoopRunSchema.parse({ ...loopRun, status: "running", currentStage: "CONTRACT", blockingReason: undefined, updatedAt: decision.createdAt }),
+      proposal: ProposalArtifactSchema.parse({
+        ...proposal,
+        status: decision.decision === "auto_accept" ? "auto_accepted" : "accepted",
+        updatedAt: decision.createdAt
+      }),
+      loopRun: LoopRunSchema.parse({
+        ...loopRun,
+        status: "running",
+        currentStage: "CONTRACT",
+        blockingReason: undefined,
+        updatedAt: decision.createdAt
+      }),
       decision
     };
   }
@@ -210,8 +230,18 @@ export function applyProposalAcceptanceDecision(input: unknown): {
   if (decision.decision === "request_changes") {
     return {
       workItem: WorkItemSchema.parse({ ...workItem, state: "RND", updatedAt: decision.createdAt }),
-      proposal: ProposalArtifactSchema.parse({ ...proposal, status: "revision_requested", updatedAt: decision.createdAt }),
-      loopRun: LoopRunSchema.parse({ ...loopRun, status: "running", currentStage: "RND", blockingReason: undefined, updatedAt: decision.createdAt }),
+      proposal: ProposalArtifactSchema.parse({
+        ...proposal,
+        status: "revision_requested",
+        updatedAt: decision.createdAt
+      }),
+      loopRun: LoopRunSchema.parse({
+        ...loopRun,
+        status: "running",
+        currentStage: "RND",
+        blockingReason: undefined,
+        updatedAt: decision.createdAt
+      }),
       decision
     };
   }
@@ -219,7 +249,13 @@ export function applyProposalAcceptanceDecision(input: unknown): {
   return {
     workItem: WorkItemSchema.parse({ ...workItem, state: "CLOSED", updatedAt: decision.createdAt }),
     proposal: ProposalArtifactSchema.parse({ ...proposal, status: "rejected", updatedAt: decision.createdAt }),
-    loopRun: LoopRunSchema.parse({ ...loopRun, status: "closed", currentStage: "CLOSED", blockingReason: undefined, updatedAt: decision.createdAt }),
+    loopRun: LoopRunSchema.parse({
+      ...loopRun,
+      status: "closed",
+      currentStage: "CLOSED",
+      blockingReason: undefined,
+      updatedAt: decision.createdAt
+    }),
     decision
   };
 }
