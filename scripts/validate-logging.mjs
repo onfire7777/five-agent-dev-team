@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 
 const CANONICAL_STAGES = new Set([
   "research",
@@ -11,7 +11,7 @@ const CANONICAL_STAGES = new Set([
   "docs-alignment",
   "captain",
   "meta-health",
-  "janitor",
+  "janitor"
 ]);
 const MODES = new Set(["no-op", "mutated", "blocked", "verified", "routed", "merged", "cleanup"]);
 const V1_REQUIRED_KEYS = [
@@ -31,7 +31,7 @@ const V1_REQUIRED_KEYS = [
   "checksPassed",
   "blockers",
   "handoff",
-  "writtenAt",
+  "writtenAt"
 ];
 const strict = process.argv.includes("--strict");
 const verbose = process.argv.includes("--verbose");
@@ -64,7 +64,7 @@ const summary = {
   latestReceipts: receiptSummaries
     .sort((a, b) => b.mtimeMs - a.mtimeMs)
     .slice(0, 12)
-    .map(({ mtimeMs, ...receipt }) => receipt),
+    .map(({ mtimeMs: _mtimeMs, ...receipt }) => receipt)
 };
 
 console.log(JSON.stringify(summary, null, 2));
@@ -128,7 +128,9 @@ function validateRunReceipts() {
       validateReceiptShape(receipt, context, { warnLegacy: true });
       const expectedName = `${receipt.stage}.json`;
       if (CANONICAL_STAGES.has(receipt.stage) && file.name !== expectedName) {
-        warnings.push(`${context} has canonical stage ${receipt.stage} but filename is ${file.name}; expected ${expectedName}`);
+        warnings.push(
+          `${context} has canonical stage ${receipt.stage} but filename is ${file.name}; expected ${expectedName}`
+        );
       }
       if (seenStages.has(receipt.stage)) {
         warnings.push(`${cycleDir} contains more than one receipt for stage ${receipt.stage}`);
@@ -142,7 +144,7 @@ function validateRunReceipts() {
         checksPassed: receipt.checksPassed,
         writtenAt: receipt.writtenAt,
         path,
-        mtimeMs: statSync(path).mtimeMs,
+        mtimeMs: statSync(path).mtimeMs
       });
     }
   }
@@ -150,9 +152,7 @@ function validateRunReceipts() {
 
 function validateReceiptShape(receipt, context, { warnLegacy }) {
   const legacy = receipt.schemaVersion === undefined;
-  const requiredKeys = legacy
-    ? ["cycleId", "stage"]
-    : V1_REQUIRED_KEYS;
+  const requiredKeys = legacy ? ["cycleId", "stage"] : V1_REQUIRED_KEYS;
 
   for (const key of requiredKeys) {
     if (!(key in receipt)) errors.push(`${context} missing ${key}`);
@@ -207,6 +207,6 @@ function stableLedgerKey(entry) {
     checksPassed: entry.checksPassed,
     blockers: entry.blockers,
     handoff: entry.handoff,
-    writtenAt: entry.writtenAt,
+    writtenAt: entry.writtenAt
   });
 }

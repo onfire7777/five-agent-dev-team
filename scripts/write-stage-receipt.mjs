@@ -32,7 +32,7 @@ const STAGES = new Map([
   ["automation-health", { id: "meta-health", order: 7 }],
   ["8", { id: "janitor", order: 8 }],
   ["janitor", { id: "janitor", order: 8 }],
-  ["ops-janitor", { id: "janitor", order: 8 }],
+  ["ops-janitor", { id: "janitor", order: 8 }]
 ]);
 
 const MODES = new Set(["no-op", "mutated", "blocked", "verified", "routed", "merged", "cleanup"]);
@@ -49,14 +49,14 @@ if (!MODES.has(mode)) {
 const stateDir = join(homedir(), ".codex", "state");
 const runDir = join(stateDir, "runs", cycleId);
 mkdirSync(runDir, { recursive: true });
-const localRepo = await maybeGit(["rev-parse", "--show-toplevel"]) || process.cwd();
+const localRepo = (await maybeGit(["rev-parse", "--show-toplevel"])) || process.cwd();
 
 const receipt = {
   schemaVersion: 1,
   project: {
     name: "five-agent-dev-team",
     localRepo,
-    githubRepo: "onfire7777/five-agent-dev-team",
+    githubRepo: "onfire7777/five-agent-dev-team"
   },
   cycleId,
   stage: stageInfo.id,
@@ -97,7 +97,9 @@ function canonicalStage(value) {
   const key = value.trim().toLowerCase();
   const stage = STAGES.get(key);
   if (!stage) {
-    throw new Error(`invalid --stage ${value}; use one of research, backend-core, frontend-ux, quality-debug, security-devops, docs-alignment, captain, meta-health, janitor`);
+    throw new Error(
+      `invalid --stage ${value}; use one of research, backend-core, frontend-ux, quality-debug, security-devops, docs-alignment, captain, meta-health, janitor`
+    );
   }
   return stage;
 }
@@ -118,7 +120,14 @@ function argValue(name) {
 function uniqueListArg(name) {
   const value = argValue(name);
   if (!value) return [];
-  return [...new Set(value.split(",").map((item) => item.trim()).filter(Boolean))];
+  return [
+    ...new Set(
+      value
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean)
+    )
+  ];
 }
 
 function numericArg(name) {
