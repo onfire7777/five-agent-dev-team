@@ -5,5 +5,7 @@ export function canRunWhenControlPaused(stage) {
 }
 
 function normalizeStage(stage) {
-  return String(stage || "").trim().toLowerCase();
+  return String(stage || "")
+    .trim()
+    .toLowerCase();
 }
