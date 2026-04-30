@@ -1,0 +1,123 @@
+name: Codex Queue Item
+description: Create a scored, bounded Codex automation work item.
+title: "[Codex Queue] "
+labels:
+  - agent:queued
+  - execution:codex-cloud
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for native Codex automation work only when the item is bounded, scored, and mapped to the product spec.
+  - type: input
+    id: problem
+    attributes:
+      label: Problem
+      description: What concrete problem should this work solve?
+    validations:
+      required: true
+  - type: textarea
+    id: hypothesis
+    attributes:
+      label: Hypothesis
+      description: Why is this the right next work item?
+    validations:
+      required: true
+  - type: textarea
+    id: product_spec_mapping
+    attributes:
+      label: Product Spec Mapping
+      description: Cite the product spec section or acceptance criterion.
+    validations:
+      required: true
+  - type: textarea
+    id: expected_files
+    attributes:
+      label: Expected Files Or Globs
+      description: List the intended file scope.
+      placeholder: |
+        apps/controller/**
+        packages/shared/**
+    validations:
+      required: true
+  - type: textarea
+    id: non_overlap
+    attributes:
+      label: Non-Overlap Check
+      description: State why this does not conflict with open PRs, claims, or queued work.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance Criteria
+      description: List observable completion criteria.
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification Commands
+      description: Commands expected before review.
+      placeholder: |
+        npm run typecheck
+        npm run lint
+        npm test
+    validations:
+      required: true
+  - type: dropdown
+    id: risk_class
+    attributes:
+      label: Risk Class
+      options:
+        - low
+        - medium
+        - high
+    validations:
+      required: true
+  - type: input
+    id: diff_budget
+    attributes:
+      label: Diff Budget
+      description: Maximum files and net lines.
+      placeholder: "max 6 files, max 300 net lines"
+    validations:
+      required: true
+  - type: textarea
+    id: rollback
+    attributes:
+      label: Rollback Plan
+      description: How to revert safely if this work fails.
+    validations:
+      required: true
+  - type: dropdown
+    id: lane
+    attributes:
+      label: Lane Assignment
+      options:
+        - backend
+        - frontend
+        - quality
+        - security
+        - docs
+    validations:
+      required: true
+  - type: dropdown
+    id: execution_target
+    attributes:
+      label: Execution Target
+      options:
+        - codex-cloud
+        - codex-action
+        - agentic-workflow
+        - local-fallback
+    validations:
+      required: true
+  - type: input
+    id: score
+    attributes:
+      label: Score
+      description: Use the native setup formula. Only queue work scoring at least 22/30.
+      placeholder: "22/30"
+    validations:
+      required: true
