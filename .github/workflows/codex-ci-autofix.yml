@@ -28,17 +28,22 @@ jobs:
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
+      - name: Fail if OPENAI_API_KEY missing
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "OPENAI_API_KEY is required for Codex CI Autofix." >&2
+            exit 1
+          fi
       - name: Run Codex CI autofix
         id: run_codex
-        if: env.OPENAI_API_KEY != ''
-        uses: openai/codex-action@v1
+        uses: openai/codex-action@a26d2d4d8b78a694338b8e3715c3630254340b2c
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           sandbox: workspace-write
@@ -54,7 +59,6 @@ jobs:
             Prefer tests or workflow hardening over speculative rewrites.
             Run the most relevant local checks when possible and summarize exact evidence.
       - name: Verify generated changes
-        if: env.OPENAI_API_KEY != ''
         run: |
           if [ -z "$(git status --porcelain)" ]; then
             echo "Codex produced no file changes."
@@ -66,7 +70,7 @@ jobs:
           npm test
           npm run logs:check
       - name: Create draft PR
-        if: env.OPENAI_API_KEY != '' && inputs.create_draft_pr
+        if: inputs.create_draft_pr
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET: ${{ inputs.target }}
@@ -85,7 +89,7 @@ jobs:
           gh pr create --draft --base main --head "$branch" --title "Codex CI autofix" --body "Target: $TARGET"
       - name: Upload Codex autofix output
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: codex-ci-autofix
           path: codex-output.md
