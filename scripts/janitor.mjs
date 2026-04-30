@@ -1,4 +1,5 @@
-import { statSync } from "node:fs";
+import { existsSync, readdirSync, rmdirSync, statSync } from "node:fs";
+import { dirname } from "node:path";
 import { capture, run } from "./verify-lib.mjs";
 
 const apply = process.argv.includes("--apply");
@@ -27,6 +28,22 @@ for (const tree of worktrees) {
   const stale = !probeError && mtime < cutoff;
   const safe = !probeError && !status && !openPr && stale;
 
+  let removed = false;
+  let emptyResidueRemoved = false;
+  let removeError = null;
+  if (safe && apply) {
+    try {
+      await run("git", ["worktree", "remove", "--force", treePath]);
+      emptyResidueRemoved = removeEmptyDir(treePath);
+      removeEmptyDir(dirname(treePath));
+    } catch (error) {
+      removeError = error instanceof Error ? error.message : String(error);
+      emptyResidueRemoved = removeEmptyDir(treePath);
+      if (emptyResidueRemoved) removeEmptyDir(dirname(treePath));
+    }
+    removed = !existsSync(treePath);
+  }
+
   results.push({
     path: treePath,
     branch,
@@ -36,11 +53,11 @@ for (const tree of worktrees) {
     probeError,
     openPr,
     stale,
-    safe
+    safe,
+    removed,
+    emptyResidueRemoved,
+    removeError
   });
-  if (safe && apply) {
-    await run("git", ["worktree", "remove", treePath]);
-  }
 }
 
 console.log(JSON.stringify({ apply, maxAgeHours, worktrees: results }, null, 2));
@@ -67,6 +84,17 @@ async function hasOpenPr(branch) {
     return JSON.parse(output).length > 0;
   } catch {
     return true;
+  }
+}
+
+function removeEmptyDir(path) {
+  try {
+    if (!existsSync(path)) return false;
+    if (readdirSync(path, { withFileTypes: true }).length) return false;
+    rmdirSync(path);
+    return true;
+  } catch {
+    return false;
   }
 }
 
