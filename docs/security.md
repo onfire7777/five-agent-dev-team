@@ -2,19 +2,19 @@
 
 ## Dependency Audit
 
-`npm audit --audit-level=moderate` currently reports a moderate advisory for `uuid@11.1.0` through the Temporal TypeScript SDK dependency chain.
+`npm audit --audit-level=moderate` must pass with zero production dependency vulnerabilities.
 
 Current status:
 
-- `npm audit fix` cannot resolve it.
-- `npm audit fix --force` proposes a breaking downgrade of `@temporalio/worker`, so it is not applied.
-- The project does not call the affected `uuid` buffer APIs directly.
+- The Temporal TypeScript SDK currently resolves its transitive `uuid` dependency through the root `overrides` policy in `package.json`.
+- `npm run audit:security` treats production `moderate`, `high`, and `critical` advisories as blocking.
+- A dependency override must be validated against the runtime imports that consume it before merge.
 
 Operational mitigation:
 
 - Keep Temporal packages current.
-- CI blocks high-or-worse advisories and runs `npm run audit:security`, which allows only the documented Temporal/uuid moderate advisory. Any additional production moderate advisory fails CI.
-- Replace or override the dependency only after Temporal publishes a compatible fix or after validating an override against the worker runtime.
+- CI runs `npm run audit:security` and fails on every production moderate-or-worse advisory.
+- Remove dependency overrides after upstream packages publish compatible fixed dependency ranges.
 
 ## Code Scanning
 

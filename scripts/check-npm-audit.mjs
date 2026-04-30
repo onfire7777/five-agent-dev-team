@@ -1,13 +1,5 @@
 import { execSync } from "node:child_process";
 
-const allowedModerate = new Set([
-  "@temporalio/activity",
-  "@temporalio/client",
-  "@temporalio/nexus",
-  "@temporalio/worker",
-  "uuid"
-]);
-
 let report;
 try {
   execSync("npm audit --omit=dev --json", { stdio: ["ignore", "pipe", "pipe"] });
@@ -23,18 +15,14 @@ try {
 }
 
 const vulnerabilities = Object.values(report.vulnerabilities || {});
-const unexpected = vulnerabilities.filter((vulnerability) => {
-  if (vulnerability.severity === "high" || vulnerability.severity === "critical") return true;
-  if (vulnerability.severity === "moderate") return !allowedModerate.has(vulnerability.name);
-  return false;
-});
+const unexpected = vulnerabilities.filter((vulnerability) =>
+  ["moderate", "high", "critical"].includes(vulnerability.severity)
+);
 
 if (unexpected.length) {
-  console.error("Unexpected production dependency vulnerabilities:");
+  console.error("Production dependency vulnerabilities found:");
   for (const vulnerability of unexpected) {
     console.error(`- ${vulnerability.name}: ${vulnerability.severity}`);
   }
   process.exit(1);
 }
-
-console.warn("Only the documented Temporal/uuid moderate advisory is present.");
