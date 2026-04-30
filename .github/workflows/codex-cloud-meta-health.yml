@@ -1,0 +1,244 @@
+name: Codex Cloud Meta Health
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+  issues: write
+  pull-requests: read
+  security-events: read
+  statuses: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+concurrency:
+  group: codex-cloud-meta-health
+  cancel-in-progress: true
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Reconcile GitHub control-plane truth
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        env:
+          HAS_CODEX_HEALTH_TOKEN: ${{ secrets.CODEX_HEALTH_TOKEN != '' }}
+        with:
+          github-token: ${{ secrets.CODEX_HEALTH_TOKEN || github.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            const now = new Date().toISOString();
+            const blockers = [];
+            const warnings = [];
+
+            const branch = await github.rest.repos.getBranch({ owner, repo, branch: "main" });
+            const mainSha = branch.data.commit.sha;
+
+            let protection = null;
+            try {
+              protection = (await github.rest.repos.getBranchProtection({ owner, repo, branch: "main" })).data;
+            } catch (error) {
+              warnings.push({
+                class: "advisory",
+                title: "main branch protection is unavailable",
+                detail: `Branch protection lookup failed: ${
+                  error.status || "unknown"
+                }; admin-read token access may be required for exact required-check reconciliation.`
+              });
+            }
+
+            const requiredContexts = [
+              ...(protection?.required_status_checks?.contexts || []),
+              ...(protection?.required_status_checks?.checks || []).map((check) => check.context)
+            ].filter((contextName, index, contexts) => contextName && contexts.indexOf(contextName) === index);
+            const checkRuns = await github.paginate(github.rest.checks.listForRef, {
+              owner,
+              repo,
+              ref: mainSha,
+              per_page: 100
+            });
+            const latestStatusByContext = new Map();
+            for (const run of checkRuns) {
+              setLatestStatus(latestStatusByContext, run.name, {
+                kind: "check-run",
+                status: run.status,
+                conclusion: run.conclusion,
+                observedAt: run.started_at || run.created_at
+              });
+            }
+
+            const commitStatuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner,
+              repo,
+              ref: mainSha,
+              per_page: 100
+            });
+            for (const status of commitStatuses) {
+              setLatestStatus(latestStatusByContext, status.context, {
+                kind: "commit-status",
+                status: "completed",
+                conclusion: status.state,
+                observedAt: status.updated_at || status.created_at
+              });
+            }
+
+            function setLatestStatus(map, name, value) {
+              const existing = map.get(name);
+              if (!existing || new Date(value.observedAt) > new Date(existing.observedAt)) {
+                map.set(name, value);
+              }
+            }
+
+            const passingConclusions = new Set(["success", "neutral", "skipped"]);
+            for (const contextName of requiredContexts) {
+              const status = latestStatusByContext.get(contextName);
+              if (!status) {
+                blockers.push({
+                  class: "globalStop",
+                  title: `required check missing on main: ${contextName}`,
+                  detail: `main ${mainSha} does not have a check run or commit status named ${contextName}.`
+                });
+                continue;
+              }
+              if (status.status !== "completed" || !passingConclusions.has(status.conclusion)) {
+                blockers.push({
+                  class: "globalStop",
+                  title: `required check not green on main: ${contextName}`,
+                  detail: `${status.kind} reported ${status.status}/${status.conclusion || "pending"} on ${mainSha}.`
+                });
+              }
+            }
+
+            const openPrs = await github.paginate(github.rest.pulls.list, {
+              owner,
+              repo,
+              state: "open",
+              per_page: 100
+            });
+
+            const openIssuesRaw = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: "open",
+              per_page: 100
+            });
+            const openIssues = openIssuesRaw.filter((issue) => !issue.pull_request);
+            const queueIssues = openIssues.filter((issue) =>
+              issue.labels.some((label) =>
+                ["agent:queued", "agent:claimed", "agent:running", "agent:merge-gate"].includes(label.name)
+              )
+            );
+
+            let dependabotOpen = null;
+            if (process.env.HAS_CODEX_HEALTH_TOKEN === "true") {
+              try {
+                const alerts = await github.request("GET /repos/{owner}/{repo}/dependabot/alerts", {
+                  owner,
+                  repo,
+                  state: "open",
+                  per_page: 100
+                });
+                dependabotOpen = alerts.data.length;
+                if (dependabotOpen > 0) {
+                  warnings.push({
+                    class: "advisory",
+                    title: "open Dependabot alerts",
+                    detail: `${dependabotOpen} open alert(s) need Security/DevOps triage.`
+                  });
+                }
+              } catch (error) {
+                warnings.push({
+                  class: "advisory",
+                  title: "Dependabot alert lookup unavailable",
+                  detail: `Dependabot lookup failed: ${error.status || "unknown"}.`
+                });
+              }
+            } else {
+              warnings.push({
+                class: "advisory",
+                title: "Dependabot alert lookup skipped",
+                detail: "Configure CODEX_HEALTH_TOKEN with Dependabot-alert read access for exact alert reconciliation."
+              });
+            }
+
+            const healthTitle = "[Codex Health] Cloud control-plane finding";
+            const healthIssues = openIssues.filter((issue) => issue.title === healthTitle);
+            const requiredLine = requiredContexts.length ? requiredContexts.join(", ") : "none reported";
+            const summary = [
+              "# Codex Cloud Meta Health",
+              "",
+              `Observed: ${now}`,
+              `Repository: ${owner}/${repo}`,
+              `main: ${mainSha}`,
+              `Required checks: ${requiredLine}`,
+              `Open PRs: ${openPrs.length}`,
+              `Open queued/running agent issues: ${queueIssues.length}`,
+              `Open Dependabot alerts: ${dependabotOpen === null ? "unavailable" : dependabotOpen}`,
+              "",
+              blockers.length
+                ? `## Blockers\n${blockers.map((item) => `- ${item.class}: ${item.title} (${item.detail})`).join("\n")}`
+                : "## Blockers\n- none",
+              "",
+              warnings.length
+                ? `## Warnings\n${warnings.map((item) => `- ${item.class}: ${item.title} (${item.detail})`).join("\n")}`
+                : "## Warnings\n- none",
+              "",
+              "## Routing",
+              blockers.length
+                ? "Meta Health has opened or refreshed the cloud health issue. Local build lanes should stay paused."
+                : "GitHub control-plane truth is healthy. R&D may prepare the next scored queue issue when no active queue item exists."
+            ].join("\n");
+
+            await core.summary.addRaw(summary).write();
+
+            if (!blockers.length) {
+              for (const issue of healthIssues) {
+                await github.rest.issues.update({
+                  owner,
+                  repo,
+                  issue_number: issue.number,
+                  state: "closed",
+                  state_reason: "completed"
+                });
+              }
+              return;
+            }
+
+            const labels = ["agent:blocked", "blocker:global-stop"];
+            if (healthIssues.length) {
+              await github.rest.issues.update({
+                owner,
+                repo,
+                issue_number: healthIssues[0].number,
+                body: summary,
+                labels
+              });
+              for (const issue of healthIssues.slice(1)) {
+                await github.rest.issues.update({
+                  owner,
+                  repo,
+                  issue_number: issue.number,
+                  state: "closed",
+                  state_reason: "not_planned"
+                });
+              }
+              core.setFailed("Codex Cloud Meta Health found a global blocker.");
+              return;
+            }
+
+            await github.rest.issues.create({
+              owner,
+              repo,
+              title: healthTitle,
+              body: summary,
+              labels
+            });
+
+            core.setFailed("Codex Cloud Meta Health found a global blocker.");

@@ -1,0 +1,242 @@
+name: Codex Cloud Research
+
+on:
+  schedule:
+    - cron: "7 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Run even when open PRs or active queue issues exist"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+concurrency:
+  group: codex-cloud-research
+  cancel-in-progress: true
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Gate cloud research
+        id: gate
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        with:
+          result-encoding: string
+          script: |
+            const { owner, repo } = context.repo;
+            const force = context.payload.inputs?.force === "true" || context.payload.inputs?.force === true;
+            const openPrs = await github.paginate(github.rest.pulls.list, {
+              owner,
+              repo,
+              state: "open",
+              per_page: 100
+            });
+            const openIssuesRaw = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: "open",
+              per_page: 100
+            });
+            const activeQueueIssues = openIssuesRaw
+              .filter((issue) => !issue.pull_request)
+              .filter((issue) =>
+                issue.labels.some((label) =>
+                  ["agent:queued", "agent:claimed", "agent:running", "agent:merge-gate"].includes(label.name)
+                )
+              );
+
+            if (!force && (openPrs.length || activeQueueIssues.length)) {
+              return JSON.stringify({
+                run: false,
+                reason: `skipped: openPrs=${openPrs.length}, activeQueueIssues=${activeQueueIssues.length}`
+              });
+            }
+
+            return JSON.stringify({ run: true, reason: "cloud research eligible" });
+
+      - name: Checkout
+        if: contains(steps.gate.outputs.result, '"run":true')
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Prepare GitHub context
+        if: contains(steps.gate.outputs.result, '"run":true')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "# Codex Cloud R&D Context"
+            echo
+            echo "Repository: $GITHUB_REPOSITORY"
+            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo
+            echo "## Open PRs"
+            gh pr list --json number,title,headRefName,isDraft,mergeStateStatus,reviewDecision,labels
+            echo
+            echo "## Open Issues"
+            gh issue list --state open --json number,title,labels
+            echo
+            echo "## Recent Runs"
+            gh run list --limit 10 --json databaseId,workflowName,headBranch,status,conclusion,event,createdAt
+          } > codex-cloud-context.md
+
+      - name: Report missing OPENAI_API_KEY
+        if: contains(steps.gate.outputs.result, '"run":true') && env.OPENAI_API_KEY == ''
+        run: |
+          {
+            echo "## Codex Cloud Research"
+            echo
+            echo "Skipped because repository secret OPENAI_API_KEY is not configured."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run Codex cloud research
+        id: run_codex
+        if: contains(steps.gate.outputs.result, '"run":true') && env.OPENAI_API_KEY != ''
+        uses: openai/codex-action@a26d2d4d8b78a694338b8e3715c3630254340b2c
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          sandbox: read-only
+          safety-strategy: drop-sudo
+          allow-users: onfire7777
+          output-file: codex-output.md
+          prompt: |
+            You are Stage 0 R&D for onfire7777/five-agent-dev-team.
+
+            Read the repository, .github/ISSUE_TEMPLATE/codex_queue_item.yml, codex-cloud-context.md, README.md, docs/**, and tests as needed.
+            Produce at most one GitHub issue-ready queue item.
+            Do not edit files, propose dependencies, merge, push, or mark acceptance complete.
+            Only propose work that maps to real product behavior and can run in codex-cloud, codex-action, or agentic-workflow.
+            If no non-overlapping product-spec-backed work scores at least 22/30, output exactly:
+            QUEUE_ITEM_READY: no
+
+            If a queue item is valid, output exactly this field set:
+            QUEUE_ITEM_READY: yes
+            Title: <short title>
+            Problem: <problem>
+            Hypothesis: <hypothesis>
+            Product-spec mapping: <specific README/docs/spec surface or acceptance behavior>
+            Expected files: <file globs>
+            Non-overlap check: <why it does not collide with open work>
+            Acceptance criteria: <bulleted criteria>
+            Verification commands: <commands>
+            Risk class: <low|medium|high>
+            Diff budget: <files and lines>
+            Rollback plan: <plan>
+            Lane assignment: <backend|frontend|quality|security|docs>
+            Execution target: <codex-cloud|codex-action|agentic-workflow>
+            Score: <22-30>/30
+
+      - name: Create or refresh queue issue
+        if: steps.run_codex.outputs.final-message != ''
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        env:
+          CODEX_FINAL_MESSAGE: ${{ steps.run_codex.outputs.final-message }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const output = process.env.CODEX_FINAL_MESSAGE || "";
+            await core.summary.addRaw(`## Codex Cloud Research Output\n\n${output}`).write();
+
+            if (!/^QUEUE_ITEM_READY:\s*yes\s*$/im.test(output)) {
+              core.notice("Codex did not produce a queue item.");
+              return;
+            }
+
+            const requiredFields = [
+              "Title",
+              "Problem",
+              "Hypothesis",
+              "Product-spec mapping",
+              "Expected files",
+              "Non-overlap check",
+              "Acceptance criteria",
+              "Verification commands",
+              "Risk class",
+              "Diff budget",
+              "Rollback plan",
+              "Lane assignment",
+              "Execution target",
+              "Score"
+            ];
+            const missing = requiredFields.filter((field) => !new RegExp(`^${field}:`, "im").test(output));
+            if (missing.length) {
+              core.setFailed(`Codex output is missing required fields: ${missing.join(", ")}`);
+              return;
+            }
+
+            const scoreMatch = output.match(/^Score:\s*(\d+)\s*\/\s*30\s*$/im);
+            const score = scoreMatch ? Number(scoreMatch[1]) : 0;
+            if (score < 22 || score > 30) {
+              core.setFailed(`Codex output has invalid score: ${score || "missing"}`);
+              return;
+            }
+
+            const title = (output.match(/^Title:\s*(.+)$/im)?.[1] || "").trim();
+            const lane = (output.match(/^Lane assignment:\s*(backend|frontend|quality|security|docs)\s*$/im)?.[1] || "").trim();
+            const execution = (
+              output.match(/^Execution target:\s*(codex-cloud|codex-action|agentic-workflow)\s*$/im)?.[1] || ""
+            ).trim();
+
+            if (!title || !lane || !execution) {
+              core.setFailed("Codex output has invalid title, lane, or cloud execution target.");
+              return;
+            }
+
+            const issueTitle = title.startsWith("[Codex Queue]") ? title : `[Codex Queue] ${title}`;
+            const labels = ["agent:queued", `lane:${lane}`, `execution:${execution}`, "priority:p2"];
+            const body = [
+              "Created by Codex Cloud Research.",
+              "",
+              `Source run: ${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/actions/runs/${context.runId}`,
+              "",
+              output
+            ].join("\n");
+
+            const openIssuesRaw = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: "open",
+              per_page: 100
+            });
+            const existing = openIssuesRaw.find((issue) => !issue.pull_request && issue.title === issueTitle);
+
+            if (existing) {
+              await github.rest.issues.update({
+                owner,
+                repo,
+                issue_number: existing.number,
+                body,
+                labels
+              });
+              return;
+            }
+
+            await github.rest.issues.create({
+              owner,
+              repo,
+              title: issueTitle,
+              body,
+              labels
+            });
+
+      - name: Upload Codex research output
+        if: always() && contains(steps.gate.outputs.result, '"run":true')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: codex-cloud-research
+          path: |
+            codex-output.md
+            codex-cloud-context.md
+          if-no-files-found: ignore
