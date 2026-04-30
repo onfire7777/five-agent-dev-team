@@ -17,6 +17,9 @@ permissions:
   contents: write
   pull-requests: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 concurrency:
   group: codex-ci-autofix-${{ github.ref }}
   cancel-in-progress: false
