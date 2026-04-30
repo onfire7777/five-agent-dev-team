@@ -34,7 +34,6 @@ for (const tree of worktrees) {
   if (safe && apply) {
     try {
       await run("git", ["worktree", "remove", "--force", treePath]);
-      removed = !existsSync(treePath);
       emptyResidueRemoved = removeEmptyDir(treePath);
       removeEmptyDir(dirname(treePath));
     } catch (error) {
@@ -42,6 +41,7 @@ for (const tree of worktrees) {
       emptyResidueRemoved = removeEmptyDir(treePath);
       if (emptyResidueRemoved) removeEmptyDir(dirname(treePath));
     }
+    removed = !existsSync(treePath);
   }
 
   results.push({

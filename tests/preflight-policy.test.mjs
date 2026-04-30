@@ -5,6 +5,7 @@ describe("preflight pause policy", () => {
   it("lets control-plane lanes run while the control plane is paused", () => {
     expect(canRunWhenControlPaused("research")).toBe(true);
     expect(canRunWhenControlPaused("0")).toBe(true);
+    expect(canRunWhenControlPaused(0)).toBe(true);
     expect(canRunWhenControlPaused("r&d")).toBe(true);
     expect(canRunWhenControlPaused("meta-health")).toBe(true);
     expect(canRunWhenControlPaused("  META-HEALTH  ")).toBe(true);

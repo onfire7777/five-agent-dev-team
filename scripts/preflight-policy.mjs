@@ -21,7 +21,7 @@ function canonicalStage(stage) {
 }
 
 function normalizeStage(stage) {
-  return String(stage || "")
+  return String(stage ?? "")
     .trim()
     .toLowerCase();
 }
