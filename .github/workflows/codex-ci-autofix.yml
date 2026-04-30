@@ -1,0 +1,96 @@
+name: Codex CI Autofix
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Issue, PR, branch, or failing workflow context"
+        required: true
+        type: string
+      create_draft_pr:
+        description: "Create a draft PR when Codex produces changes"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: codex-ci-autofix-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  autofix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - name: Fail if OPENAI_API_KEY missing
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "OPENAI_API_KEY is required for Codex CI Autofix." >&2
+            exit 1
+          fi
+      - name: Run Codex CI autofix
+        id: run_codex
+        uses: openai/codex-action@a26d2d4d8b78a694338b8e3715c3630254340b2c
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          sandbox: workspace-write
+          safety-strategy: drop-sudo
+          allow-users: onfire7777
+          output-file: codex-output.md
+          prompt: |
+            Target: ${{ inputs.target }}
+
+            Fix only the CI failure or verification gap described by the target.
+            Keep the diff minimal and scoped.
+            Do not change secrets, branch protection, broad architecture, or unrelated product behavior.
+            Prefer tests or workflow hardening over speculative rewrites.
+            Run the most relevant local checks when possible and summarize exact evidence.
+      - name: Verify generated changes
+        run: |
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "Codex produced no file changes."
+            exit 0
+          fi
+          npm run typecheck
+          npm run lint
+          npm run format:check
+          npm test
+          npm run logs:check
+      - name: Create draft PR
+        if: inputs.create_draft_pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET: ${{ inputs.target }}
+        run: |
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "No changes to publish."
+            exit 0
+          fi
+          branch="codex/ci-autofix-${{ github.run_id }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add -A
+          git commit -m "Codex CI autofix"
+          git push origin "$branch"
+          gh pr create --draft --base main --head "$branch" --title "Codex CI autofix" --body "Target: $TARGET"
+      - name: Upload Codex autofix output
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: codex-ci-autofix
+          path: codex-output.md
+          if-no-files-found: ignore
