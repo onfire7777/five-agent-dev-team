@@ -1,0 +1,523 @@
+name: Codex Cloud Build Pipeline
+
+on:
+  schedule:
+    - cron: "5 * * * *"
+    - cron: "15 * * * *"
+    - cron: "25 * * * *"
+    - cron: "35 * * * *"
+    - cron: "45 * * * *"
+    - cron: "55 * * * *"
+    - cron: "59 * * * *"
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "Stage to run"
+        required: true
+        type: choice
+        options:
+          - backend
+          - frontend
+          - quality
+          - security
+          - docs
+          - captain
+          - janitor
+      force:
+        description: "Run even when normal gates would no-op"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  actions: read
+  checks: read
+  contents: write
+  issues: write
+  pull-requests: write
+  security-events: read
+  statuses: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  CODEX_ACTION_MODEL: ${{ vars.CODEX_ACTION_MODEL || 'gpt-5.2-codex' }}
+  CODEX_ACTION_EFFORT: ${{ vars.CODEX_ACTION_EFFORT || 'xhigh' }}
+  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+concurrency:
+  group: codex-cloud-build-${{ github.event.inputs.stage || github.event.schedule || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  run-stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Select cloud stage and target
+        id: gate
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const scheduleToStage = new Map([
+              ["5 * * * *", "backend"],
+              ["15 * * * *", "frontend"],
+              ["25 * * * *", "quality"],
+              ["35 * * * *", "security"],
+              ["45 * * * *", "docs"],
+              ["55 * * * *", "captain"],
+              ["59 * * * *", "janitor"]
+            ]);
+            const stageInput = context.payload.inputs?.stage;
+            const stage = stageInput || scheduleToStage.get(context.payload.schedule);
+            const force = context.payload.inputs?.force === "true" || context.payload.inputs?.force === true;
+            const stageInfo = {
+              backend: {
+                display: "Backend/Core",
+                lane: "backend",
+                label: "codex-stage:backend-core",
+                files: "apps/controller/**, apps/worker/**, packages/shared/**, packages/github/**, backend/schema/store/controller tests",
+                verify: "npm run check && npm run logs:check && docker compose config --no-interpolate --quiet"
+              },
+              frontend: {
+                display: "Frontend/UX",
+                lane: "frontend",
+                label: "codex-stage:frontend-ux",
+                files: "apps/dashboard/** and dashboard e2e coverage",
+                verify: "npm run check && npm run logs:check && docker compose config --no-interpolate --quiet"
+              },
+              quality: {
+                display: "Quality/Debug",
+                lane: "quality",
+                label: "codex-stage:quality-debug",
+                files: "tests/**, Playwright config, test utilities, and acceptance evidence",
+                verify: "npm run check && npm run test:e2e && npm run logs:check"
+              },
+              security: {
+                display: "Security/DevOps",
+                lane: "security",
+                label: "codex-stage:security-devops",
+                files: ".github/**, Dockerfile, docker-compose.yml, .env.example, package*.json, scripts/security*, scripts/check*, release/**",
+                verify: "npm run check && npm run audit:security && npm run logs:check && docker compose config --no-interpolate --quiet"
+              },
+              docs: {
+                display: "Docs/Alignment",
+                lane: "docs",
+                label: "codex-stage:docs-alignment",
+                files: "README.md, docs/**, release notes, runbooks, and acceptance docs",
+                verify: "npm run check && npm run logs:check"
+              },
+              captain: {
+                display: "Captain Integrator",
+                lane: "",
+                label: "codex-stage:captain",
+                files: "merge readiness, PR labels, checks, branch protection, and expected head SHA",
+                verify: "gh pr checks <pr> --watch --required"
+              },
+              janitor: {
+                display: "Ops Janitor",
+                lane: "",
+                label: "codex-stage:janitor",
+                files: "cloud queue labels, stale cloud issues, safe branch-sprawl reports, and artifact summaries",
+                verify: "cloud metadata only"
+              }
+            }[stage];
+
+            if (!stageInfo) {
+              core.setFailed(`Unknown cloud stage: ${stage || "none"}`);
+              return;
+            }
+
+            const openIssuesRaw = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: "open",
+              per_page: 100
+            });
+            const openIssues = openIssuesRaw.filter((issue) => !issue.pull_request);
+            const openPrs = await github.paginate(github.rest.pulls.list, {
+              owner,
+              repo,
+              state: "open",
+              per_page: 100
+            });
+            const globalStop = openIssues.find((issue) =>
+              issue.labels.some((label) => label.name === "blocker:global-stop" || label.name === "agent:blocked") &&
+              issue.title.startsWith("[Codex Health]")
+            );
+
+            core.setOutput("stage", stage);
+            core.setOutput("stage_display", stageInfo.display);
+            core.setOutput("stage_label", stageInfo.label);
+            core.setOutput("lane", stageInfo.lane);
+            core.setOutput("owned_files", stageInfo.files);
+            core.setOutput("verify_hint", stageInfo.verify);
+
+            if (globalStop && !force && stage !== "janitor") {
+              core.setOutput("should_run", "false");
+              core.setOutput("reason", `global stop issue #${globalStop.number}: ${globalStop.title}`);
+              return;
+            }
+
+            if (["backend", "frontend", "quality", "security", "docs"].includes(stage)) {
+              if (openPrs.length && !force) {
+                core.setOutput("should_run", "false");
+                core.setOutput("reason", `skipped: ${openPrs.length} open PR(s); Captain must integrate first`);
+                return;
+              }
+              const target = openIssues
+                .filter((issue) => issue.labels.some((label) => label.name === "agent:queued"))
+                .filter((issue) => issue.labels.some((label) => label.name === `lane:${stageInfo.lane}`))
+                .filter((issue) => issue.labels.some((label) => label.name === "execution:codex-cloud"))
+                .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))[0];
+              if (!target) {
+                core.setOutput("should_run", "false");
+                core.setOutput("reason", `no queued ${stageInfo.display} issue with execution:codex-cloud`);
+                return;
+              }
+              core.setOutput("should_run", "true");
+              core.setOutput("target_kind", "issue");
+              core.setOutput("target_number", String(target.number));
+              core.setOutput("target_title", target.title);
+              core.setOutput("target_url", target.html_url);
+              return;
+            }
+
+            if (stage === "captain") {
+              const candidates = openPrs
+                .filter((pr) => !pr.draft)
+                .filter((pr) => {
+                  const labelNames = pr.labels.map((label) => label.name);
+                  return (
+                    labelNames.includes("agent:ready-for-review") ||
+                    labelNames.includes("codex-status:ready-to-merge")
+                  ) && !labelNames.some((label) =>
+                    [
+                      "codex-status:blocked",
+                      "codex-blocker:ci",
+                      "codex-blocker:security",
+                      "codex-blocker:merge-conflict",
+                      "codex-blocker:scope"
+                    ].includes(label)
+                  );
+                })
+                .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+              if (!candidates.length) {
+                core.setOutput("should_run", "false");
+                core.setOutput("reason", "no non-draft ready PR for Captain");
+                return;
+              }
+              core.setOutput("should_run", "true");
+              core.setOutput("target_kind", "pr");
+              core.setOutput("target_number", String(candidates[0].number));
+              core.setOutput("target_title", candidates[0].title);
+              core.setOutput("target_url", candidates[0].html_url);
+              return;
+            }
+
+            core.setOutput("should_run", "true");
+            core.setOutput("target_kind", "janitor");
+            core.setOutput("target_number", "");
+            core.setOutput("target_title", "cloud janitor pass");
+            core.setOutput("target_url", `https://github.com/${owner}/${repo}`);
+
+      - name: Report no-op
+        if: steps.gate.outputs.should_run != 'true'
+        run: |
+          echo "Codex Cloud Build Pipeline no-op"
+          echo "Stage: ${{ steps.gate.outputs.stage_display }}"
+          echo "Reason: ${{ steps.gate.outputs.reason }}"
+
+      - name: Checkout
+        if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind != 'janitor'
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'issue'
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'issue'
+        run: npm ci
+
+      - name: Prepare stage context
+        if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'issue'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STAGE: ${{ steps.gate.outputs.stage }}
+          STAGE_DISPLAY: ${{ steps.gate.outputs.stage_display }}
+          TARGET_NUMBER: ${{ steps.gate.outputs.target_number }}
+          TARGET_URL: ${{ steps.gate.outputs.target_url }}
+          OWNED_FILES: ${{ steps.gate.outputs.owned_files }}
+          VERIFY_HINT: ${{ steps.gate.outputs.verify_hint }}
+        run: |
+          gh issue view "$TARGET_NUMBER" --json number,title,body,labels,url > codex-target.json
+          {
+            echo "# Codex Cloud Build Stage Context"
+            echo
+            echo "Repository: $GITHUB_REPOSITORY"
+            echo "Stage: $STAGE_DISPLAY"
+            echo "Stage key: $STAGE"
+            echo "Target issue: #$TARGET_NUMBER"
+            echo "Target URL: $TARGET_URL"
+            echo "Owned files: $OWNED_FILES"
+            echo "Expected verification: $VERIFY_HINT"
+            echo
+            echo "## Target issue"
+            cat codex-target.json
+          } > codex-stage-context.md
+
+      - name: Claim queue issue
+        if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'issue'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_NUMBER: ${{ steps.gate.outputs.target_number }}
+        run: |
+          gh issue edit "$TARGET_NUMBER" --add-label agent:running --add-label agent:claimed
+          gh issue edit "$TARGET_NUMBER" --remove-label agent:queued || true
+
+      - name: Report missing OPENAI_API_KEY
+        if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'issue' && env.OPENAI_API_KEY == ''
+        run: |
+          echo "OPENAI_API_KEY is required for Codex Cloud Build Pipeline." >&2
+          exit 1
+
+      - name: Run Codex cloud build stage
+        id: run_codex
+        if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'issue' && env.OPENAI_API_KEY != ''
+        uses: openai/codex-action@a26d2d4d8b78a694338b8e3715c3630254340b2c
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          model: ${{ env.CODEX_ACTION_MODEL }}
+          effort: ${{ env.CODEX_ACTION_EFFORT }}
+          codex-args: '--config model_verbosity="medium"'
+          sandbox: workspace-write
+          safety-strategy: drop-sudo
+          allow-users: onfire7777
+          output-file: codex-output.md
+          prompt: |
+            You are the Codex Cloud ${{ steps.gate.outputs.stage_display }} specialist for onfire7777/five-agent-dev-team.
+
+            This is the cloud equivalent of the local specialist lane. Operate only in your assigned lane, not all lanes.
+            Read codex-stage-context.md and codex-target.json first.
+
+            Project identity:
+            - GitHub repo: onfire7777/five-agent-dev-team
+            - Default branch: main
+            - Product build contract is represented by README.md, docs/**, tests/**, and issue acceptance criteria.
+            - This workflow is the Codex cloud control plane, not the product runtime.
+
+            Rules:
+            - Implement only the queued issue scope.
+            - Stay inside owned files: ${{ steps.gate.outputs.owned_files }}.
+            - Keep the diff bounded and avoid unrelated cleanup.
+            - Do not print secrets, weaken security gates, change branch protection, or push main.
+            - Do not invent unqueued feature scope.
+            - Add or update tests when behavior changes.
+            - Leave a concise summary in codex-output.md.
+
+            Expected verification before PR publication:
+            ${{ steps.gate.outputs.verify_hint }}
+
+      - name: Detect generated changes
+        id: changes
+        if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'issue'
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Route no-change issue
+        if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'issue' && steps.changes.outputs.changed != 'true'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        with:
+          script: |
+            const issue_number = Number("${{ steps.gate.outputs.target_number }}");
+            const { owner, repo } = context.repo;
+            await github.rest.issues.addLabels({
+              owner,
+              repo,
+              issue_number,
+              labels: ["agent:blocked", "blocker:lane-stop"]
+            });
+            for (const label of ["agent:running", "agent:claimed"]) {
+              try {
+                await github.rest.issues.removeLabel({ owner, repo, issue_number, name: label });
+              } catch {}
+            }
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number,
+              body: `Codex Cloud ${{ steps.gate.outputs.stage_display }} ran but produced no file changes. The issue is blocked for lane triage.\n\nRun: ${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/actions/runs/${context.runId}`
+            });
+
+      - name: Verify generated changes
+        if: steps.changes.outputs.changed == 'true'
+        shell: bash
+        run: |
+          npm run check
+          npm run logs:check
+          docker compose config --no-interpolate --quiet
+          if [ "${{ steps.gate.outputs.stage }}" = "security" ]; then
+            npm run audit:security
+          fi
+          if [ "${{ steps.gate.outputs.stage }}" = "quality" ]; then
+            npm run test:e2e
+          fi
+
+      - name: Create implementation PR
+        if: steps.changes.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STAGE: ${{ steps.gate.outputs.stage }}
+          STAGE_DISPLAY: ${{ steps.gate.outputs.stage_display }}
+          STAGE_LABEL: ${{ steps.gate.outputs.stage_label }}
+          TARGET_NUMBER: ${{ steps.gate.outputs.target_number }}
+          TARGET_TITLE: ${{ steps.gate.outputs.target_title }}
+        shell: bash
+        run: |
+          branch="codex/cloud-${STAGE}-${TARGET_NUMBER}-${GITHUB_RUN_ID}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add -A
+          git commit -m "Codex Cloud ${STAGE_DISPLAY}: issue #${TARGET_NUMBER}"
+          git push origin "$branch"
+
+          {
+            echo "## Summary"
+            echo
+            echo "Codex Cloud ${STAGE_DISPLAY} implemented queued issue #${TARGET_NUMBER}."
+            echo
+            echo "Closes #${TARGET_NUMBER}"
+            echo
+            echo "## Scope"
+            echo
+            echo "${TARGET_TITLE}"
+            echo
+            echo "## Validation"
+            echo
+            echo "- npm run check"
+            echo "- npm run logs:check"
+            echo "- docker compose config --no-interpolate --quiet"
+            if [ "$STAGE" = "security" ]; then
+              echo "- npm run audit:security"
+            fi
+            if [ "$STAGE" = "quality" ]; then
+              echo "- npm run test:e2e"
+            fi
+            echo
+            echo "## Automation"
+            echo
+            echo "- Stage: ${STAGE_DISPLAY}"
+            echo "- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo "- Target: #${TARGET_NUMBER}"
+          } > pr-body.md
+
+          gh pr create \
+            --base main \
+            --head "$branch" \
+            --title "Codex Cloud ${STAGE_DISPLAY}: ${TARGET_TITLE}" \
+            --body-file pr-body.md \
+            --label "$STAGE_LABEL" \
+            --label agent:ready-for-review \
+            --label codex-status:ready-to-merge
+
+          gh issue edit "$TARGET_NUMBER" --add-label agent:ready-for-review
+          gh issue edit "$TARGET_NUMBER" --remove-label agent:running --remove-label agent:claimed || true
+
+      - name: Captain merge gate
+        if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'pr'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.gate.outputs.target_number }}
+        shell: bash
+        run: |
+          gh pr view "$PR_NUMBER" --json number,title,isDraft,mergeStateStatus,reviewDecision,labels,headRefOid,url
+          gh pr checks "$PR_NUMBER" --required --watch
+          gh pr merge "$PR_NUMBER" --squash --auto --delete-branch
+
+      - name: Cloud janitor pass
+        if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'janitor'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const openIssuesRaw = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: "open",
+              per_page: 100
+            });
+            const openIssues = openIssuesRaw.filter((issue) => !issue.pull_request);
+            const staleRunning = openIssues.filter((issue) =>
+              issue.labels.some((label) => label.name === "agent:running") &&
+              Date.now() - new Date(issue.updated_at).getTime() > 2 * 60 * 60 * 1000
+            );
+            for (const issue of staleRunning) {
+              await github.rest.issues.addLabels({
+                owner,
+                repo,
+                issue_number: issue.number,
+                labels: ["agent:blocked", "blocker:lane-stop"]
+              });
+              try {
+                await github.rest.issues.removeLabel({ owner, repo, issue_number: issue.number, name: "agent:running" });
+              } catch {}
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issue.number,
+                body: `Cloud Janitor routed this stale running item after more than two hours without progress.\n\nRun: ${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/actions/runs/${context.runId}`
+              });
+            }
+            await core.summary
+              .addRaw(`# Codex Cloud Janitor\n\nStale running issues routed: ${staleRunning.length}\n`)
+              .write();
+
+      - name: Route failed issue
+        if: failure() && steps.gate.outputs.target_kind == 'issue'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        with:
+          script: |
+            const issue_number = Number("${{ steps.gate.outputs.target_number }}");
+            const { owner, repo } = context.repo;
+            await github.rest.issues.addLabels({
+              owner,
+              repo,
+              issue_number,
+              labels: ["agent:blocked", "blocker:lane-stop"]
+            });
+            for (const label of ["agent:running", "agent:claimed"]) {
+              try {
+                await github.rest.issues.removeLabel({ owner, repo, issue_number, name: label });
+              } catch {}
+            }
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number,
+              body: `Codex Cloud ${{ steps.gate.outputs.stage_display }} failed verification or PR publication and routed this item as blocked.\n\nRun: ${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/actions/runs/${context.runId}`
+            });
+
+      - name: Upload Codex build output
+        if: always() && steps.gate.outputs.should_run == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: codex-cloud-${{ steps.gate.outputs.stage || 'stage' }}
+          path: |
+            codex-output.md
+            codex-stage-context.md
+            codex-target.json
+            pr-body.md
+          if-no-files-found: ignore
