@@ -128,6 +128,8 @@ If `AGENT_LIVE_MODE=false`, agents use deterministic local templates so the work
 
 This repo includes a guarded bulk-control utility for the Codex automations that build this project. It updates only the nine approved `five-agent-dev-team` automation folders under `%USERPROFILE%\.codex\automations`, preserves each automation's prompt/schedule/environment, and dry-runs unless `--apply` is provided. Use `--root=<automation-root>` when checking a different automation folder.
 
+Normal automation execution is cloud-first. GitHub Actions runs the recurring control plane: Codex Cloud Research creates scored queue issues, Codex Cloud Build Pipeline executes specialist lanes from those issues, Codex PR Review reviews pull requests, CI/CodeQL verify changes, Captain integrates ready PRs, Meta Health reconciles health, and Janitor clears safe stale cloud state. The desktop Codex automations remain local fallback/supervision workers unless a queue item explicitly uses `execution:local-fallback`.
+
 ```powershell
 Get-Content "$env:USERPROFILE\.codex\state\five-agent-dev-team-control.json"
 npm run automation:status -- --status=PAUSED
