@@ -370,6 +370,13 @@ jobs:
         if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'issue'
         shell: bash
         run: |
+          mkdir -p "$RUNNER_TEMP/codex-cloud-artifacts"
+          for file in codex-output.md codex-stage-context.md codex-target.json; do
+            if [ -f "$file" ]; then
+              cp "$file" "$RUNNER_TEMP/codex-cloud-artifacts/$file"
+              rm "$file"
+            fi
+          done
           if git diff --quiet; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
@@ -556,8 +563,8 @@ jobs:
         with:
           name: codex-cloud-${{ steps.gate.outputs.stage || 'stage' }}
           path: |
-            codex-output.md
-            codex-stage-context.md
-            codex-target.json
+            ${{ runner.temp }}/codex-cloud-artifacts/codex-output.md
+            ${{ runner.temp }}/codex-cloud-artifacts/codex-stage-context.md
+            ${{ runner.temp }}/codex-cloud-artifacts/codex-target.json
             pr-body.md
           if-no-files-found: ignore
