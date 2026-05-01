@@ -729,6 +729,10 @@ export class PostgresStore extends MemoryStore {
     this.pool = new pg.Pool({ connectionString });
   }
 
+  async close(): Promise<void> {
+    await this.pool.end();
+  }
+
   override async init(): Promise<void> {
     await this.pool.query(`
       create table if not exists work_items (
