@@ -58,8 +58,7 @@ function defaultArtifactId(): string {
 const ABSOLUTE_LOCAL_PATH_REGEX = /^(?:\/|[A-Za-z]:[\\/])/;
 const AbsoluteLocalPathSchema = z
   .string()
-  .min(1)
-  .refine((value) => ABSOLUTE_LOCAL_PATH_REGEX.test(value), {
+  .refine((value) => value.length > 0 && ABSOLUTE_LOCAL_PATH_REGEX.test(value), {
     message: "Local path must be an absolute path."
   });
 

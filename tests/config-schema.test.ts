@@ -100,6 +100,14 @@ describe("target repo config schema", () => {
       ProjectConnectionInputSchema.parse({
         repoOwner: "acme",
         repoName: "app",
+        localPath: ""
+      })
+    ).toThrow(/absolute path/i);
+
+    expect(() =>
+      ProjectConnectionInputSchema.parse({
+        repoOwner: "acme",
+        repoName: "app",
         localPath: "repo/app"
       })
     ).toThrow(/absolute path/i);
