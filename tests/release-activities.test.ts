@@ -8,6 +8,7 @@ import type {
   Direction,
   LoopRun,
   Opportunity,
+  OpportunityScanRunInput,
   Proposal,
   StrictProjectScope,
   TeamBusMessage
@@ -340,6 +341,24 @@ function fakeStore(): FakeStore {
         createdAt: now,
         updatedAt: now
       } satisfies Opportunity;
+    },
+    async listOpportunityScanRuns() {
+      return [];
+    },
+    async upsertOpportunityScanRun(scope: StrictProjectScope, input: OpportunityScanRunInput) {
+      const now = new Date().toISOString();
+      return {
+        id: input.id || "scan-fake",
+        ...scope,
+        status: input.status || "complete",
+        sources: input.sources || [],
+        repoSha: input.repoSha,
+        memoryVersion: input.memoryVersion,
+        candidatesCreated: input.candidatesCreated || 0,
+        summary: input.summary,
+        startedAt: input.startedAt || now,
+        completedAt: input.completedAt || now
+      };
     },
     async listProposals() {
       return [];

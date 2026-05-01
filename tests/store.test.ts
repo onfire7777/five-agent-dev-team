@@ -1,6 +1,71 @@
 import { describe, expect, it } from "vitest";
-import { MemoryStore } from "../apps/controller/src/store";
-import { StageArtifactSchema, type MemoryRecord, type StageArtifact } from "../packages/shared/src";
+import {
+  MemoryStore,
+  PostgresStore,
+  type ControllerStore,
+  type StrictProjectScope
+} from "../apps/controller/src/store";
+import {
+  OpportunityScanRunSchema,
+  StageArtifactSchema,
+  type MemoryRecord,
+  type StageArtifact
+} from "../packages/shared/src";
+
+async function seedScanScope(store: ControllerStore, repoName: string): Promise<StrictProjectScope> {
+  await store.upsertProjectConnection({
+    repoOwner: "owner",
+    repoName,
+    localPath: `C:/repos/${repoName}`,
+    active: true
+  });
+  return { projectId: `owner-${repoName}`, repo: `owner/${repoName}` };
+}
+
+async function expectOpportunityScanRunsNewestFirst(store: ControllerStore, repoName = "repo-a") {
+  const scope = await seedScanScope(store, repoName);
+
+  const older = await store.upsertOpportunityScanRun(scope, {
+    sources: ["repo_memory"],
+    candidatesCreated: 1,
+    summary: "Older scan found one candidate.",
+    startedAt: "2026-05-01T00:00:00.000Z",
+    completedAt: "2026-05-01T00:00:01.000Z"
+  });
+  const newer = await store.upsertOpportunityScanRun(scope, {
+    sources: ["human_direction"],
+    candidatesCreated: 0,
+    summary: "Newer scan reused an existing candidate.",
+    startedAt: "2026-05-01T01:00:00.000Z",
+    completedAt: "2026-05-01T01:00:01.000Z"
+  });
+  const running = await store.upsertOpportunityScanRun(scope, {
+    status: "running",
+    sources: ["repo_memory"],
+    summary: "Running scan is not complete yet.",
+    startedAt: "2026-05-01T02:00:00.000Z"
+  });
+  const updatedOlder = await store.upsertOpportunityScanRun(scope, {
+    id: older.id,
+    summary: "Older scan summary updated."
+  });
+
+  expect(OpportunityScanRunSchema.parse(newer)).toMatchObject({
+    projectId: scope.projectId,
+    repo: scope.repo,
+    status: "complete",
+    sources: ["human_direction"],
+    candidatesCreated: 0
+  });
+  expect(running.completedAt).toBeUndefined();
+  expect(updatedOlder).toMatchObject({
+    sources: ["repo_memory"],
+    candidatesCreated: 1,
+    startedAt: "2026-05-01T00:00:00.000Z",
+    completedAt: "2026-05-01T00:00:01.000Z"
+  });
+  await expect(store.listOpportunityScanRuns(scope)).resolves.toEqual([running, newer, updatedOlder]);
+}
 
 describe("controller store workflow claims", () => {
   it("prevents duplicate workflow claims for the same item", async () => {
@@ -123,6 +188,26 @@ describe("controller store workflow claims", () => {
       })
     ).rejects.toThrow(/Connected project was not found/);
   });
+
+  it("persists schema-conformant opportunity scan runs newest-first", async () => {
+    const store = new MemoryStore();
+    await expectOpportunityScanRunsNewestFirst(store);
+  });
+
+  it.skipIf(!process.env.POSTGRES_TEST_DATABASE_URL)(
+    "persists schema-conformant opportunity scan runs newest-first in Postgres",
+    async () => {
+      const connectionString = process.env.POSTGRES_TEST_DATABASE_URL;
+      if (!connectionString) throw new Error("POSTGRES_TEST_DATABASE_URL is required for this test.");
+      const store = new PostgresStore(connectionString);
+      try {
+        await store.init();
+        await expectOpportunityScanRunsNewestFirst(store, `repo-scan-runs-${process.pid}-${Date.now()}`);
+      } finally {
+        await store.close();
+      }
+    }
+  );
 
   it("scopes repo and global memory when listing memories for a work item", async () => {
     const store = new MemoryStore();

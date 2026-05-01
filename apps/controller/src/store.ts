@@ -11,6 +11,7 @@ import {
   ProjectConnectionInputSchema,
   ProjectConnectionSchema,
   ProjectTeamStatusSchema,
+  OpportunityScanRunSchema,
   repoKeyForConfig,
   StageArtifactSchema,
   MemoryRecordSchema,
@@ -23,6 +24,7 @@ import {
   type ProjectConnection,
   type ProjectConnectionInput,
   type ProjectTeamStatus,
+  type OpportunityScanRun,
   type StageArtifact,
   type WorkItem,
   type WorkItemState
@@ -150,6 +152,14 @@ export type Opportunity = StrictProjectScope & {
   updatedAt: string;
 };
 
+export type OpportunityScanRunInput = Pick<OpportunityScanRun, "summary"> &
+  Partial<
+    Pick<
+      OpportunityScanRun,
+      "id" | "status" | "sources" | "repoSha" | "memoryVersion" | "candidatesCreated" | "startedAt" | "completedAt"
+    >
+  >;
+
 export type ProposalOption = {
   title: string;
   summary: string;
@@ -243,6 +253,8 @@ export interface ControllerStore {
   upsertDirection(scope: StrictProjectScope, input: DirectionInput): Promise<Direction>;
   listOpportunities(scope: StrictProjectScope): Promise<Opportunity[]>;
   upsertOpportunity(scope: StrictProjectScope, input: OpportunityInput): Promise<Opportunity>;
+  listOpportunityScanRuns(scope: StrictProjectScope): Promise<OpportunityScanRun[]>;
+  upsertOpportunityScanRun(scope: StrictProjectScope, input: OpportunityScanRunInput): Promise<OpportunityScanRun>;
   listProposals(scope: StrictProjectScope): Promise<Proposal[]>;
   upsertProposal(scope: StrictProjectScope, input: ProposalInput): Promise<Proposal>;
   decideProposal(scope: StrictProjectScope, proposalId: string, input: ProposalDecisionInput): Promise<Proposal>;
@@ -261,6 +273,7 @@ export class MemoryStore implements ControllerStore {
   private loopRuns: LoopRun[] = [];
   private directions: Direction[] = [];
   private opportunities: Opportunity[] = [];
+  private opportunityScanRuns: OpportunityScanRun[] = [];
   private proposals: Proposal[] = [];
   private events: AgentEvent[] = [];
   private nextEventSequence = 1;
@@ -551,6 +564,39 @@ export class MemoryStore implements ControllerStore {
     return opportunity;
   }
 
+  async listOpportunityScanRuns(scope: StrictProjectScope): Promise<OpportunityScanRun[]> {
+    await this.assertProjectScope(scope);
+    return this.opportunityScanRuns
+      .filter((scan) => sameScope(scan, scope))
+      .sort((a, b) => Date.parse(b.completedAt || b.startedAt) - Date.parse(a.completedAt || a.startedAt));
+  }
+
+  async upsertOpportunityScanRun(
+    scope: StrictProjectScope,
+    input: OpportunityScanRunInput
+  ): Promise<OpportunityScanRun> {
+    await this.assertProjectScope(scope);
+    const now = nowIso();
+    const existing = input.id
+      ? this.opportunityScanRuns.find((scan) => scan.id === input.id && sameScope(scan, scope))
+      : undefined;
+    const resolvedStatus = input.status ?? existing?.status ?? "complete";
+    const scan = OpportunityScanRunSchema.parse({
+      id: input.id ?? createRecordId("scan"),
+      ...scope,
+      status: resolvedStatus,
+      sources: input.sources ?? existing?.sources ?? [],
+      repoSha: input.repoSha ?? existing?.repoSha,
+      memoryVersion: input.memoryVersion ?? existing?.memoryVersion,
+      candidatesCreated: input.candidatesCreated ?? existing?.candidatesCreated ?? 0,
+      summary: input.summary,
+      startedAt: input.startedAt ?? existing?.startedAt ?? now,
+      completedAt: input.completedAt ?? existing?.completedAt ?? (resolvedStatus === "running" ? undefined : now)
+    });
+    this.opportunityScanRuns = upsertByScopedId(this.opportunityScanRuns, scan);
+    return scan;
+  }
+
   async listProposals(scope: StrictProjectScope): Promise<Proposal[]> {
     await this.assertProjectScope(scope);
     return this.proposals
@@ -683,6 +729,10 @@ export class PostgresStore extends MemoryStore {
     this.pool = new pg.Pool({ connectionString });
   }
 
+  async close(): Promise<void> {
+    await this.pool.end();
+  }
+
   override async init(): Promise<void> {
     await this.pool.query(`
       create table if not exists work_items (
@@ -756,6 +806,17 @@ export class PostgresStore extends MemoryStore {
         payload jsonb not null,
         updated_at timestamptz not null default now()
       );
+      create table if not exists opportunity_scan_runs (
+        id text primary key,
+        project_id text not null,
+        repo text not null,
+        payload jsonb not null,
+        started_at timestamptz not null,
+        completed_at timestamptz,
+        updated_at timestamptz not null default now()
+      );
+      create index if not exists opportunity_scan_runs_project_repo_recency_idx
+        on opportunity_scan_runs (project_id, repo, (coalesce(completed_at, started_at)) desc);
       create table if not exists proposals (
         id text primary key,
         project_id text not null,
@@ -1088,6 +1149,60 @@ export class PostgresStore extends MemoryStore {
       [scopedDbId(scope, opportunity.id), opportunity.projectId, opportunity.repo, opportunity, opportunity.updatedAt]
     );
     return opportunity;
+  }
+
+  override async listOpportunityScanRuns(scope: StrictProjectScope): Promise<OpportunityScanRun[]> {
+    await this.assertProjectScope(scope);
+    const result = await this.pool.query(
+      `select payload from opportunity_scan_runs
+       where project_id = $1 and repo = $2
+       order by coalesce(completed_at, started_at) desc`,
+      [scope.projectId, scope.repo]
+    );
+    return result.rows.map((row) => OpportunityScanRunSchema.parse(row.payload));
+  }
+
+  override async upsertOpportunityScanRun(
+    scope: StrictProjectScope,
+    input: OpportunityScanRunInput
+  ): Promise<OpportunityScanRun> {
+    const existing = input.id ? await this.getStoredOpportunityScanRun(scope, input.id) : null;
+    const mergedInput = existing
+      ? {
+          id: input.id ?? existing.id,
+          status: input.status ?? existing.status,
+          sources: input.sources ?? existing.sources,
+          repoSha: input.repoSha ?? existing.repoSha,
+          memoryVersion: input.memoryVersion ?? existing.memoryVersion,
+          candidatesCreated: input.candidatesCreated ?? existing.candidatesCreated,
+          summary: input.summary,
+          startedAt: input.startedAt ?? existing.startedAt,
+          completedAt: input.completedAt ?? existing.completedAt
+        }
+      : input;
+    const scan = await super.upsertOpportunityScanRun(scope, mergedInput);
+    if (existing && sameOpportunityScanRun(scan, existing)) return existing;
+    await this.pool.query(
+      `insert into opportunity_scan_runs (id, project_id, repo, payload, started_at, completed_at, updated_at)
+       values ($1, $2, $3, $4, $5, $6, now())
+       on conflict (id) do update set
+         payload = excluded.payload,
+         project_id = excluded.project_id,
+         repo = excluded.repo,
+         started_at = excluded.started_at,
+         completed_at = excluded.completed_at,
+         updated_at = excluded.updated_at`,
+      [scopedDbId(scope, scan.id), scan.projectId, scan.repo, scan, scan.startedAt, scan.completedAt || null]
+    );
+    return scan;
+  }
+
+  private async getStoredOpportunityScanRun(scope: StrictProjectScope, id: string): Promise<OpportunityScanRun | null> {
+    const result = await this.pool.query(
+      "select payload from opportunity_scan_runs where id = $1 and project_id = $2 and repo = $3",
+      [scopedDbId(scope, id), scope.projectId, scope.repo]
+    );
+    return result.rows[0] ? OpportunityScanRunSchema.parse(result.rows[0].payload) : null;
   }
 
   override async listProposals(scope: StrictProjectScope): Promise<Proposal[]> {
@@ -1518,6 +1633,22 @@ function sameScope(value: StrictProjectScope, scope: StrictProjectScope): boolea
 
 function upsertByScopedId<T extends StrictProjectScope & { id: string }>(items: T[], item: T): T[] {
   return [...items.filter((existing) => existing.id !== item.id || !sameScope(existing, item)), item];
+}
+
+function sameOpportunityScanRun(left: OpportunityScanRun, right: OpportunityScanRun): boolean {
+  return (
+    left.id === right.id &&
+    left.projectId === right.projectId &&
+    left.repo === right.repo &&
+    left.status === right.status &&
+    JSON.stringify(left.sources) === JSON.stringify(right.sources) &&
+    left.repoSha === right.repoSha &&
+    left.memoryVersion === right.memoryVersion &&
+    left.candidatesCreated === right.candidatesCreated &&
+    left.summary === right.summary &&
+    left.startedAt === right.startedAt &&
+    left.completedAt === right.completedAt
+  );
 }
 
 function loopStatusForProposalDecision(decision: ProposalDecision["decision"]): LoopRun["status"] {

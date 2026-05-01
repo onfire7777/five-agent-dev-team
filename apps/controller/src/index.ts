@@ -25,6 +25,7 @@ import {
   EmergencyControlRequestSchema,
   ProjectCapabilityStatusSchema,
   ProjectConnectionInputSchema,
+  OpportunityScanRunSchema,
   WorkItemStateSchema,
   loadTargetRepoConfig,
   targetRepoConfigFromProjectConnection,
@@ -501,21 +502,50 @@ app.get("/api/projects/:projectId/opportunities", async (req, res, next) => {
 });
 
 app.post("/api/projects/:projectId/opportunities/scan", async (req, res, next) => {
+  let scope: StrictProjectScope | undefined;
+  let scanId: string | undefined;
   try {
-    const scope = await requireScopeForProjectId(req.params.projectId);
-    const opportunity = await scanLeanOpportunity(scope);
+    scope = await requireScopeForProjectId(req.params.projectId);
+    const startedAt = new Date().toISOString();
+    const runningScan = await store.upsertOpportunityScanRun(scope, {
+      status: "running",
+      sources: [],
+      candidatesCreated: 0,
+      summary: "Opportunity scan started.",
+      startedAt
+    });
+    scanId = runningScan.id;
+    const result = await scanLeanOpportunity(scope);
     const opportunities = await store.listOpportunities(scope);
+    const scan = OpportunityScanRunSchema.parse(
+      await store.upsertOpportunityScanRun(scope, {
+        id: scanId,
+        status: "complete",
+        sources: result.sources,
+        candidatesCreated: result.created ? 1 : 0,
+        summary: result.created
+          ? `Created opportunity candidate ${result.opportunity.id}.`
+          : `Reused existing opportunity candidate ${result.opportunity.id}.`,
+        startedAt: runningScan.startedAt,
+        completedAt: new Date().toISOString()
+      })
+    );
     res.status(201).json({
-      scan: {
-        projectId: scope.projectId,
-        repo: scope.repo,
-        status: "completed",
-        candidateCount: opportunities.length
-      },
-      opportunity: mapOpportunityForUi(opportunity),
+      scan,
+      opportunity: mapOpportunityForUi(result.opportunity),
       opportunities: opportunities.map(mapOpportunityForUi)
     });
   } catch (error) {
+    if (scope && scanId) {
+      await store
+        .upsertOpportunityScanRun(scope, {
+          id: scanId,
+          status: "failed",
+          summary: "Opportunity scan failed before completion.",
+          completedAt: new Date().toISOString()
+        })
+        .catch(() => undefined);
+    }
     next(error);
   }
 });
@@ -1517,20 +1547,27 @@ async function decideProposalById(proposalId: string, input: z.infer<typeof Prop
   return { proposal: mapProposalForUi(updated), workItemId: proposal.workItemId, nextState, signaled };
 }
 
-async function scanLeanOpportunity(scope: StrictProjectScope): Promise<Opportunity> {
-  const existing = (await store.listOpportunities(scope)).find(
-    (item) => item.status !== "accepted" && item.status !== "rejected" && item.tags.includes("autonomous-scan")
-  );
-  if (existing) return existing;
-
+async function scanLeanOpportunity(
+  scope: StrictProjectScope
+): Promise<{ opportunity: Opportunity; created: boolean; sources: Array<"human_direction" | "repo_memory"> }> {
   const direction = await store.getDirection(scope);
+  const sources: Array<"human_direction" | "repo_memory"> = [direction ? "human_direction" : "repo_memory"];
+  const opportunities = await store.listOpportunities(scope);
+  const existing =
+    opportunities.find((item) => item.id === "autonomous-scan") ||
+    opportunities.find(
+      (item) => item.status !== "accepted" && item.status !== "rejected" && item.tags.includes("autonomous-scan")
+    );
+  if (existing) return { opportunity: existing, created: false, sources };
+
   const title = direction?.summary
     ? `Act on project direction: ${direction.summary.slice(0, 80)}`
     : "Strengthen repo reliability, tests, and release readiness";
   const summary = direction?.summary
     ? `Use the saved project direction as steering input, then prefer hardening, debugging, testing, performance, and maintainability work before proposing feature expansion. Direction: ${direction.summary}`
     : "No user work is blocking, so run a lean autonomous hardening pass: inspect failed checks, TODO/FIXME markers, weak tests, recent blockers, release-gate gaps, and repo memory before proposing the next safest improvement.";
-  return store.upsertOpportunity(scope, {
+  const opportunity = await store.upsertOpportunity(scope, {
+    id: "autonomous-scan",
     title,
     summary,
     source: direction ? "operator" : "agent",
@@ -1538,6 +1575,7 @@ async function scanLeanOpportunity(scope: StrictProjectScope): Promise<Opportuni
     status: "new",
     tags: ["autonomous-scan", "hardening", "deduped"]
   });
+  return { opportunity, created: true, sources };
 }
 
 async function decideWorkItemProposal(workItemId: string, decision: "accept" | "revise" | "reject", body: unknown) {
