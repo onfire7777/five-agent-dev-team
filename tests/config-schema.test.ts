@@ -95,6 +95,60 @@ describe("target repo config schema", () => {
     expect(connection.localPath).toBe("C:/repo/app");
   });
 
+  it("requires absolute local paths for project connections", () => {
+    expect(() =>
+      ProjectConnectionInputSchema.parse({
+        repoOwner: "acme",
+        repoName: "app",
+        localPath: ""
+      })
+    ).toThrow(/absolute path/i);
+
+    expect(() =>
+      ProjectConnectionInputSchema.parse({
+        repoOwner: "acme",
+        repoName: "app",
+        localPath: "repo/app"
+      })
+    ).toThrow(/absolute path/i);
+
+    expect(() =>
+      ProjectConnectionInputSchema.parse({
+        repoOwner: "acme",
+        repoName: "app",
+        localPath: "./repo/app"
+      })
+    ).toThrow(/absolute path/i);
+
+    expect(
+      ProjectConnectionInputSchema.parse({
+        repoOwner: "acme",
+        repoName: "app",
+        localPath: "/var/repo/app"
+      }).localPath
+    ).toBe("/var/repo/app");
+
+    expect(
+      ProjectConnectionInputSchema.parse({
+        repoOwner: "acme",
+        repoName: "app",
+        localPath: "C:\\repo\\app"
+      }).localPath
+    ).toBe("C:\\repo\\app");
+  });
+
+  it("requires absolute local paths in repo config", () => {
+    expect(() =>
+      TargetRepoConfigSchema.parse({
+        ...minimalConfig,
+        repo: {
+          ...minimalConfig.repo,
+          localPath: "repo/app"
+        }
+      })
+    ).toThrow(/absolute path/i);
+  });
+
   it("parses lazy MCP and capability activation rules", () => {
     const config = TargetRepoConfigSchema.parse({
       ...minimalConfig,

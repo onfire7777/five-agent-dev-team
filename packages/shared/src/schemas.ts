@@ -55,6 +55,13 @@ function defaultArtifactId(): string {
   return globalThis.crypto?.randomUUID?.() || `artifact-${Date.now().toString(36)}`;
 }
 
+const ABSOLUTE_LOCAL_PATH_REGEX = /^(?:\/|[A-Za-z]:[\\/])/;
+const AbsoluteLocalPathSchema = z
+  .string()
+  .refine((value) => value.length > 0 && ABSOLUTE_LOCAL_PATH_REGEX.test(value), {
+    message: "Local path must be an absolute path."
+  });
+
 const AcceptanceCriterionSchema = z.object({
   id: z.string().min(1),
   text: z.string().min(1),
@@ -676,7 +683,7 @@ export const ProjectConnectionInputSchema = z.object({
   repoOwner: z.string().min(1),
   repoName: z.string().min(1),
   defaultBranch: z.string().min(1).default("main"),
-  localPath: z.string().min(1),
+  localPath: AbsoluteLocalPathSchema,
   githubUrl: z.string().url().optional(),
   webResearchEnabled: z.boolean().default(true),
   githubMcpEnabled: z.boolean().default(true),
@@ -970,7 +977,7 @@ export const TargetRepoConfigSchema = z.object({
     owner: z.string().min(1),
     name: z.string().min(1),
     defaultBranch: z.string().min(1),
-    localPath: z.string().min(1)
+    localPath: AbsoluteLocalPathSchema
   }),
   commands: RepoCommandSchema,
   context: z
