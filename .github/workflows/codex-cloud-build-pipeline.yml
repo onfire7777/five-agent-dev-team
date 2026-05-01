@@ -566,5 +566,8 @@ jobs:
             ${{ runner.temp }}/codex-cloud-artifacts/codex-output.md
             ${{ runner.temp }}/codex-cloud-artifacts/codex-stage-context.md
             ${{ runner.temp }}/codex-cloud-artifacts/codex-target.json
+            codex-output.md
+            codex-stage-context.md
+            codex-target.json
             pr-body.md
           if-no-files-found: ignore
