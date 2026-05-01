@@ -295,6 +295,13 @@ jobs:
         if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'issue'
         run: npm ci
 
+      - name: Seed cloud Codex state surface
+        if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'issue'
+        shell: bash
+        run: |
+          mkdir -p "$HOME/.codex/state/runs"
+          touch "$HOME/.codex/state/five-agent-dev-team-ledger.ndjson"
+
       - name: Prepare stage context
         if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'issue'
         env:
