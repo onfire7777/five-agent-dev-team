@@ -509,8 +509,7 @@ jobs:
           TARGET_NUMBER: ${{ steps.gate.outputs.target_number }}
         shell: bash
         run: |
-          gh issue edit "$TARGET_NUMBER" --add-label agent:ready-for-review
-
+          gh issue edit "$TARGET_NUMBER" --add-label agent:ready-for-review || true
           gh issue edit "$TARGET_NUMBER" --remove-label agent:running --remove-label agent:claimed || true
 
       - name: Captain merge gate
