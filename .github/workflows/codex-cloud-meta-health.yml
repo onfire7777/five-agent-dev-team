@@ -86,7 +86,7 @@ jobs:
                 owner,
                 repo,
                 path: ".github/workflows/codex-cloud-build-pipeline.yml",
-                ref: "main"
+                ref: mainSha
               });
               const workflowBody = Buffer.from(buildWorkflow.data.content, "base64").toString("utf8");
               buildWorkflowCanWritePullRequests = /^\s*pull-requests:\s*write\s*$/m.test(workflowBody);
@@ -99,11 +99,20 @@ jobs:
                 });
               }
             } catch (error) {
-              warnings.push({
-                class: "advisory",
-                title: "Codex Cloud Build Pipeline permission lookup unavailable",
-                detail: `Workflow file lookup failed: ${error.status || "unknown"}.`
-              });
+              if (error.status === 404) {
+                blockers.push({
+                  class: "globalStop",
+                  title: "Codex Cloud Build Pipeline workflow is missing",
+                  detail:
+                    "`.github/workflows/codex-cloud-build-pipeline.yml` was not found on the checked main revision, so PR publication cannot run."
+                });
+              } else {
+                warnings.push({
+                  class: "advisory",
+                  title: "Codex Cloud Build Pipeline permission lookup unavailable",
+                  detail: `Workflow file lookup failed: ${error.status || "unknown"}.`
+                });
+              }
             }
 
             const requiredContexts = [
