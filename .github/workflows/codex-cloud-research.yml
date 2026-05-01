@@ -19,8 +19,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  # gpt-5.2-codex currently fails in codex-action with an unsupported verbosity request.
-  CODEX_ACTION_MODEL: ${{ vars.CODEX_ACTION_MODEL || 'gpt-5.2' }}
+  CODEX_ACTION_MODEL: ${{ vars.CODEX_ACTION_MODEL || 'gpt-5.2-codex' }}
   CODEX_ACTION_EFFORT: ${{ vars.CODEX_ACTION_EFFORT || 'xhigh' }}
   OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
