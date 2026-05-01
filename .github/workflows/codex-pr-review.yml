@@ -11,6 +11,9 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # gpt-5.2-codex currently fails in codex-action with an unsupported verbosity request.
+  CODEX_ACTION_MODEL: ${{ vars.CODEX_ACTION_MODEL || 'gpt-5.2' }}
+  CODEX_ACTION_EFFORT: ${{ vars.CODEX_ACTION_EFFORT || 'xhigh' }}
 
 concurrency:
   group: codex-pr-review-${{ github.event.pull_request.number }}
@@ -39,6 +42,9 @@ jobs:
         uses: openai/codex-action@a26d2d4d8b78a694338b8e3715c3630254340b2c
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          model: ${{ env.CODEX_ACTION_MODEL }}
+          effort: ${{ env.CODEX_ACTION_EFFORT }}
+          codex-args: '--config model_verbosity="medium"'
           sandbox: read-only
           safety-strategy: drop-sudo
           allow-users: onfire7777
@@ -63,12 +69,17 @@ jobs:
         with:
           github-token: ${{ github.token }}
           script: |
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number,
-              body: process.env.CODEX_FINAL_MESSAGE,
-            });
+            try {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                body: process.env.CODEX_FINAL_MESSAGE,
+              });
+            } catch (error) {
+              core.warning(`Codex review completed but comment posting failed: ${error.status || "unknown"} ${error.message}`);
+              await core.summary.addRaw(`## Codex PR Review\n\n${process.env.CODEX_FINAL_MESSAGE}`).write();
+            }
       - name: Upload Codex review output
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
