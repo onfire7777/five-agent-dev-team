@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { MemoryStore } from "../apps/controller/src/store";
-import { StageArtifactSchema, type MemoryRecord, type StageArtifact } from "../packages/shared/src";
+import {
+  OpportunityScanRunSchema,
+  StageArtifactSchema,
+  type MemoryRecord,
+  type StageArtifact
+} from "../packages/shared/src";
 
 describe("controller store workflow claims", () => {
   it("prevents duplicate workflow claims for the same item", async () => {
@@ -122,6 +127,58 @@ describe("controller store workflow claims", () => {
         projectId: "missing"
       })
     ).rejects.toThrow(/Connected project was not found/);
+  });
+
+  it("persists schema-conformant opportunity scan runs newest-first", async () => {
+    const store = new MemoryStore();
+    await store.upsertProjectConnection({
+      repoOwner: "owner",
+      repoName: "repo-a",
+      localPath: "C:/repos/a",
+      active: true
+    });
+    const scope = { projectId: "owner-repo-a", repo: "owner/repo-a" };
+
+    const older = await store.upsertOpportunityScanRun(scope, {
+      sources: ["repo_memory"],
+      candidatesCreated: 1,
+      summary: "Older scan found one candidate.",
+      startedAt: "2026-05-01T00:00:00.000Z",
+      completedAt: "2026-05-01T00:00:01.000Z"
+    });
+    const newer = await store.upsertOpportunityScanRun(scope, {
+      sources: ["human_direction"],
+      candidatesCreated: 0,
+      summary: "Newer scan reused an existing candidate.",
+      startedAt: "2026-05-01T01:00:00.000Z",
+      completedAt: "2026-05-01T01:00:01.000Z"
+    });
+    const running = await store.upsertOpportunityScanRun(scope, {
+      status: "running",
+      sources: ["repo_memory"],
+      summary: "Running scan is not complete yet.",
+      startedAt: "2026-05-01T02:00:00.000Z"
+    });
+    const updatedOlder = await store.upsertOpportunityScanRun(scope, {
+      id: older.id,
+      summary: "Older scan summary updated."
+    });
+
+    expect(OpportunityScanRunSchema.parse(newer)).toMatchObject({
+      projectId: scope.projectId,
+      repo: scope.repo,
+      status: "complete",
+      sources: ["human_direction"],
+      candidatesCreated: 0
+    });
+    expect(running.completedAt).toBeUndefined();
+    expect(updatedOlder).toMatchObject({
+      sources: ["repo_memory"],
+      candidatesCreated: 1,
+      startedAt: "2026-05-01T00:00:00.000Z",
+      completedAt: "2026-05-01T00:00:01.000Z"
+    });
+    await expect(store.listOpportunityScanRuns(scope)).resolves.toEqual([running, newer, updatedOlder]);
   });
 
   it("scopes repo and global memory when listing memories for a work item", async () => {
