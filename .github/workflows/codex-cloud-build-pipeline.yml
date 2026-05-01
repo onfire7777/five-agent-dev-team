@@ -175,6 +175,36 @@ jobs:
                 core.setOutput("reason", `no queued ${stageInfo.display} issue with execution:codex-cloud`);
                 return;
               }
+              const liveTarget = await github.rest.issues.get({
+                owner,
+                repo,
+                issue_number: target.number
+              });
+              const liveLabels = liveTarget.data.labels.map((label) =>
+                typeof label === "string" ? label : label.name
+              );
+              if (!liveLabels.includes("agent:queued")) {
+                core.setOutput("should_run", "false");
+                core.setOutput(
+                  "reason",
+                  `queued issue #${target.number} was already claimed or rerouted`
+                );
+                return;
+              }
+              await github.rest.issues.addLabels({
+                owner,
+                repo,
+                issue_number: target.number,
+                labels: ["agent:claimed", "agent:running"]
+              });
+              try {
+                await github.rest.issues.removeLabel({
+                  owner,
+                  repo,
+                  issue_number: target.number,
+                  name: "agent:queued"
+                });
+              } catch {}
               core.setOutput("should_run", "true");
               core.setOutput("target_kind", "issue");
               core.setOutput("target_number", String(target.number));
@@ -184,24 +214,43 @@ jobs:
             }
 
             if (stage === "captain") {
-              const candidates = openPrs
+              const candidates = [];
+              const sortedPrs = openPrs
                 .filter((pr) => !pr.draft)
-                .filter((pr) => {
-                  const labelNames = pr.labels.map((label) => label.name);
-                  return (
-                    labelNames.includes("agent:ready-for-review") ||
-                    labelNames.includes("codex-status:ready-to-merge")
-                  ) && !labelNames.some((label) =>
-                    [
-                      "codex-status:blocked",
-                      "codex-blocker:ci",
-                      "codex-blocker:security",
-                      "codex-blocker:merge-conflict",
-                      "codex-blocker:scope"
-                    ].includes(label)
-                  );
-                })
                 .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+              for (const pr of sortedPrs) {
+                const labelNames = pr.labels.map((label) => label.name);
+                const hasBlockingLabel = labelNames.some((label) =>
+                  [
+                    "codex-status:blocked",
+                    "codex-blocker:ci",
+                    "codex-blocker:security",
+                    "codex-blocker:merge-conflict",
+                    "codex-blocker:scope"
+                  ].includes(label)
+                );
+                if (!labelNames.includes("codex-status:ready-to-merge") || hasBlockingLabel) {
+                  continue;
+                }
+                const review = await github.graphql(
+                  `query($owner:String!,$repo:String!,$number:Int!) {
+                    repository(owner:$owner,name:$repo) {
+                      pullRequest(number:$number) {
+                        reviewDecision
+                      }
+                    }
+                  }`,
+                  { owner, repo, number: pr.number }
+                );
+                const reviewDecision = review.repository.pullRequest.reviewDecision;
+                if (reviewDecision === "REVIEW_REQUIRED" || reviewDecision === "CHANGES_REQUESTED") {
+                  core.info(
+                    `Skipping PR #${pr.number}: review gate is ${reviewDecision}`
+                  );
+                  continue;
+                }
+                candidates.push(pr);
+              }
               if (!candidates.length) {
                 core.setOutput("should_run", "false");
                 core.setOutput("reason", "no non-draft ready PR for Captain");
@@ -272,15 +321,6 @@ jobs:
             echo "## Target issue"
             cat codex-target.json
           } > codex-stage-context.md
-
-      - name: Claim queue issue
-        if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'issue'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TARGET_NUMBER: ${{ steps.gate.outputs.target_number }}
-        run: |
-          gh issue edit "$TARGET_NUMBER" --add-label agent:running --add-label agent:claimed
-          gh issue edit "$TARGET_NUMBER" --remove-label agent:queued || true
 
       - name: Report missing OPENAI_API_KEY
         if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'issue' && env.OPENAI_API_KEY == ''
@@ -431,7 +471,7 @@ jobs:
             --body-file pr-body.md \
             --label "$STAGE_LABEL" \
             --label agent:ready-for-review \
-            --label codex-status:ready-to-merge
+            --label codex-status:needs-review
 
           gh issue edit "$TARGET_NUMBER" --add-label agent:ready-for-review
           gh issue edit "$TARGET_NUMBER" --remove-label agent:running --remove-label agent:claimed || true
