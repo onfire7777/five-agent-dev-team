@@ -19,6 +19,9 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # gpt-5.2-codex currently fails in codex-action with an unsupported verbosity request.
+  CODEX_ACTION_MODEL: ${{ vars.CODEX_ACTION_MODEL || 'gpt-5.2' }}
+  CODEX_ACTION_EFFORT: ${{ vars.CODEX_ACTION_EFFORT || 'xhigh' }}
 
 concurrency:
   group: codex-ci-autofix-${{ github.ref }}
@@ -49,6 +52,9 @@ jobs:
         uses: openai/codex-action@a26d2d4d8b78a694338b8e3715c3630254340b2c
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          model: ${{ env.CODEX_ACTION_MODEL }}
+          effort: ${{ env.CODEX_ACTION_EFFORT }}
+          codex-args: '--config model_verbosity="medium"'
           sandbox: workspace-write
           safety-strategy: drop-sudo
           allow-users: onfire7777
