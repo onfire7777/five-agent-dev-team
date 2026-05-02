@@ -1204,13 +1204,11 @@ export function App() {
               <summary>
                 <Github size={15} />+ Connect
               </summary>
-              <div
+              <form
                 className="project-connect-grid"
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    connectProject();
-                  }
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  connectProject();
                 }}
               >
                 <label className="field">
@@ -1397,16 +1395,11 @@ export function App() {
                   </div>
                 </details>
 
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={connectProject}
-                  disabled={loading || !apiState.connected}
-                >
+                <button className="secondary-button" type="submit" disabled={loading || !apiState.connected}>
                   <Github size={15} />
                   Connect
                 </button>
-              </div>
+              </form>
             </details>
           </div>
           {projectError && (
