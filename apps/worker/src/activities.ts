@@ -16,6 +16,7 @@ import {
   targetConfigMatchesWorkItem,
   targetRepoConfigFromProjectConnection,
   githubAuthEnv,
+  type ProjectConnection,
   type StageArtifact,
   type TargetRepoConfig,
   type VerificationSignal,
@@ -1426,6 +1427,8 @@ function createDefaultReleaseConfig(): TargetRepoConfig {
 async function loadReleaseConfig(workItem?: WorkItem): Promise<TargetRepoConfig> {
   const configPath = process.env.AGENT_TEAM_CONFIG || "agent-team.config.yaml";
   try {
+    const targetRepoFileConfig = workItem ? await loadConfigFromTargetRepoFile(workItem) : null;
+    if (targetRepoFileConfig) return targetRepoFileConfig;
     const projectFileConfig = workItem ? await loadConfigFromProjectFile(workItem) : null;
     if (projectFileConfig) return projectFileConfig;
     const config = loadTargetRepoConfig(configPath);
@@ -1458,7 +1461,7 @@ async function loadReleaseConfig(workItem?: WorkItem): Promise<TargetRepoConfig>
   }
 }
 
-async function loadConfigFromProjectConnection(workItem: WorkItem): Promise<TargetRepoConfig | null> {
+async function findProjectConnectionForWorkItem(workItem: WorkItem): Promise<ProjectConnection | null> {
   const store = await getActivityStore();
   const connections = await store.listProjectConnections();
   const match = connections.find((connection) => {
@@ -1467,6 +1470,25 @@ async function loadConfigFromProjectConnection(workItem: WorkItem): Promise<Targ
       return connection.projectId === workItem.projectId && connection.repo === workItem.repo;
     return connection.projectId === workItem.projectId || connection.repo === workItem.repo;
   });
+  return match || null;
+}
+
+async function loadConfigFromTargetRepoFile(workItem: WorkItem): Promise<TargetRepoConfig | null> {
+  const match = await findProjectConnectionForWorkItem(workItem);
+  if (!match?.localPath) return null;
+  const configPath = path.join(match.localPath, ".agent-team", "config.yaml");
+  try {
+    const config = loadTargetRepoConfig(configPath);
+    if (targetConfigMatchesWorkItem(config, workItem)) return config;
+    throw new Error(`Target repo config ${configPath} does not match ${workItem.projectId || workItem.repo}.`);
+  } catch (error) {
+    if (error instanceof Error && /does not match/.test(error.message)) throw error;
+    return null;
+  }
+}
+
+async function loadConfigFromProjectConnection(workItem: WorkItem): Promise<TargetRepoConfig | null> {
+  const match = await findProjectConnectionForWorkItem(workItem);
   return match ? targetRepoConfigFromProjectConnection(match) : null;
 }
 
