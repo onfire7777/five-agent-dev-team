@@ -985,7 +985,8 @@ async function collectReleaseSignal(
       rollbackPlanPresent: envFlag("AGENT_ROLLBACK_PLAN_PRESENT") || rollbackPlanPresent,
       releaseProofPresent: await hasReleaseProof(workItem, config, releaseTag),
       emergencyStopActive: status.system.emergencyStop,
-      riskLevel: workItem.riskLevel
+      riskLevel: workItem.riskLevel,
+      releaseClass: workItem.releaseClass || "code"
     },
     syncReasons: uniqueStrings([
       ...sync.reasons,
@@ -1399,6 +1400,8 @@ function createDefaultReleaseConfig(): TargetRepoConfig {
         medium: "autonomous_with_all_gates",
         high: "autonomous_with_all_gates"
       },
+      allowedClasses: ["code", "docs", "tests", "infra"],
+      autonomousClasses: ["code", "docs", "tests", "infra"],
       emergencyStopFile: ".agent-team/emergency-stop"
     },
     scheduler: {

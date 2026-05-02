@@ -7,6 +7,7 @@ import {
   ProjectConnectionInputSchema,
   ProjectConnectionSchema,
   TargetRepoConfigSchema,
+  RELEASE_CLASSES,
   targetRepoConfigFromProjectConnection
 } from "../packages/shared/src";
 
@@ -43,6 +44,51 @@ describe("target repo config schema", () => {
     expect(config.integrations.capabilityPacks).toEqual([]);
     expect(config.project.isolation.requireExplicitRepoConnection).toBe(true);
     expect(config.models.primaryCodingModel).toBe("gpt-5.5");
+    expect(config.release.allowedClasses).toEqual([...RELEASE_CLASSES]);
+    expect(config.release.autonomousClasses).toEqual([...RELEASE_CLASSES]);
+  });
+
+  it("validates release class allowlists for autonomous release", () => {
+    const config = TargetRepoConfigSchema.parse({
+      ...minimalConfig,
+      release: {
+        ...minimalConfig.release,
+        allowedClasses: ["code", "docs"],
+        autonomousClasses: ["code"]
+      }
+    });
+
+    expect(config.release.allowedClasses).toEqual(["code", "docs"]);
+    expect(config.release.autonomousClasses).toEqual(["code"]);
+    expect(
+      TargetRepoConfigSchema.parse({
+        ...minimalConfig,
+        release: {
+          ...minimalConfig.release,
+          allowedClasses: ["docs"]
+        }
+      }).release.autonomousClasses
+    ).toEqual(["docs"]);
+    expect(() =>
+      TargetRepoConfigSchema.parse({
+        ...minimalConfig,
+        release: {
+          ...minimalConfig.release,
+          allowedClasses: ["code"],
+          autonomousClasses: ["infra"]
+        }
+      })
+    ).toThrow(/autonomous unless it is allowed/i);
+    expect(() =>
+      TargetRepoConfigSchema.parse({
+        ...minimalConfig,
+        release: {
+          ...minimalConfig.release,
+          allowedClasses: [],
+          autonomousClasses: []
+        }
+      })
+    ).toThrow();
   });
 
   it("uses a release command compatible with generated release tags", () => {

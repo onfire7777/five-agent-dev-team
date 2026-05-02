@@ -189,6 +189,7 @@ describe("controller store workflow claims", () => {
       dependencies: [],
       acceptanceCriteria: ["B only"],
       riskLevel: "medium",
+      releaseClass: "docs",
       frontendNeeded: true,
       backendNeeded: true,
       rndNeeded: true,
@@ -199,6 +200,7 @@ describe("controller store workflow claims", () => {
     expect(workItem.projectId).toBe("owner-repo-b");
     expect(workItem.repo).toBe("owner/repo-b");
     expect(workItem.acceptanceCriteria).toEqual(["B only"]);
+    expect(workItem.releaseClass).toBe("docs");
     await expect(
       store.createWorkItem({
         title: "Unknown repo",

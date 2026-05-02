@@ -227,6 +227,7 @@ function fakeStore(): FakeStore {
         dependencies: input.dependencies,
         acceptanceCriteria: input.acceptanceCriteria,
         riskLevel: input.riskLevel,
+        releaseClass: input.releaseClass || "code",
         frontendNeeded: input.frontendNeeded,
         backendNeeded: input.backendNeeded,
         rndNeeded: input.rndNeeded,
@@ -483,6 +484,7 @@ function workItem(): WorkItem {
     dependencies: [],
     acceptanceCriteria: ["Rollback executes when health fails"],
     riskLevel: "low",
+    releaseClass: "code",
     frontendNeeded: false,
     backendNeeded: true,
     rndNeeded: false,
@@ -656,6 +658,8 @@ function targetRepoConfig(repoPath: string): TargetRepoConfig {
         medium: "autonomous_with_all_gates",
         high: "autonomous_with_all_gates"
       },
+      allowedClasses: ["code", "docs", "tests", "infra"],
+      autonomousClasses: ["code", "docs", "tests", "infra"],
       emergencyStopFile: ".agent-team/emergency-stop"
     },
     scheduler: {

@@ -73,6 +73,8 @@ function configFor(repoPath: string): TargetRepoConfig {
         medium: "autonomous_with_all_gates",
         high: "autonomous_with_all_gates"
       },
+      allowedClasses: ["code", "docs", "tests", "infra"],
+      autonomousClasses: ["code", "docs", "tests", "infra"],
       emergencyStopFile: ".agent-team/emergency-stop"
     },
     scheduler: {

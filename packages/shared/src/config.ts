@@ -314,6 +314,8 @@ export function targetRepoConfigFromProjectConnection(project: ProjectConnection
       githubActionsRequired: true,
       requireLocalRemoteSync: true,
       requireCleanWorktree: true,
+      allowedClasses: ["code", "docs", "tests", "infra"],
+      autonomousClasses: ["code", "docs", "tests", "infra"],
       emergencyStopFile: ".agent-team/emergency-stop"
     }
   });
