@@ -128,7 +128,13 @@ export async function recordLoopStart(workItem: WorkItem): Promise<StageArtifact
       projectId: scopedWorkItem.projectId,
       repo: scopedWorkItem.repo,
       status: blockingRisks.length ? "blocked" : "passed",
-      latestCompletedLoop: latestLoopMemory?.content || null,
+      latestCompletedLoop: latestLoopMemory
+        ? {
+            id: latestLoopMemory.id,
+            title: latestLoopMemory.title,
+            updatedAt: latestLoopMemory.updatedAt
+          }
+        : null,
       git: evidence.git,
       runtime: evidence.runtime,
       github: evidence.github
@@ -610,7 +616,10 @@ export async function runVerification(workItem: WorkItem, previousArtifacts: Sta
       projectId: scopedWorkItem.projectId,
       repo: scopedWorkItem.repo,
       status: failedChecks.length ? "failed" : "passed",
-      checks
+      checks: checks.map((check) => ({
+        name: check.name,
+        ok: check.ok
+      }))
     },
     decisions: failedChecks.length
       ? ["Route required fixes back to the owning implementation agent before release.", rollbackDecision]

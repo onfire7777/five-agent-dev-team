@@ -382,6 +382,7 @@ export class MemoryStore implements ControllerStore {
     const parsed = memories.map((memory) => MemoryRecordSchema.parse(memory));
     const byId = new Map(this.memories.map((memory) => [memory.id, memory]));
     for (const memory of parsed) {
+      if (isExpiredKeyedMemory(memory)) continue;
       if (isLiveKeyedMemory(memory)) {
         for (const [id, existing] of byId) {
           if (id !== memory.id && isSameLiveMemoryKey(existing, memory)) {
@@ -1023,7 +1024,9 @@ export class PostgresStore extends MemoryStore {
   }
 
   override async addMemories(memories: MemoryRecord[]): Promise<void> {
-    const parsed = memories.map((item) => MemoryRecordSchema.parse(item));
+    const parsed = memories
+      .map((item) => MemoryRecordSchema.parse(item))
+      .filter((memory) => !isExpiredKeyedMemory(memory));
     const client = await this.pool.connect();
     try {
       await client.query("begin");
@@ -1756,8 +1759,12 @@ function scopedDbId(scope: StrictProjectScope, id: string): string {
   return `${scope.projectId}:${scope.repo}:${id}`;
 }
 
+function isExpiredKeyedMemory(memory: MemoryRecord): boolean {
+  return Boolean(memory.key && memory.expiresAt && Date.parse(memory.expiresAt) <= Date.now());
+}
+
 function isLiveKeyedMemory(memory: MemoryRecord): boolean {
-  return Boolean(memory.key && !memory.supersededBy);
+  return Boolean(memory.key && !memory.supersededBy && !isExpiredKeyedMemory(memory));
 }
 
 function isSameLiveMemoryKey(left: MemoryRecord, right: MemoryRecord): boolean {
