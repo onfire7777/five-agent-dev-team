@@ -16,10 +16,27 @@ describe("stage artifact schema", () => {
       testsRun: ["npm test"],
       releaseReadiness: "ready",
       nextStage: "RELEASE",
+      bodyMd: "## Verification Report\n\nAll checks passed.",
+      bodyJson: { workItemId: "WI-1000", status: "passed" },
       createdAt: new Date().toISOString()
     });
 
     expect(artifact.ownerAgent).toBe("quality-security-privacy-release");
+  });
+
+  it("rejects stage artifacts missing markdown body", () => {
+    expect(() =>
+      StageArtifactSchema.parse({
+        workItemId: "WI-1000",
+        stage: "VERIFY",
+        ownerAgent: "quality-security-privacy-release",
+        status: "passed",
+        title: "Verification Report",
+        summary: "All checks passed.",
+        nextStage: null,
+        createdAt: new Date().toISOString()
+      })
+    ).toThrow();
   });
 
   it("validates loop start and loop closure lifecycle artifacts", () => {
@@ -39,6 +56,8 @@ describe("stage artifact schema", () => {
       testsRun: ["git-sync:passed"],
       releaseReadiness: "unknown",
       nextStage: "INTAKE",
+      bodyMd: "## Loop Start\n\nLoop start captured latest state before intake.",
+      bodyJson: { workItemId: "WI-1001", status: "started" },
       createdAt
     });
     const loopClosure = StageArtifactSchema.parse({
@@ -56,6 +75,8 @@ describe("stage artifact schema", () => {
       testsRun: ["git-sync:passed", "github-actions:passed"],
       releaseReadiness: "ready",
       nextStage: null,
+      bodyMd: "## Loop Closure\n\nLoop complete and remembered.",
+      bodyJson: { workItemId: "WI-1001", status: "closed" },
       createdAt
     });
 
@@ -104,7 +125,7 @@ describe("stage artifact schema", () => {
         projectId: "owner-repo",
         title: "Scoped work",
         requestType: "research",
-        priority: "p1",
+        priority: "high",
         businessGoal: "ship",
         userGoal: "use",
         technicalGoal: "build",
@@ -127,7 +148,7 @@ describe("stage artifact schema", () => {
         projectId: "",
         title: "Scoped work",
         requestType: "feature",
-        priority: "p1",
+        priority: "high",
         businessGoal: "ship",
         userGoal: "use",
         technicalGoal: "build",

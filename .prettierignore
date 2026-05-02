@@ -5,4 +5,5 @@ playwright-report/
 test-results/
 .agent-team/
 package-lock.json
+docs/implementation-spec.md
 *.log

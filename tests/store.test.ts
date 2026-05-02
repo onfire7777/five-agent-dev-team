@@ -189,6 +189,35 @@ describe("controller store workflow claims", () => {
     ).rejects.toThrow(/Connected project was not found/);
   });
 
+  it("tracks state transition time separately from general updates", async () => {
+    const store = new MemoryStore();
+    const workItem = await store.createWorkItem({
+      title: "Tracked transition",
+      requestType: "feature",
+      priority: "medium",
+      dependencies: [],
+      acceptanceCriteria: [],
+      riskLevel: "medium",
+      frontendNeeded: true,
+      backendNeeded: true,
+      rndNeeded: false,
+      projectId: "project-a",
+      repo: "owner/repo-a"
+    });
+
+    expect(workItem.stateChangedAt).toBe(workItem.createdAt);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await store.updateWorkItemState(workItem.id, "INTAKE");
+
+    const updated = (await store.listWorkItems()).find((item) => item.id === workItem.id);
+    expect(updated).toMatchObject({
+      id: workItem.id,
+      state: "INTAKE"
+    });
+    expect(updated?.stateChangedAt).toBeTruthy();
+    expect(updated?.stateChangedAt).not.toBe(workItem.createdAt);
+  });
+
   it("persists schema-conformant opportunity scan runs newest-first", async () => {
     const store = new MemoryStore();
     await expectOpportunityScanRunsNewestFirst(store);
@@ -276,6 +305,7 @@ describe("controller store workflow claims", () => {
       title: "Backend implementation summary",
       summary: "Lookup endpoints implemented.",
       nextStage: "VERIFY",
+      bodyMd: "## Backend implementation summary\n\nLookup endpoints implemented.",
       bodyJson: {
         workItemId: workItem.id,
         projectId: "project-a",
@@ -348,6 +378,7 @@ describe("controller store workflow claims", () => {
       promptHash: "test-prompt",
       skillIds: ["handoff-discipline"],
       capabilityIds: [],
+      bodyMd: "## Loop closure summary\n\nLoop complete and cleanly synced.",
       bodyJson: {
         loopRunId: "test-loop",
         workItemId: first.id,

@@ -120,6 +120,25 @@ export async function recordLoopStart(workItem: WorkItem): Promise<StageArtifact
     summary: blockingRisks.length
       ? `Loop start blocked before intake: ${blockingRisks.join("; ")}.`
       : "Loop start captured the latest completed repo memory, local sync evidence, runtime health evidence, and GitHub gate evidence before intake.",
+    bodyMd: blockingRisks.length
+      ? `## Loop start snapshot\n\nBlocked before intake:\n- ${blockingRisks.join("\n- ")}`
+      : "## Loop start snapshot\n\nPre-intake snapshot captured successfully.",
+    bodyJson: {
+      workItemId: scopedWorkItem.id,
+      projectId: scopedWorkItem.projectId,
+      repo: scopedWorkItem.repo,
+      status: blockingRisks.length ? "blocked" : "passed",
+      latestCompletedLoop: latestLoopMemory
+        ? {
+            id: latestLoopMemory.id,
+            title: latestLoopMemory.title,
+            updatedAt: latestLoopMemory.updatedAt
+          }
+        : null,
+      git: evidence.git,
+      runtime: evidence.runtime,
+      github: evidence.github
+    },
     decisions: [
       `Connected project: ${scopedWorkItem.projectId || "unscoped"}.`,
       `Connected repo: ${scopedWorkItem.repo || "unscoped"}.`,
@@ -212,6 +231,19 @@ export async function evaluateProposalGate(input: ProposalGateInput): Promise<St
     summary: autoAccept
       ? "Low-risk proposal passed the policy gate and may continue into contract without human blocking."
       : "Proposal gate is active. Build stages are blocked until the proposal is accepted, revised, or rejected.",
+    bodyMd: `## ${autoAccept ? "Proposal auto-accepted by policy" : "Proposal awaiting acceptance"}\n\n${
+      autoAccept
+        ? "Low-risk proposal passed the policy gate and may continue into contract without human blocking."
+        : "Proposal gate is active. Build stages are blocked until a decision is recorded."
+    }`,
+    bodyJson: {
+      workItemId: scopedWorkItem.id,
+      projectId: scopedWorkItem.projectId,
+      repo: scopedWorkItem.repo,
+      status: autoAccept ? "passed" : "pending",
+      proposalArtifactId: input.proposal.artifactId,
+      autoAccept
+    },
     decisions: autoAccept
       ? [
           "Auto-accept low-risk, high-confidence proposal.",
@@ -277,6 +309,17 @@ export async function recordProposalDecision(input: WorkflowProposalDecisionInpu
       : input.decision === "revise"
         ? "Proposal changes were requested. The loop returns to R&D before any build starts so the team can produce a revised proposal."
         : "Proposal was rejected. Implementation remains blocked before build.",
+    bodyMd: `## ${
+      accepted ? "Proposal accepted" : input.decision === "revise" ? "Proposal revision requested" : "Proposal rejected"
+    }\n\n${input.feedback || "No additional feedback provided."}`,
+    bodyJson: {
+      workItemId: scopedWorkItem.id,
+      projectId: scopedWorkItem.projectId,
+      repo: scopedWorkItem.repo,
+      decision: input.decision,
+      decidedBy: input.decidedBy || "human",
+      feedback: input.feedback || null
+    },
     decisions: [
       `${input.decidedBy || "human"} decided: ${input.decision}.`,
       input.feedback || "No additional feedback provided."
@@ -421,6 +464,23 @@ export async function closeWorkLoop(workItem: WorkItem, previousArtifacts: Stage
     summary: passed
       ? `Loop complete for ${scopedWorkItem.title}. Completed stages: ${completedStages.join(" -> ")}. Latest repo state is remembered for the next loop.`
       : `Loop cannot close cleanly for ${scopedWorkItem.title}: ${blockingRisks.join("; ")}.`,
+    bodyMd: `## ${passed ? "Loop closure summary" : "Loop closure blocked"}\n\n${
+      passed
+        ? `Completed stages: ${completedStages.join(" -> ") || "none"}.`
+        : `Blocking risks:\n- ${blockingRisks.join("\n- ")}`
+    }`,
+    bodyJson: {
+      workItemId: scopedWorkItem.id,
+      projectId: scopedWorkItem.projectId,
+      repo: scopedWorkItem.repo,
+      status: passed ? "passed" : "blocked",
+      completedStages,
+      filesChanged,
+      testsRun,
+      git: evidence.git,
+      runtime: evidence.runtime,
+      github: evidence.github
+    },
     decisions: [
       `Completed stages: ${completedStages.join(" -> ") || "none"}.`,
       `Files changed: ${filesChanged.length ? filesChanged.join(", ") : "none recorded"}.`,
@@ -495,6 +555,18 @@ export async function integrateBranches(
     status: "passed",
     title: "Integration branch prepared",
     summary: "Frontend, backend, R&D, and early quality context are reconciled into a single integration candidate.",
+    bodyMd:
+      "## Integration branch prepared\n\nFrontend, backend, R&D, and early quality context are reconciled into a single integration candidate.",
+    bodyJson: {
+      workItemId: scopedWorkItem.id,
+      projectId: scopedWorkItem.projectId,
+      repo: scopedWorkItem.repo,
+      previousArtifacts: previousArtifacts.map((artifact) => ({
+        artifactId: artifact.artifactId,
+        stage: artifact.stage,
+        status: artifact.status
+      }))
+    },
     decisions: [
       "Use the integration branch as the single PR/release candidate source.",
       "Resolve contract deviations before verification."
@@ -534,6 +606,21 @@ export async function runVerification(workItem: WorkItem, previousArtifacts: Sta
     summary: failedChecks.length
       ? `Verification failed: ${failedChecks.map((check) => check.name).join(", ")}.`
       : "Acceptance, regression, security, privacy, performance, teammate handoffs, and release gates are ready for autonomous release evaluation.",
+    bodyMd: `## Verification complete\n\n${
+      failedChecks.length
+        ? `Failed checks:\n- ${failedChecks.map((check) => check.name).join("\n- ")}`
+        : "All configured verification checks passed."
+    }`,
+    bodyJson: {
+      workItemId: scopedWorkItem.id,
+      projectId: scopedWorkItem.projectId,
+      repo: scopedWorkItem.repo,
+      status: failedChecks.length ? "failed" : "passed",
+      checks: checks.map((check) => ({
+        name: check.name,
+        ok: check.ok
+      }))
+    },
     decisions: failedChecks.length
       ? ["Route required fixes back to the owning implementation agent before release.", rollbackDecision]
       : [
@@ -569,6 +656,14 @@ export async function planVerification(workItem: WorkItem, previousArtifacts: St
     title: "Verification plan",
     summary:
       "Quality prepared acceptance, regression, security, privacy, performance, and release-gate expectations before implementation.",
+    bodyMd:
+      "## Verification plan\n\nQuality prepared acceptance, regression, security, privacy, performance, and release-gate expectations before implementation.",
+    bodyJson: {
+      workItemId: scopedWorkItem.id,
+      projectId: scopedWorkItem.projectId,
+      repo: scopedWorkItem.repo,
+      previousArtifactCount: previousArtifacts.length
+    },
     decisions: ["Use this as planning context only; final verification must run after integration."],
     risks: previousArtifacts.flatMap((artifact) => artifact.risks),
     filesChanged: [],

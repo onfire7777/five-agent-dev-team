@@ -9,6 +9,9 @@ on:
     - cron: "45 * * * *"
     - cron: "55 * * * *"
     - cron: "59 * * * *"
+  workflow_run:
+    workflows: ["Codex Cloud Research", "CI"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       stage:
@@ -30,7 +33,7 @@ on:
         type: boolean
 
 permissions:
-  actions: read
+  actions: write
   checks: read
   contents: write
   issues: write
@@ -45,7 +48,7 @@ env:
   OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
 concurrency:
-  group: codex-cloud-build-${{ github.event.inputs.stage || github.event.schedule || github.ref }}
+  group: codex-cloud-build-${{ github.event.inputs.stage || github.event.schedule || github.event.workflow_run.id || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -69,9 +72,77 @@ jobs:
               ["59 * * * *", "janitor"]
             ]);
             const stageInput = context.payload.inputs?.stage;
-            const stage = stageInput || scheduleToStage.get(context.payload.schedule);
+            let stage = stageInput || scheduleToStage.get(context.payload.schedule);
             const force = context.payload.inputs?.force === "true" || context.payload.inputs?.force === true;
-            const stageInfo = {
+            const autoFromResearch =
+              context.eventName === "workflow_run" &&
+              context.payload.workflow_run?.name === "Codex Cloud Research";
+            const autoFromCi =
+              context.eventName === "workflow_run" &&
+              context.payload.workflow_run?.name === "CI";
+
+            const openIssuesRaw = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: "open",
+              per_page: 100
+            });
+            const openIssues = openIssuesRaw.filter((issue) => !issue.pull_request);
+            const openPrs = await github.paginate(github.rest.pulls.list, {
+              owner,
+              repo,
+              state: "open",
+              per_page: 100
+            });
+
+            if (autoFromResearch) {
+              if (context.payload.workflow_run.conclusion !== "success") {
+                core.setOutput("stage", "auto");
+                core.setOutput("stage_display", "Research handoff");
+                core.setOutput("should_run", "false");
+                core.setOutput("reason", `Research run ended with ${context.payload.workflow_run.conclusion || "unknown"}`);
+                return;
+              }
+
+              const laneOrder = ["backend", "frontend", "quality", "security", "docs"];
+              const queuedTargets = openIssues
+                .filter((issue) => issue.labels.some((label) => label.name === "agent:queued"))
+                .filter((issue) => issue.labels.some((label) => label.name === "execution:codex-cloud"))
+                .map((issue) => {
+                  const laneLabel = issue.labels
+                    .map((label) => label.name)
+                    .find((label) => label.startsWith("lane:"));
+                  const lane = laneLabel?.slice("lane:".length);
+                  return { issue, lane };
+                })
+                .filter((item) => laneOrder.includes(item.lane))
+                .sort((a, b) => {
+                  const laneDelta = laneOrder.indexOf(a.lane) - laneOrder.indexOf(b.lane);
+                  if (laneDelta !== 0) return laneDelta;
+                  return new Date(a.issue.created_at) - new Date(b.issue.created_at);
+                });
+
+              if (!queuedTargets.length) {
+                core.setOutput("stage", "auto");
+                core.setOutput("stage_display", "Research handoff");
+                core.setOutput("should_run", "false");
+                core.setOutput("reason", "Research completed without a queued codex-cloud lane issue");
+                return;
+              }
+
+              stage = queuedTargets[0].lane;
+            } else if (autoFromCi) {
+              if (context.payload.workflow_run.conclusion !== "success") {
+                core.setOutput("stage", "captain");
+                core.setOutput("stage_display", "Captain Integrator");
+                core.setOutput("should_run", "false");
+                core.setOutput("reason", `CI ended with ${context.payload.workflow_run.conclusion || "unknown"}`);
+                return;
+              }
+              stage = "captain";
+            }
+
+            const stageCatalog = {
               backend: {
                 display: "Backend/Core",
                 lane: "backend",
@@ -121,26 +192,14 @@ jobs:
                 files: "cloud queue labels, stale cloud issues, safe branch-sprawl reports, and artifact summaries",
                 verify: "cloud metadata only"
               }
-            }[stage];
+            };
+            const stageInfo = stageCatalog[stage];
 
             if (!stageInfo) {
               core.setFailed(`Unknown cloud stage: ${stage || "none"}`);
               return;
             }
 
-            const openIssuesRaw = await github.paginate(github.rest.issues.listForRepo, {
-              owner,
-              repo,
-              state: "open",
-              per_page: 100
-            });
-            const openIssues = openIssuesRaw.filter((issue) => !issue.pull_request);
-            const openPrs = await github.paginate(github.rest.pulls.list, {
-              owner,
-              repo,
-              state: "open",
-              per_page: 100
-            });
             const globalStop = openIssues.find((issue) =>
               issue.labels.some((label) => label.name === "blocker:global-stop" || label.name === "agent:blocked") &&
               issue.title.startsWith("[Codex Health]")
@@ -359,7 +418,7 @@ jobs:
             Project identity:
             - GitHub repo: onfire7777/five-agent-dev-team
             - Default branch: main
-            - Product build contract is represented by README.md, docs/**, tests/**, and issue acceptance criteria.
+            - Product build contract is docs/implementation-spec.md first, then README.md, docs/**, tests/**, and issue acceptance criteria.
             - This workflow is the Codex cloud control plane, not the product runtime.
 
             Rules:
@@ -490,7 +549,7 @@ jobs:
               --body-file pr-body.md \
               --label "$STAGE_LABEL" \
               --label agent:ready-for-review \
-              --label codex-status:needs-review
+              --label codex-status:ready-to-merge
             pr_number="$(gh pr list --head "$branch" --base main --state open --json number --jq '.[0].number // ""')"
           fi
 
@@ -521,7 +580,9 @@ jobs:
         run: |
           gh pr view "$PR_NUMBER" --json number,title,isDraft,mergeStateStatus,reviewDecision,labels,headRefOid,url
           gh pr checks "$PR_NUMBER" --required --watch
-          gh pr merge "$PR_NUMBER" --squash --auto --delete-branch
+          head_sha="$(gh pr view "$PR_NUMBER" --json headRefOid --jq '.headRefOid')"
+          gh pr merge "$PR_NUMBER" --squash --delete-branch --match-head-commit "$head_sha"
+          gh workflow run codex-cloud-research.yml --ref main
 
       - name: Cloud janitor pass
         if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'janitor'

@@ -309,6 +309,7 @@ export function memoryFromArtifact(artifact: StageArtifact): MemoryRecord[] {
     records.push({
       id: `latest-loop-${hashId(scopeKey)}`,
       scope: artifact.projectId || artifact.repo ? "repo" : "work_item",
+      key: "latest_completed_loop",
       workItemId: artifact.projectId || artifact.repo ? undefined : artifact.workItemId,
       projectId: artifact.projectId,
       repo: artifact.repo,
@@ -331,7 +332,8 @@ export function memoryFromArtifact(artifact: StageArtifact): MemoryRecord[] {
       permanence: "permanent",
       source: `${artifact.ownerAgent}:${artifact.stage}`,
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
+      supersededBy: null
     });
   }
 
@@ -448,6 +450,7 @@ export function selectRelevantMemories(memories: MemoryRecord[], workItem: WorkI
   const now = Date.now();
   return memories
     .filter((memory) => !memory.expiresAt || Date.parse(memory.expiresAt) > now)
+    .filter((memory) => !memory.supersededBy)
     .filter((memory) => isMemoryInProjectScope(memory, { projectId, repo, workItemId: workItem.id }))
     .filter(
       (memory) =>

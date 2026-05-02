@@ -317,6 +317,7 @@ export class MemoryStore implements ControllerStore {
       id: createWorkItemId(),
       state: "NEW",
       createdAt,
+      stateChangedAt: createdAt,
       updatedAt: createdAt,
       ...input,
       projectId: input.projectId || project.projectId,
@@ -332,8 +333,10 @@ export class MemoryStore implements ControllerStore {
     if (current.state !== state && !canTransition(current.state, state)) {
       throw new Error(`Invalid work-item transition from ${current.state} to ${state}.`);
     }
+    const updatedAt = new Date().toISOString();
+    const stateChangedAt = current.state === state ? current.stateChangedAt || updatedAt : updatedAt;
     this.workItems = this.workItems.map((item) =>
-      item.id === id ? { ...item, state, updatedAt: new Date().toISOString() } : item
+      item.id === id ? { ...item, state, stateChangedAt, updatedAt } : item
     );
   }
 
@@ -379,6 +382,14 @@ export class MemoryStore implements ControllerStore {
     const parsed = memories.map((memory) => MemoryRecordSchema.parse(memory));
     const byId = new Map(this.memories.map((memory) => [memory.id, memory]));
     for (const memory of parsed) {
+      if (isExpiredKeyedMemory(memory)) continue;
+      if (isLiveKeyedMemory(memory)) {
+        for (const [id, existing] of byId) {
+          if (id !== memory.id && isSameLiveMemoryKey(existing, memory)) {
+            byId.set(id, { ...existing, supersededBy: memory.id, updatedAt: memory.updatedAt });
+          }
+        }
+      }
       byId.set(memory.id, memory);
     }
     this.memories = [...byId.values()];
@@ -739,8 +750,10 @@ export class PostgresStore extends MemoryStore {
         id text primary key,
         payload jsonb not null,
         state text not null,
+        state_changed_at timestamptz not null default now(),
         updated_at timestamptz not null default now()
       );
+      alter table work_items add column if not exists state_changed_at timestamptz not null default now();
       create table if not exists stage_artifacts (
         id bigserial primary key,
         work_item_id text not null,
@@ -759,11 +772,25 @@ export class PostgresStore extends MemoryStore {
       create table if not exists memory_records (
         id text primary key,
         payload jsonb not null,
+        key text,
         scope text not null,
         work_item_id text,
         importance integer not null,
+        superseded_by text,
         updated_at timestamptz not null default now()
       );
+      alter table memory_records add column if not exists key text;
+      alter table memory_records add column if not exists superseded_by text;
+      create unique index if not exists memory_records_live_key_idx
+        on memory_records (
+          scope,
+          key,
+          coalesce(payload->>'projectId', ''),
+          coalesce(payload->>'repo', ''),
+          coalesce(work_item_id, ''),
+          coalesce(payload->>'agent', '')
+        )
+        where key is not null and superseded_by is null;
       create table if not exists workflow_claims (
         work_item_id text primary key,
         claimed_at timestamptz not null default now()
@@ -865,10 +892,11 @@ export class PostgresStore extends MemoryStore {
 
   override async createWorkItem(input: WorkItemCreateInput): Promise<WorkItem> {
     const workItem = await super.createWorkItem(input);
-    await this.pool.query("insert into work_items (id, payload, state) values ($1, $2, $3)", [
+    await this.pool.query("insert into work_items (id, payload, state, state_changed_at) values ($1, $2, $3, $4)", [
       workItem.id,
       workItem,
-      workItem.state
+      workItem.state,
+      workItem.stateChangedAt
     ]);
     return workItem;
   }
@@ -881,13 +909,25 @@ export class PostgresStore extends MemoryStore {
       throw new Error(`Invalid work-item transition from ${currentItem.state} to ${state}.`);
     }
     const updatedAt = new Date().toISOString();
+    const stateChangedAt = currentItem.state === state ? currentItem.stateChangedAt || updatedAt : updatedAt;
     await this.pool.query(
       `update work_items
        set state = $2,
-           payload = jsonb_set(jsonb_set(payload, '{state}', to_jsonb($2::text), true), '{updatedAt}', to_jsonb($3::text), true),
+           payload = jsonb_set(
+             jsonb_set(
+               jsonb_set(payload, '{state}', to_jsonb($2::text), true),
+               '{updatedAt}',
+               to_jsonb($3::text),
+               true
+             ),
+             '{stateChangedAt}',
+             to_jsonb($4::text),
+             true
+           ),
+           state_changed_at = $4::timestamptz,
            updated_at = now()
        where id = $1`,
-      [id, state, updatedAt]
+      [id, state, updatedAt, stateChangedAt]
     );
     try {
       await super.updateWorkItemState(id, state);
@@ -984,15 +1024,74 @@ export class PostgresStore extends MemoryStore {
   }
 
   override async addMemories(memories: MemoryRecord[]): Promise<void> {
-    for (const memory of memories.map((item) => MemoryRecordSchema.parse(item))) {
-      await this.pool.query(
-        `insert into memory_records (id, payload, scope, work_item_id, importance)
-         values ($1, $2, $3, $4, $5)
-         on conflict (id) do update set payload = excluded.payload, scope = excluded.scope, work_item_id = excluded.work_item_id, importance = excluded.importance, updated_at = now()`,
-        [memory.id, memory, memory.scope, memory.workItemId || null, memory.importance]
-      );
+    const parsed = memories
+      .map((item) => MemoryRecordSchema.parse(item))
+      .filter((memory) => !isExpiredKeyedMemory(memory));
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      for (const memory of parsed) {
+        if (isLiveKeyedMemory(memory)) {
+          await client.query(
+            `update memory_records
+             set superseded_by = $1,
+                 payload = jsonb_set(
+                   jsonb_set(payload, '{supersededBy}', to_jsonb($1::text), true),
+                   '{updatedAt}',
+                   to_jsonb($8::text),
+                   true
+                 ),
+                 updated_at = now()
+             where id <> $1
+               and key = $2
+               and superseded_by is null
+               and scope = $3
+               and coalesce(payload->>'projectId', '') = $4
+               and coalesce(payload->>'repo', '') = $5
+               and coalesce(work_item_id, '') = $6
+               and coalesce(payload->>'agent', '') = $7`,
+            [
+              memory.id,
+              memory.key,
+              memory.scope,
+              memory.projectId || "",
+              memory.repo || "",
+              memory.workItemId || "",
+              memory.agent || "",
+              memory.updatedAt
+            ]
+          );
+        }
+        await client.query(
+          `insert into memory_records (id, payload, key, scope, work_item_id, importance, superseded_by)
+           values ($1, $2, $3, $4, $5, $6, $7)
+           on conflict (id) do update set
+             payload = excluded.payload,
+             key = excluded.key,
+             scope = excluded.scope,
+             work_item_id = excluded.work_item_id,
+             importance = excluded.importance,
+             superseded_by = excluded.superseded_by,
+             updated_at = now()`,
+          [
+            memory.id,
+            memory,
+            memory.key || null,
+            memory.scope,
+            memory.workItemId || null,
+            memory.importance,
+            memory.supersededBy || null
+          ]
+        );
+      }
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
     }
-    await super.addMemories(memories);
+    await super.addMemories(parsed);
   }
 
   override async listProjectConnections(): Promise<ProjectConnection[]> {
@@ -1658,6 +1757,27 @@ function loopStatusForProposalDecision(decision: ProposalDecision["decision"]): 
 
 function scopedDbId(scope: StrictProjectScope, id: string): string {
   return `${scope.projectId}:${scope.repo}:${id}`;
+}
+
+function isExpiredKeyedMemory(memory: MemoryRecord): boolean {
+  return Boolean(memory.key && memory.expiresAt && Date.parse(memory.expiresAt) <= Date.now());
+}
+
+function isLiveKeyedMemory(memory: MemoryRecord): boolean {
+  return Boolean(memory.key && !memory.supersededBy && !isExpiredKeyedMemory(memory));
+}
+
+function isSameLiveMemoryKey(left: MemoryRecord, right: MemoryRecord): boolean {
+  return (
+    isLiveKeyedMemory(left) &&
+    isLiveKeyedMemory(right) &&
+    left.key === right.key &&
+    left.scope === right.scope &&
+    (left.projectId || "") === (right.projectId || "") &&
+    (left.repo || "") === (right.repo || "") &&
+    (left.workItemId || "") === (right.workItemId || "") &&
+    (left.agent || "") === (right.agent || "")
+  );
 }
 
 function sortProjectConnections(connections: ProjectConnection[]): ProjectConnection[] {

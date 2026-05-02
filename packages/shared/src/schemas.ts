@@ -105,7 +105,7 @@ export const StageArtifactSchema = z.object({
   promptHash: z.string().min(1).default("not-recorded"),
   skillIds: z.array(z.string().min(1)).default([]),
   capabilityIds: z.array(z.string().min(1)).default([]),
-  bodyMd: ArtifactMarkdownSchema.optional(),
+  bodyMd: ArtifactMarkdownSchema,
   bodyJson: ArtifactJsonBodySchema,
   createdAt: z.string().datetime()
 });
@@ -117,7 +117,7 @@ export const WorkItemBriefSchema = z.object({
   projectId: z.string().min(1),
   title: z.string().min(1).max(200),
   requestType: z.enum(["feature", "bug", "performance", "security", "privacy", "refactor", "research"]),
-  priority: z.enum(["p0", "p1", "p2", "p3"]),
+  priority: z.enum(["low", "medium", "high", "urgent"]),
   businessGoal: z.string().min(1),
   userGoal: z.string().min(1),
   technicalGoal: z.string().min(1),
@@ -354,6 +354,7 @@ export type SharedContext = z.infer<typeof SharedContextSchema>;
 export const MemoryRecordSchema = z.object({
   id: z.string().min(1),
   scope: z.enum(["global", "repo", "work_item", "agent"]),
+  key: z.string().min(1).optional(),
   projectId: z.string().min(1).optional(),
   repo: z.string().optional(),
   workItemId: z.string().optional(),
@@ -368,6 +369,7 @@ export const MemoryRecordSchema = z.object({
   source: z.string().min(1),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
+  supersededBy: z.string().min(1).nullable().optional(),
   expiresAt: z.string().datetime().optional()
 });
 
@@ -393,6 +395,7 @@ export const WorkItemSchema = z.object({
   backendNeeded: z.boolean().default(true),
   rndNeeded: z.boolean().default(true),
   createdAt: z.string().datetime(),
+  stateChangedAt: z.string().datetime().optional(),
   updatedAt: z.string().datetime()
 });
 

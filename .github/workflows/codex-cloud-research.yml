@@ -2,7 +2,7 @@ name: Codex Cloud Research
 
 on:
   schedule:
-    - cron: "7 */6 * * *"
+    - cron: "2 * * * *"
   workflow_dispatch:
     inputs:
       force:
@@ -119,10 +119,11 @@ jobs:
           prompt: |
             You are Stage 0 R&D for onfire7777/five-agent-dev-team.
 
-            Read the repository, .github/ISSUE_TEMPLATE/codex_queue_item.yml, codex-cloud-context.md, README.md, docs/**, and tests as needed.
+            Read docs/implementation-spec.md first, then .github/ISSUE_TEMPLATE/codex_queue_item.yml, codex-cloud-context.md, README.md, docs/**, and tests as needed.
             Produce at most one GitHub issue-ready queue item.
             Do not edit files, propose dependencies, merge, push, or mark acceptance complete.
-            Only propose work that maps to real product behavior and can run in codex-cloud, codex-action, or agentic-workflow.
+            Only propose work that maps to the implementation spec and real product behavior, and can run in codex-cloud, codex-action, or agentic-workflow.
+            When no PR or active queue issue exists, prefer producing the next bounded implementation slice from docs/implementation-spec.md.
             If no non-overlapping product-spec-backed work scores at least 22/30, output exactly:
             QUEUE_ITEM_READY: no
 
@@ -131,7 +132,7 @@ jobs:
             Title: <short title>
             Problem: <problem>
             Hypothesis: <hypothesis>
-            Product-spec mapping: <specific README/docs/spec surface or acceptance behavior>
+            Product-spec mapping: <specific docs/implementation-spec.md section, README/docs surface, or acceptance behavior>
             Expected files: <file globs>
             Non-overlap check: <why it does not collide with open work>
             Acceptance criteria: <bulleted criteria>

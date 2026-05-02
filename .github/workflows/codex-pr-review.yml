@@ -22,7 +22,7 @@ jobs:
   review:
     if: github.event.pull_request.state == 'open' && github.event.pull_request.draft == false
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     steps:
@@ -38,6 +38,8 @@ jobs:
       - name: Run Codex review
         id: run_codex
         if: env.OPENAI_API_KEY != ''
+        timeout-minutes: 6
+        continue-on-error: true
         uses: openai/codex-action@a26d2d4d8b78a694338b8e3715c3630254340b2c
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}

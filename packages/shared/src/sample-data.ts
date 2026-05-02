@@ -132,6 +132,7 @@ export function createSampleArtifacts(): StageArtifact[] {
       promptHash: "sample-prompt-rnd",
       skillIds: ["adr-authoring"],
       capabilityIds: [],
+      bodyMd: "## Architecture decision\n\nUse a narrow preferences API with optimistic client updates.",
       bodyJson: {
         workItemId: "WI-1290",
         projectId: "sample-project",
@@ -159,6 +160,7 @@ export function createSampleArtifacts(): StageArtifact[] {
       promptHash: "sample-prompt-verify",
       skillIds: ["verification-plan"],
       capabilityIds: [],
+      bodyMd: "## Release verification\n\nRunning checkout regression and release readiness review.",
       bodyJson: {
         workItemId: "WI-1291",
         projectId: "sample-project",
