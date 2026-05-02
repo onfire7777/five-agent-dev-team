@@ -121,6 +121,27 @@ describe("GitHub CLI helpers", () => {
       /gh run list returned invalid JSON/
     );
   });
+
+  it("fails fast when boolean gh fields drift from the expected schema", async () => {
+    const exec: GhExec = async () => ({
+      stdout: JSON.stringify({
+        number: 7,
+        title: "Ready",
+        state: "OPEN",
+        isDraft: "false",
+        mergeStateStatus: "CLEAN",
+        reviewDecision: "APPROVED",
+        headRefName: "codex/test",
+        headRefOid: "def456",
+        url: "https://github.com/owner/repo/pull/7"
+      }),
+      stderr: ""
+    });
+
+    await expect(viewPullRequest({ repo: "owner/repo", pullNumber: 7, options: { exec } })).rejects.toThrow(
+      /Expected boolean isDraft/
+    );
+  });
 });
 
 describe("GitHub MCP config", () => {

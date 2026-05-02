@@ -200,5 +200,7 @@ function numberField(value: Record<string, unknown>, key: string): number {
 }
 
 function booleanField(value: Record<string, unknown>, key: string): boolean {
-  return value[key] === true;
+  const field = value[key];
+  if (typeof field !== "boolean") throw new Error(`Expected boolean ${key} in gh JSON output.`);
+  return field;
 }
