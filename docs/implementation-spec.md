@@ -489,7 +489,7 @@ Permitted in parallel:
 
 Prohibited in parallel:
   - Two work items in the same project advancing past INTAKE simultaneously
-  - Frontend or Backend build before CONTRACT_READY
+  - Frontend or Backend build before CONTRACT
   - Verification before INTEGRATION is complete
   - Release before VERIFY has passed
   - Any agent activity while emergency stop is active
@@ -626,14 +626,14 @@ The following is the authoritative list of MCP servers, command-line tools, and 
 | ID                       | Status     | Transport         | Source                                     | Loaded for                                             |
 |--------------------------|------------|-------------------|--------------------------------------------|--------------------------------------------------------|
 | `github-mcp`             | [required] | stdio             | `github/github-mcp-server` v1.0.3+         | Backend during BACKEND_BUILD; Quality during VERIFY; both during RELEASE. |
-| `filesystem-mcp`         | [required] | stdio             | `@modelcontextprotocol/server-filesystem`  | Frontend + Backend during BUILD; root scoped to `localPath`. |
-| `git-mcp`                | [required] | stdio             | `@modelcontextprotocol/server-git`         | All builders during BUILD and INTEGRATION.             |
+| `filesystem-mcp`         | [required] | stdio             | `@modelcontextprotocol/server-filesystem`  | Frontend + Backend during FRONTEND_BUILD and BACKEND_BUILD; root scoped to `localPath`. |
+| `git-mcp`                | [required] | stdio             | `@modelcontextprotocol/server-git`         | All builders during FRONTEND_BUILD, BACKEND_BUILD, and INTEGRATION. |
 | `memory-mcp`             | [required] | stdio (in-process)| Internal — wraps the §10 memory store      | All agents at every stage.                             |
 | `fetch-mcp`              | [default]  | stdio             | `@modelcontextprotocol/server-fetch`       | R&D agent only, for documentation lookups.             |
 | `playwright-mcp`         | [default]  | stdio             | `@playwright/mcp`                          | Frontend + Quality during VERIFY, when web tests are touched. |
 | `chrome-devtools-mcp`    | [default]  | stdio             | `chromedevtools/chrome-devtools-mcp`       | Frontend + Quality during VERIFY, when performance keywords match. |
-| `postgres-mcp`           | [optional] | stdio             | `@modelcontextprotocol/server-postgres`    | Backend during BUILD, when the project declares a Postgres dependency. |
-| `sqlite-mcp`             | [optional] | stdio             | `@modelcontextprotocol/server-sqlite`      | Backend during BUILD, when the project uses SQLite.    |
+| `postgres-mcp`           | [optional] | stdio             | `@modelcontextprotocol/server-postgres`    | Backend during BACKEND_BUILD, when the project declares a Postgres dependency. |
+| `sqlite-mcp`             | [optional] | stdio             | `@modelcontextprotocol/server-sqlite`      | Backend during BACKEND_BUILD, when the project uses SQLite. |
 | `time-mcp`               | [optional] | stdio             | `@modelcontextprotocol/server-time`        | Any agent that needs deterministic timezone handling.  |
 | `web-research`           | [optional] | streamable-http   | An HTTPS web-research provider             | R&D agent only, when external research is required.    |
 | `slack-mcp`              | [optional] | stdio             | `@modelcontextprotocol/server-slack`       | Product agent only, for release announcements.         |
@@ -929,7 +929,7 @@ All endpoints emit structured JSON logs (Pino is the **[default]** structured lo
 
 ## 14. Dashboard UX Specification
 
-### 14.1 Layout (single page; four surfaces, top to bottom)
+### 14.1 Layout (single page; five surfaces, top to bottom)
 
 1. **Top bar.** Brand label `AI Dev Team`. Compact runtime status, e.g. `Operational · 2 active · 5/5 agents · release-gated`. Two buttons: **Refresh** and **Stop**. No metric cards.
 2. **Project bar.** Single-line project picker (a dropdown of connected projects plus a `+ Connect` action). Inline status chips for sync state, `gh` authentication, and MCP readiness. Selecting `+ Connect` opens a three-field disclosure: name, owner/name, local path.
@@ -1145,7 +1145,7 @@ Phases MUST be completed in order. A phase ends only when every one of its accep
 
 ### Phase 8 — Dashboard
 
-- Implement §14 exactly. Four surfaces, no metric cards, no extra panels.
+- Implement §14 exactly. Five surfaces, no metric cards, no extra panels.
 - Vite preview is served by Compose. SSE is wired.
 
 **Acceptance criteria.**
@@ -1153,7 +1153,7 @@ Phases MUST be completed in order. A phase ends only when every one of its accep
 - `P8-A2` The dashboard renders without horizontal scroll at a desktop viewport (1440 px).
 - `P8-A3` No JavaScript console errors are emitted on initial load or during normal interaction.
 - `P8-A4` The Stop button activates emergency stop via the live API; the Resume button reverses it.
-- `P8-A5` All four surfaces from §14.1 render in the documented order; no metric cards appear.
+- `P8-A5` All five surfaces from §14.1 render in the documented order; no metric cards appear.
 
 ### Phase 9 — Release path
 
