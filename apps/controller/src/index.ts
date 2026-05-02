@@ -987,6 +987,18 @@ async function removeTargetRepoConfig(project: ProjectConnection): Promise<void>
   const projectConfigDir = process.env.AGENT_TEAM_PROJECT_CONFIG_DIR || ".agent-team/projects";
   await fs.rm(path.join(projectConfigDir, `${safeFileSegment(project.projectId)}.yaml`), { force: true });
 
+  const targetRepoConfigPath = path.join(project.localPath, ".agent-team", "config.yaml");
+  try {
+    const config = loadTargetRepoConfig(targetRepoConfigPath);
+    const matchesDeactivatedProject =
+      config.project.id === project.projectId &&
+      config.repo.owner === project.repoOwner &&
+      config.repo.name === project.repoName;
+    if (matchesDeactivatedProject) await fs.rm(targetRepoConfigPath, { force: true });
+  } catch {
+    // If the target-repo config is absent or invalid, the scoped controller cleanup still proceeds.
+  }
+
   const configPath = process.env.AGENT_TEAM_CONFIG || "agent-team.config.yaml";
   try {
     const config = loadTargetRepoConfig(configPath);

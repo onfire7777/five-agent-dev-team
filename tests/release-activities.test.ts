@@ -16,6 +16,7 @@ import type {
 
 const envKeys = [
   "AGENT_TEAM_CONFIG",
+  "AGENT_TEAM_PROJECT_CONFIG_DIR",
   "AGENT_LOCAL_CHECKS_PASSED",
   "AGENT_GITHUB_ACTIONS_PASSED",
   "AGENT_SECRET_SCAN_PASSED",
@@ -182,6 +183,90 @@ describe("release activities", () => {
       })
     ).toBe(false);
   });
+
+  it("prefers the target repo config file for scoped release work", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-target-config-"));
+    const rootConfigPath = path.join(tempDir, "agent-team.config.yaml");
+    const targetRepoPath = path.join(tempDir, "target-repo");
+    const targetConfigPath = path.join(targetRepoPath, ".agent-team", "config.yaml");
+    await fs.mkdir(path.dirname(targetConfigPath), { recursive: true });
+    await fs.writeFile(rootConfigPath, configYaml(tempDir, 'node -e "process.exit(42)"'), "utf8");
+    await fs.writeFile(targetConfigPath, configYaml(targetRepoPath), "utf8");
+    const store = fakeStore([
+      fakeProjectConnection({
+        projectId: "target-project",
+        repo: "owner/repo",
+        localPath: targetRepoPath
+      })
+    ]);
+    const { performAutonomousRelease } = await loadActivities(store);
+
+    process.env.AGENT_TEAM_CONFIG = rootConfigPath;
+    process.env.AGENT_LOCAL_CHECKS_PASSED = "true";
+    process.env.AGENT_GITHUB_ACTIONS_PASSED = "true";
+    process.env.AGENT_SECRET_SCAN_PASSED = "true";
+    process.env.AGENT_ROLLBACK_PLAN_PRESENT = "true";
+    process.env.AGENT_REQUIRE_RUNTIME_HEALTH = "false";
+    process.env.AGENT_COMMAND_TIMEOUT_MS = "10000";
+
+    try {
+      const artifact = await performAutonomousRelease(
+        workItem({ id: "WI-TARGET", projectId: "target-project", repo: "owner/repo" }),
+        [verificationArtifact()]
+      );
+
+      expect(artifact.status).toBe("passed");
+      await expect(fs.readFile(path.join(targetRepoPath, "release.marker"), "utf8")).resolves.toMatch(
+        /^agent-wi-target-/
+      );
+      await expect(fs.access(path.join(tempDir, "release.marker"))).rejects.toThrow();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to the project config file when the target repo file is absent", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-project-config-"));
+    const rootConfigPath = path.join(tempDir, "agent-team.config.yaml");
+    const targetRepoPath = path.join(tempDir, "target-repo");
+    const projectConfigDir = path.join(tempDir, "project-configs");
+    await fs.mkdir(targetRepoPath, { recursive: true });
+    await fs.mkdir(projectConfigDir, { recursive: true });
+    await fs.writeFile(rootConfigPath, configYaml(tempDir, 'node -e "process.exit(42)"'), "utf8");
+    await fs.writeFile(path.join(projectConfigDir, "target-project.yaml"), configYaml(targetRepoPath), "utf8");
+    const store = fakeStore([
+      fakeProjectConnection({
+        projectId: "target-project",
+        repo: "owner/repo",
+        localPath: targetRepoPath
+      })
+    ]);
+    const { performAutonomousRelease } = await loadActivities(store);
+
+    process.env.AGENT_TEAM_CONFIG = rootConfigPath;
+    process.env.AGENT_TEAM_PROJECT_CONFIG_DIR = projectConfigDir;
+    process.env.AGENT_LOCAL_CHECKS_PASSED = "true";
+    process.env.AGENT_GITHUB_ACTIONS_PASSED = "true";
+    process.env.AGENT_SECRET_SCAN_PASSED = "true";
+    process.env.AGENT_ROLLBACK_PLAN_PRESENT = "true";
+    process.env.AGENT_REQUIRE_RUNTIME_HEALTH = "false";
+    process.env.AGENT_COMMAND_TIMEOUT_MS = "10000";
+
+    try {
+      const artifact = await performAutonomousRelease(
+        workItem({ id: "WI-PROJECT", projectId: "target-project", repo: "owner/repo" }),
+        [verificationArtifact()]
+      );
+
+      expect(artifact.status).toBe("passed");
+      await expect(fs.readFile(path.join(targetRepoPath, "release.marker"), "utf8")).resolves.toMatch(
+        /^agent-wi-project-/
+      );
+      await expect(fs.access(path.join(tempDir, "release.marker"))).rejects.toThrow();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
 });
 
 async function loadActivities(store: ReturnType<typeof fakeStore>) {
@@ -195,7 +280,7 @@ type FakeStore = ControllerStore & {
   updatedStates: Array<{ id: string; state: string }>;
 };
 
-function fakeStore(): FakeStore {
+function fakeStore(connections: ProjectConnection[] = []): FakeStore {
   const updatedStates: Array<{ id: string; state: string }> = [];
   return {
     updatedStates,
@@ -236,7 +321,7 @@ function fakeStore(): FakeStore {
       };
     },
     async listProjectConnections() {
-      return [];
+      return connections;
     },
     async addArtifact() {},
     async getArtifact() {
@@ -472,7 +557,7 @@ function mcpServerDefaults() {
   };
 }
 
-function workItem(): WorkItem {
+function workItem(overrides: Partial<WorkItem> = {}): WorkItem {
   return {
     id: "WI-RELEASE",
     projectId: "owner-repo",
@@ -489,7 +574,8 @@ function workItem(): WorkItem {
     backendNeeded: true,
     rndNeeded: false,
     createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
+    updatedAt: new Date().toISOString(),
+    ...overrides
   };
 }
 
