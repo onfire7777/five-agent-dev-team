@@ -1023,55 +1023,66 @@ export class PostgresStore extends MemoryStore {
   }
 
   override async addMemories(memories: MemoryRecord[]): Promise<void> {
-    for (const memory of memories.map((item) => MemoryRecordSchema.parse(item))) {
-      if (isLiveKeyedMemory(memory)) {
-        await this.pool.query(
-          `update memory_records
-           set superseded_by = $1,
-               payload = jsonb_set(payload, '{supersededBy}', to_jsonb($1::text), true),
-               updated_at = now()
-           where id <> $1
-             and key = $2
-             and superseded_by is null
-             and scope = $3
-             and coalesce(payload->>'projectId', '') = $4
-             and coalesce(payload->>'repo', '') = $5
-             and coalesce(work_item_id, '') = $6
-             and coalesce(payload->>'agent', '') = $7`,
+    const parsed = memories.map((item) => MemoryRecordSchema.parse(item));
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      for (const memory of parsed) {
+        if (isLiveKeyedMemory(memory)) {
+          await client.query(
+            `update memory_records
+             set superseded_by = $1,
+                 payload = jsonb_set(payload, '{supersededBy}', to_jsonb($1::text), true),
+                 updated_at = now()
+             where id <> $1
+               and key = $2
+               and superseded_by is null
+               and scope = $3
+               and coalesce(payload->>'projectId', '') = $4
+               and coalesce(payload->>'repo', '') = $5
+               and coalesce(work_item_id, '') = $6
+               and coalesce(payload->>'agent', '') = $7`,
+            [
+              memory.id,
+              memory.key,
+              memory.scope,
+              memory.projectId || "",
+              memory.repo || "",
+              memory.workItemId || "",
+              memory.agent || ""
+            ]
+          );
+        }
+        await client.query(
+          `insert into memory_records (id, payload, key, scope, work_item_id, importance, superseded_by)
+           values ($1, $2, $3, $4, $5, $6, $7)
+           on conflict (id) do update set
+             payload = excluded.payload,
+             key = excluded.key,
+             scope = excluded.scope,
+             work_item_id = excluded.work_item_id,
+             importance = excluded.importance,
+             superseded_by = excluded.superseded_by,
+             updated_at = now()`,
           [
             memory.id,
-            memory.key,
+            memory,
+            memory.key || null,
             memory.scope,
-            memory.projectId || "",
-            memory.repo || "",
-            memory.workItemId || "",
-            memory.agent || ""
+            memory.workItemId || null,
+            memory.importance,
+            memory.supersededBy || null
           ]
         );
       }
-      await this.pool.query(
-        `insert into memory_records (id, payload, key, scope, work_item_id, importance, superseded_by)
-         values ($1, $2, $3, $4, $5, $6, $7)
-         on conflict (id) do update set
-           payload = excluded.payload,
-           key = excluded.key,
-           scope = excluded.scope,
-           work_item_id = excluded.work_item_id,
-           importance = excluded.importance,
-           superseded_by = excluded.superseded_by,
-           updated_at = now()`,
-        [
-          memory.id,
-          memory,
-          memory.key || null,
-          memory.scope,
-          memory.workItemId || null,
-          memory.importance,
-          memory.supersededBy || null
-        ]
-      );
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
     }
-    await super.addMemories(memories);
+    await super.addMemories(parsed);
   }
 
   override async listProjectConnections(): Promise<ProjectConnection[]> {

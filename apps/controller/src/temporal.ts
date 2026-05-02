@@ -2,7 +2,7 @@ import { Connection, Client } from "@temporalio/client";
 import type { WorkItem } from "../../../packages/shared/src";
 
 export function workflowIdForWorkItem(workItem: WorkItem): string {
-  return `agent-team-${workItem.id}`;
+  return `wi-${workItem.projectId || "unscoped"}-${workItem.id}`;
 }
 
 export async function checkTemporalConnection(): Promise<boolean> {

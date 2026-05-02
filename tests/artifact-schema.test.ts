@@ -24,6 +24,21 @@ describe("stage artifact schema", () => {
     expect(artifact.ownerAgent).toBe("quality-security-privacy-release");
   });
 
+  it("rejects stage artifacts missing markdown body", () => {
+    expect(() =>
+      StageArtifactSchema.parse({
+        workItemId: "WI-1000",
+        stage: "VERIFY",
+        ownerAgent: "quality-security-privacy-release",
+        status: "passed",
+        title: "Verification Report",
+        summary: "All checks passed.",
+        nextStage: null,
+        createdAt: new Date().toISOString()
+      })
+    ).toThrow();
+  });
+
   it("validates loop start and loop closure lifecycle artifacts", () => {
     const createdAt = new Date().toISOString();
     const loopStart = StageArtifactSchema.parse({

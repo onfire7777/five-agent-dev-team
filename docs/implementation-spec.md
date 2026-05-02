@@ -483,7 +483,7 @@ Prohibited in parallel:
   - Any agent activity while emergency stop is active
 ```
 
-Same-project serialization MUST be enforced by Temporal's `WorkflowIdReusePolicy: AllowDuplicateFailedOnly` together with a project-scoped semaphore (a Temporal task queue with concurrency `1`, named `repo-write-${projectId}`).
+Same-project serialization MUST be enforced by the controller workflow-claim and work-item status gates before activities advance beyond INTAKE. Temporal workflow IDs still make re-submitting the same work item idempotent, and a single-concurrency project task queue MAY be added as a secondary runtime guard, but it is not the authoritative serialization mechanism.
 
 ### 6.5 Activity catalog
 

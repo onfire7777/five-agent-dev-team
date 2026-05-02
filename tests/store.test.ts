@@ -206,6 +206,7 @@ describe("controller store workflow claims", () => {
     });
 
     expect(workItem.stateChangedAt).toBe(workItem.createdAt);
+    await new Promise((resolve) => setTimeout(resolve, 5));
     await store.updateWorkItemState(workItem.id, "INTAKE");
 
     const updated = (await store.listWorkItems()).find((item) => item.id === workItem.id);
@@ -214,6 +215,7 @@ describe("controller store workflow claims", () => {
       state: "INTAKE"
     });
     expect(updated?.stateChangedAt).toBeTruthy();
+    expect(updated?.stateChangedAt).not.toBe(workItem.createdAt);
   });
 
   it("persists schema-conformant opportunity scan runs newest-first", async () => {

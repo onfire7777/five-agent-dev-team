@@ -120,6 +120,19 @@ export async function recordLoopStart(workItem: WorkItem): Promise<StageArtifact
     summary: blockingRisks.length
       ? `Loop start blocked before intake: ${blockingRisks.join("; ")}.`
       : "Loop start captured the latest completed repo memory, local sync evidence, runtime health evidence, and GitHub gate evidence before intake.",
+    bodyMd: blockingRisks.length
+      ? `## Loop start snapshot\n\nBlocked before intake:\n- ${blockingRisks.join("\n- ")}`
+      : "## Loop start snapshot\n\nPre-intake snapshot captured successfully.",
+    bodyJson: {
+      workItemId: scopedWorkItem.id,
+      projectId: scopedWorkItem.projectId,
+      repo: scopedWorkItem.repo,
+      status: blockingRisks.length ? "blocked" : "passed",
+      latestCompletedLoop: latestLoopMemory?.content || null,
+      git: evidence.git,
+      runtime: evidence.runtime,
+      github: evidence.github
+    },
     decisions: [
       `Connected project: ${scopedWorkItem.projectId || "unscoped"}.`,
       `Connected repo: ${scopedWorkItem.repo || "unscoped"}.`,
