@@ -124,6 +124,13 @@ jobs:
             Do not edit files, propose dependencies, merge, push, or mark acceptance complete.
             Only propose work that maps to the implementation spec and real product behavior, and can run in codex-cloud, codex-action, or agentic-workflow.
             When no PR or active queue issue exists, prefer producing the next bounded implementation slice from docs/implementation-spec.md.
+            Choose the lane from the expected file ownership, not from the broad topic:
+            - backend: apps/controller/**, apps/worker/**, packages/shared/**, packages/github/**, backend/schema/store/controller tests.
+            - frontend: apps/dashboard/** and dashboard e2e coverage.
+            - quality: tests/**, Playwright config, test utilities, reproductions, and acceptance evidence only.
+            - security: .github/**, CI workflows, Dockerfile, docker-compose.yml, .env.example, package*.json, audit/security/check scripts, release/**, auth/security/permission work.
+            - docs: README.md, docs/**, release notes, runbooks, and acceptance docs.
+            If Expected files include .github/** or CI workflow changes, Lane assignment must be security.
             If no non-overlapping product-spec-backed work scores at least 22/30, output exactly:
             QUEUE_ITEM_READY: no
 
