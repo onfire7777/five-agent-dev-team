@@ -234,7 +234,7 @@ export interface ControllerStore {
   createWorkItem(input: WorkItemCreateInput): Promise<WorkItem>;
   updateWorkItemState(id: string, state: WorkItemState): Promise<void>;
   addArtifact(artifact: StageArtifact): Promise<void>;
-  getArtifact(id: string): Promise<StageArtifact | null>;
+  getArtifact(scope: StrictProjectScope, id: string): Promise<StageArtifact | null>;
   addEvent(
     event: Omit<AgentEvent, "sequence" | "createdAt"> & Partial<Pick<AgentEvent, "sequence" | "createdAt">>
   ): Promise<AgentEvent>;
@@ -347,8 +347,14 @@ export class MemoryStore implements ControllerStore {
     await this.addMemories(memoryFromArtifact(parsed));
   }
 
-  async getArtifact(id: string): Promise<StageArtifact | null> {
-    return this.artifacts.find((artifact) => artifact.artifactId === id) || null;
+  async getArtifact(scope: StrictProjectScope, id: string): Promise<StageArtifact | null> {
+    await this.assertProjectScope(scope);
+    return (
+      this.artifacts.find(
+        (artifact) =>
+          artifact.artifactId === id && artifact.projectId === scope.projectId && artifact.repo === scope.repo
+      ) || null
+    );
   }
 
   async addEvent(
@@ -959,10 +965,15 @@ export class PostgresStore extends MemoryStore {
     await super.addArtifact(parsed);
   }
 
-  override async getArtifact(id: string): Promise<StageArtifact | null> {
+  override async getArtifact(scope: StrictProjectScope, id: string): Promise<StageArtifact | null> {
+    await this.assertProjectScope(scope);
     const result = await this.pool.query(
-      "select payload from stage_artifacts where artifact_key = $1 or payload ->> 'artifactId' = $1 limit 1",
-      [id]
+      `select payload from stage_artifacts
+       where (artifact_key = $1 or payload ->> 'artifactId' = $1)
+         and payload ->> 'projectId' = $2
+         and payload ->> 'repo' = $3
+       limit 1`,
+      [id, scope.projectId, scope.repo]
     );
     return result.rows[0] ? StageArtifactSchema.parse(result.rows[0].payload) : null;
   }
