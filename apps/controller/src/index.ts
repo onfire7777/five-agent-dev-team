@@ -944,6 +944,9 @@ async function writeTargetRepoConfig(project: ProjectConnection): Promise<void> 
   const config = targetRepoConfigFromProjectConnection(project);
   const yaml = YAML.stringify(config);
   await fs.writeFile(process.env.AGENT_TEAM_CONFIG || "agent-team.config.yaml", yaml, "utf8");
+  const targetRepoConfigDir = path.join(project.localPath, ".agent-team");
+  await fs.mkdir(targetRepoConfigDir, { recursive: true });
+  await fs.writeFile(path.join(targetRepoConfigDir, "config.yaml"), yaml, "utf8");
   const projectConfigDir = process.env.AGENT_TEAM_PROJECT_CONFIG_DIR || ".agent-team/projects";
   await fs.mkdir(projectConfigDir, { recursive: true });
   await fs.writeFile(path.join(projectConfigDir, `${safeFileSegment(project.projectId)}.yaml`), yaml, "utf8");
