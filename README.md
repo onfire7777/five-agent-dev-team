@@ -2,6 +2,8 @@
 
 Local-first controller for a five-agent autonomous software development team. It runs continuously with Docker Compose, uses Temporal for durable workflows, Postgres for state, GitHub as the delivery surface, and a modern local dashboard for operators.
 
+The canonical build contract is [docs/implementation-spec.md](docs/implementation-spec.md). Automation queue items, cloud research, and implementation PRs should map work back to that spec before using README or narrower docs as supporting context.
+
 ## Agents
 
 1. **Product & Delivery Orchestrator**: intake, priority, scope, acceptance criteria, routing, final summary.
