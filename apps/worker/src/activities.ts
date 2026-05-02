@@ -608,7 +608,7 @@ export async function runVerification(workItem: WorkItem, previousArtifacts: Sta
       : "Acceptance, regression, security, privacy, performance, teammate handoffs, and release gates are ready for autonomous release evaluation.",
     bodyMd: `## Verification complete\n\n${
       failedChecks.length
-        ? `Failed checks:\n- ${failedChecks.map((check) => `${check.name}: ${check.summary}`).join("\n- ")}`
+        ? `Failed checks:\n- ${failedChecks.map((check) => check.name).join("\n- ")}`
         : "All configured verification checks passed."
     }`,
     bodyJson: {
