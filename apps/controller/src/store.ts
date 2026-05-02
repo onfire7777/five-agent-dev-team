@@ -238,7 +238,7 @@ export interface ControllerStore {
   addEvent(
     event: Omit<AgentEvent, "sequence" | "createdAt"> & Partial<Pick<AgentEvent, "sequence" | "createdAt">>
   ): Promise<AgentEvent>;
-  listEvents(afterSequence?: number, limit?: number): Promise<AgentEvent[]>;
+  listEvents(afterSequence?: number, limit?: number, projectId?: string): Promise<AgentEvent[]>;
   listMemories(workItemId?: string): Promise<MemoryRecord[]>;
   addMemories(memories: MemoryRecord[]): Promise<void>;
   listProjectConnections(): Promise<ProjectConnection[]>;
@@ -365,12 +365,18 @@ export class MemoryStore implements ControllerStore {
     return parsed;
   }
 
-  async listEvents(afterSequence = 0, limit = 50): Promise<AgentEvent[]> {
+  async listEvents(afterSequence = 0, limit = 50, projectId?: string): Promise<AgentEvent[]> {
     const normalizedLimit = Math.max(0, limit);
-    const sorted = [...this.events].sort((a, b) => a.sequence - b.sequence);
     if (normalizedLimit === 0) return [];
-    if (afterSequence <= 0) return sorted.slice(-normalizedLimit);
-    return sorted.filter((event) => event.sequence > afterSequence).slice(0, normalizedLimit);
+    const sorted = [...this.events].sort((a, b) => a.sequence - b.sequence);
+    const filtered = projectId
+      ? (() => {
+          const workItemsById = new Map(this.workItems.map((item) => [item.id, item.projectId]));
+          return sorted.filter((event) => event.workItemId && workItemsById.get(event.workItemId) === projectId);
+        })()
+      : sorted;
+    if (afterSequence <= 0) return filtered.slice(-normalizedLimit);
+    return filtered.filter((event) => event.sequence > afterSequence).slice(0, normalizedLimit);
   }
 
   async listMemories(workItemId?: string): Promise<MemoryRecord[]> {
@@ -981,31 +987,60 @@ export class PostgresStore extends MemoryStore {
     return parsed;
   }
 
-  override async listEvents(afterSequence = 0, limit = 50): Promise<AgentEvent[]> {
+  override async listEvents(afterSequence = 0, limit = 50, projectId?: string): Promise<AgentEvent[]> {
     const normalizedLimit = Math.max(0, limit);
     if (normalizedLimit === 0) return [];
-    if (afterSequence <= 0) {
+    if (!projectId) {
+      if (afterSequence <= 0) {
+        const result = await this.pool.query(
+          `select payload from (
+             select payload, sequence from agent_events
+             order by sequence desc
+             limit $1
+           ) recent_events
+           order by sequence asc`,
+          [normalizedLimit]
+        );
+        const stored = result.rows.map((row) => AgentEventSchema.parse(row.payload));
+        return stored.length ? stored : super.listEvents(afterSequence, normalizedLimit);
+      }
       const result = await this.pool.query(
-        `select payload from (
-           select payload, sequence from agent_events
-           order by sequence desc
-           limit $1
-         ) recent_events
-         order by sequence asc`,
-        [normalizedLimit]
+        `select payload from agent_events
+         where sequence > $1
+         order by sequence asc
+         limit $2`,
+        [afterSequence, normalizedLimit]
       );
       const stored = result.rows.map((row) => AgentEventSchema.parse(row.payload));
       return stored.length ? stored : super.listEvents(afterSequence, normalizedLimit);
     }
+    if (afterSequence <= 0) {
+      const result = await this.pool.query(
+        `select payload from (
+           select agent_events.payload, agent_events.sequence
+           from agent_events
+           join work_items on work_items.id = agent_events.work_item_id
+           where work_items.payload ->> 'projectId' = $1
+           order by agent_events.sequence desc
+           limit $2
+         ) recent_events
+         order by sequence asc`,
+        [projectId, normalizedLimit]
+      );
+      const stored = result.rows.map((row) => AgentEventSchema.parse(row.payload));
+      return stored.length ? stored : super.listEvents(afterSequence, normalizedLimit, projectId);
+    }
     const result = await this.pool.query(
-      `select payload from agent_events
-       where sequence > $1
-       order by sequence asc
-       limit $2`,
-      [afterSequence, normalizedLimit]
+      `select agent_events.payload from agent_events
+       join work_items on work_items.id = agent_events.work_item_id
+       where agent_events.sequence > $1
+         and work_items.payload ->> 'projectId' = $2
+       order by agent_events.sequence asc
+       limit $3`,
+      [afterSequence, projectId, normalizedLimit]
     );
     const stored = result.rows.map((row) => AgentEventSchema.parse(row.payload));
-    return stored.length ? stored : super.listEvents(afterSequence, normalizedLimit);
+    return stored.length ? stored : super.listEvents(afterSequence, normalizedLimit, projectId);
   }
 
   override async claimWorkItemForWorkflow(id: string): Promise<boolean> {
