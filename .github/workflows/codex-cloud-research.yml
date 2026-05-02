@@ -2,7 +2,7 @@ name: Codex Cloud Research
 
 on:
   schedule:
-    - cron: "2 * * * *"
+    - cron: "7 */6 * * *"
   workflow_dispatch:
     inputs:
       force:
