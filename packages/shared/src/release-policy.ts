@@ -1,4 +1,4 @@
-import type { ReleaseDecision, TargetRepoConfig, VerificationSignal } from "./schemas";
+import type { ReleaseDecision, ReleaseClass, TargetRepoConfig, VerificationSignal } from "./schemas";
 
 export function evaluateReleasePolicy(config: TargetRepoConfig, signal: VerificationSignal): ReleaseDecision {
   const requiredFixes: string[] = [];
@@ -6,8 +6,16 @@ export function evaluateReleasePolicy(config: TargetRepoConfig, signal: Verifica
 
   const riskMode = config.release.allowedRisk[signal.riskLevel];
   const requireEveryAutomatedGate = riskMode === "autonomous_with_all_gates";
+  const releaseClass: ReleaseClass = signal.releaseClass || "code";
 
   if (signal.emergencyStopActive) requiredFixes.push("Emergency stop is active.");
+  if (!config.release.allowedClasses.includes(releaseClass)) {
+    requiredFixes.push(`Release class ${releaseClass} is not allowed by this repo release policy.`);
+  } else if (!config.release.autonomousClasses.includes(releaseClass)) {
+    requiredFixes.push(`Release class ${releaseClass} is configured for manual release only.`);
+  } else {
+    reasons.push(`Release class ${releaseClass} is configured for autonomous release.`);
+  }
   if (!signal.localChecksPassed) requiredFixes.push("Local checks have not passed.");
   if ((config.release.githubActionsRequired || requireEveryAutomatedGate) && !signal.githubActionsPassed) {
     requiredFixes.push("Required GitHub Actions checks have not passed.");

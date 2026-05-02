@@ -75,7 +75,7 @@ type WorkItemCreateInput = Pick<
   | "backendNeeded"
   | "rndNeeded"
 > &
-  Partial<Pick<WorkItem, "projectId" | "repo">>;
+  Partial<Pick<WorkItem, "projectId" | "repo" | "releaseClass">>;
 type ProjectScope = { projectId?: string; repo?: string };
 type ProjectConnectionPersistInput = ProjectConnectionInput &
   Partial<
@@ -320,6 +320,7 @@ export class MemoryStore implements ControllerStore {
       stateChangedAt: createdAt,
       updatedAt: createdAt,
       ...input,
+      releaseClass: input.releaseClass || "code",
       projectId: input.projectId || project.projectId,
       repo: input.repo || project.repo
     });

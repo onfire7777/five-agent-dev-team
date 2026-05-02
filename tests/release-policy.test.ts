@@ -66,6 +66,8 @@ const config: TargetRepoConfig = {
       medium: "autonomous_with_all_gates",
       high: "autonomous_with_all_gates"
     },
+    allowedClasses: ["code", "docs", "tests", "infra"],
+    autonomousClasses: ["code", "docs", "tests", "infra"],
     emergencyStopFile: ".agent-team/emergency-stop"
   },
   scheduler: {
@@ -95,7 +97,8 @@ const goodSignal: VerificationSignal = {
   rollbackPlanPresent: true,
   releaseProofPresent: true,
   emergencyStopActive: false,
-  riskLevel: "high"
+  riskLevel: "high",
+  releaseClass: "code"
 };
 
 describe("release policy", () => {
@@ -149,5 +152,55 @@ describe("release policy", () => {
 
     expect(decision.allowed).toBe(false);
     expect(decision.requiredFixes.join(" ")).toContain("Release proof");
+  });
+
+  it("blocks release classes that are not allowed for the repo", () => {
+    const restrictedConfig: TargetRepoConfig = {
+      ...config,
+      release: {
+        ...config.release,
+        allowedClasses: ["code"],
+        autonomousClasses: ["code"]
+      }
+    };
+    const decision = evaluateReleasePolicy(restrictedConfig, {
+      ...goodSignal,
+      releaseClass: "infra"
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.requiredFixes.join(" ")).toContain("not allowed");
+  });
+
+  it("blocks release classes configured for manual release only", () => {
+    const manualDocsConfig: TargetRepoConfig = {
+      ...config,
+      release: {
+        ...config.release,
+        allowedClasses: ["code", "docs"],
+        autonomousClasses: ["code"]
+      }
+    };
+    const decision = evaluateReleasePolicy(manualDocsConfig, {
+      ...goodSignal,
+      releaseClass: "docs"
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.requiredFixes.join(" ")).toContain("manual release only");
+  });
+
+  it("treats an empty autonomous class list as manual-only", () => {
+    const manualOnlyConfig: TargetRepoConfig = {
+      ...config,
+      release: {
+        ...config.release,
+        autonomousClasses: []
+      }
+    };
+    const decision = evaluateReleasePolicy(manualOnlyConfig, goodSignal);
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.requiredFixes.join(" ")).toContain("manual release only");
   });
 });

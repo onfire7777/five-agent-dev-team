@@ -48,6 +48,10 @@ export type AgentRole = z.infer<typeof AgentRoleSchema>;
 export const RiskLevelSchema = z.enum(["low", "medium", "high"]);
 export type RiskLevel = z.infer<typeof RiskLevelSchema>;
 
+export const RELEASE_CLASSES = ["code", "docs", "tests", "infra"] as const;
+export const ReleaseClassSchema = z.enum(RELEASE_CLASSES);
+export type ReleaseClass = z.infer<typeof ReleaseClassSchema>;
+
 export const ArtifactStatusSchema = z.enum(["pending", "running", "passed", "failed", "blocked"]);
 export type ArtifactStatus = z.infer<typeof ArtifactStatusSchema>;
 
@@ -391,6 +395,7 @@ export const WorkItemSchema = z.object({
   dependencies: z.array(z.string().min(1)).default([]),
   acceptanceCriteria: z.array(z.string()).default([]),
   riskLevel: RiskLevelSchema.default("medium"),
+  releaseClass: ReleaseClassSchema.optional(),
   frontendNeeded: z.boolean().default(true),
   backendNeeded: z.boolean().default(true),
   rndNeeded: z.boolean().default(true),
@@ -1032,24 +1037,46 @@ export const TargetRepoConfigSchema = z.object({
     fallbackModel: "gpt-5.4",
     useBestAvailable: true
   }),
-  release: z.object({
-    mode: z.literal("autonomous"),
-    githubActionsRequired: z.boolean().default(true),
-    requireLocalRemoteSync: z.boolean().default(true),
-    requireCleanWorktree: z.boolean().default(true),
-    allowedRisk: z
-      .object({
-        low: z.enum(["autonomous", "autonomous_with_all_gates", "manual"]).default("autonomous"),
-        medium: z.enum(["autonomous", "autonomous_with_all_gates", "manual"]).default("autonomous_with_all_gates"),
-        high: z.enum(["autonomous", "autonomous_with_all_gates", "manual"]).default("autonomous_with_all_gates")
-      })
-      .default({
-        low: "autonomous",
-        medium: "autonomous_with_all_gates",
-        high: "autonomous_with_all_gates"
-      }),
-    emergencyStopFile: z.string().default(".agent-team/emergency-stop")
-  }),
+  release: z
+    .object({
+      mode: z.literal("autonomous"),
+      githubActionsRequired: z.boolean().default(true),
+      requireLocalRemoteSync: z.boolean().default(true),
+      requireCleanWorktree: z.boolean().default(true),
+      allowedRisk: z
+        .object({
+          low: z.enum(["autonomous", "autonomous_with_all_gates", "manual"]).default("autonomous"),
+          medium: z.enum(["autonomous", "autonomous_with_all_gates", "manual"]).default("autonomous_with_all_gates"),
+          high: z.enum(["autonomous", "autonomous_with_all_gates", "manual"]).default("autonomous_with_all_gates")
+        })
+        .default({
+          low: "autonomous",
+          medium: "autonomous_with_all_gates",
+          high: "autonomous_with_all_gates"
+        }),
+      allowedClasses: z
+        .array(ReleaseClassSchema)
+        .min(1)
+        .default([...RELEASE_CLASSES]),
+      autonomousClasses: z.array(ReleaseClassSchema).optional(),
+      emergencyStopFile: z.string().default(".agent-team/emergency-stop")
+    })
+    .superRefine((release, ctx) => {
+      const autonomousClasses = release.autonomousClasses ?? release.allowedClasses;
+      for (const releaseClass of autonomousClasses) {
+        if (!release.allowedClasses.includes(releaseClass)) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["autonomousClasses"],
+            message: `Release class ${releaseClass} cannot be autonomous unless it is allowed.`
+          });
+        }
+      }
+    })
+    .transform((release) => ({
+      ...release,
+      autonomousClasses: release.autonomousClasses ?? release.allowedClasses
+    })),
   scheduler: z
     .object({
       mode: z.enum(["chatgpt_pro_assisted", "api_live", "dry_run"]).default("chatgpt_pro_assisted"),
@@ -1096,7 +1123,8 @@ export const VerificationSignalSchema = z.object({
   rollbackPlanPresent: z.boolean(),
   releaseProofPresent: z.boolean().default(false),
   emergencyStopActive: z.boolean(),
-  riskLevel: RiskLevelSchema
+  riskLevel: RiskLevelSchema,
+  releaseClass: ReleaseClassSchema.optional()
 });
 
 export type VerificationSignal = z.infer<typeof VerificationSignalSchema>;
