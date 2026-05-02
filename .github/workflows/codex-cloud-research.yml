@@ -40,6 +40,15 @@ jobs:
           script: |
             const { owner, repo } = context.repo;
             const force = context.payload.inputs?.force === "true" || context.payload.inputs?.force === true;
+            const allowedActors = new Set(["onfire7777"]);
+
+            if (context.eventName === "workflow_dispatch" && !allowedActors.has(context.actor)) {
+              return JSON.stringify({
+                run: false,
+                reason: `skipped: actor=${context.actor} is not allowed to run openai/codex-action`
+              });
+            }
+
             const openPrs = await github.paginate(github.rest.pulls.list, {
               owner,
               repo,
