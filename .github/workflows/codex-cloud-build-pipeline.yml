@@ -582,7 +582,7 @@ jobs:
           gh pr checks "$PR_NUMBER" --required --watch
           head_sha="$(gh pr view "$PR_NUMBER" --json headRefOid --jq '.headRefOid')"
           gh pr merge "$PR_NUMBER" --squash --delete-branch --match-head-commit "$head_sha"
-          gh workflow run codex-cloud-research.yml --ref main
+          gh workflow run codex-cloud-research.yml --ref main || echo "::warning::Failed to dispatch research workflow"
 
       - name: Cloud janitor pass
         if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'janitor'

@@ -6,7 +6,7 @@
 **Repo identifier.** `<owner>/five-agent-dev-team`. A concrete owner is supplied at project initialization; treat it as a runtime parameter, not a constant.
 **Decision binding.** Sections marked **[load-bearing]** lock specific technologies because the system's invariants depend on them. Sections marked **[default]** state a reasonable starting choice that an implementer MAY substitute, with a documented-equivalent rationale. Everything else is descriptive.
 
-### Document conventions
+## Document conventions
 
 - **Normative keywords.** MUST, MUST NOT, SHOULD, SHOULD NOT, and MAY are used per RFC 2119. They appear in plain text (no markup) so they survive any rendering pipeline.
 - **Cross-references.** `§N` and `§N.N` refer to sections within this document.
@@ -164,8 +164,6 @@ models:
 ```
 
 Resolution order: the primary model first, then each entry in the fallback list in declared order. Resolution MAY route through a direct provider SDK, OpenRouter, LiteLLM, or any equivalent. The fallback router is optional; a single provider with no fallback is permitted but MUST emit a startup warning. Configuration is read at worker boot and SHOULD be reloadable on `SIGHUP`.
-
----
 
 ---
 
