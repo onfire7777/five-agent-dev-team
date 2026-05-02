@@ -10,6 +10,16 @@ The controller is local-first and designed to run under Docker Compose:
 - **Postgres**: work-item state, artifacts, controller flags.
 - **Dashboard**: Vite/React operator console.
 
+### Runtime Decisions
+
+- **Agent runtime**: `@openai/agents` pinned to minor `0.8.x` (currently `^0.8.5`).
+- **Provider routing**: live runs route directly through the OpenAI Agents SDK (`@openai/agents`) with no external
+  router layer configured.
+- **Fallback default**: `models.useBestAvailable` defaults to `true`, so a fallback model (`gpt-5.4`) is enabled by
+  default and only used when the primary model fails. Set `useBestAvailable: false` or `AGENT_MODEL` to disable
+  fallback routing.
+- **Workspace toolchain**: npm (workspaces baseline) with engines `node >=22` and `npm >=10` from `package.json`.
+
 ## Workflow
 
 ```text
