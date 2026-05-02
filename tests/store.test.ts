@@ -189,6 +189,33 @@ describe("controller store workflow claims", () => {
     ).rejects.toThrow(/Connected project was not found/);
   });
 
+  it("tracks state transition time separately from general updates", async () => {
+    const store = new MemoryStore();
+    const workItem = await store.createWorkItem({
+      title: "Tracked transition",
+      requestType: "feature",
+      priority: "medium",
+      dependencies: [],
+      acceptanceCriteria: [],
+      riskLevel: "medium",
+      frontendNeeded: true,
+      backendNeeded: true,
+      rndNeeded: false,
+      projectId: "project-a",
+      repo: "owner/repo-a"
+    });
+
+    expect(workItem.stateChangedAt).toBe(workItem.createdAt);
+    await store.updateWorkItemState(workItem.id, "INTAKE");
+
+    const updated = (await store.listWorkItems()).find((item) => item.id === workItem.id);
+    expect(updated).toMatchObject({
+      id: workItem.id,
+      state: "INTAKE"
+    });
+    expect(updated?.stateChangedAt).toBeTruthy();
+  });
+
   it("persists schema-conformant opportunity scan runs newest-first", async () => {
     const store = new MemoryStore();
     await expectOpportunityScanRunsNewestFirst(store);

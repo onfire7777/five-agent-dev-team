@@ -354,6 +354,7 @@ export type SharedContext = z.infer<typeof SharedContextSchema>;
 export const MemoryRecordSchema = z.object({
   id: z.string().min(1),
   scope: z.enum(["global", "repo", "work_item", "agent"]),
+  key: z.string().min(1).optional(),
   projectId: z.string().min(1).optional(),
   repo: z.string().optional(),
   workItemId: z.string().optional(),
@@ -368,6 +369,7 @@ export const MemoryRecordSchema = z.object({
   source: z.string().min(1),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
+  supersededBy: z.string().min(1).nullable().optional(),
   expiresAt: z.string().datetime().optional()
 });
 
@@ -393,6 +395,7 @@ export const WorkItemSchema = z.object({
   backendNeeded: z.boolean().default(true),
   rndNeeded: z.boolean().default(true),
   createdAt: z.string().datetime(),
+  stateChangedAt: z.string().datetime().optional(),
   updatedAt: z.string().datetime()
 });
 

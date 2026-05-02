@@ -44,14 +44,50 @@ describe("permanent smart memory", () => {
 
     expect(latest).toMatchObject({
       scope: "repo",
+      key: "latest_completed_loop",
       projectId: closureArtifact.projectId,
       repo: closureArtifact.repo,
       kind: "handoff",
       permanence: "permanent",
       importance: 5,
-      workItemId: undefined
+      workItemId: undefined,
+      supersededBy: null
     });
     expect(latest?.content).toContain("Loop complete");
+  });
+
+  it("excludes superseded keyed memories from relevant context", () => {
+    const workItem = createSampleWorkItems()[0];
+    const now = new Date().toISOString();
+    const oldMemory: MemoryRecord = {
+      id: "latest-loop-old",
+      scope: "repo",
+      key: "latest_completed_loop",
+      projectId: workItem.projectId,
+      repo: workItem.repo,
+      kind: "handoff",
+      title: "Old loop state",
+      content: "Old state",
+      tags: ["latest-loop"],
+      confidence: "high",
+      importance: 5,
+      permanence: "permanent",
+      source: "test",
+      createdAt: now,
+      updatedAt: now,
+      supersededBy: "latest-loop-new"
+    };
+    const newMemory: MemoryRecord = {
+      ...oldMemory,
+      id: "latest-loop-new",
+      title: "New loop state",
+      content: "New state",
+      supersededBy: null
+    };
+
+    expect(selectRelevantMemories([oldMemory, newMemory], workItem, 2).map((memory) => memory.id)).toEqual([
+      "latest-loop-new"
+    ]);
   });
 
   it("retrieves relevant non-expired memories by importance", () => {

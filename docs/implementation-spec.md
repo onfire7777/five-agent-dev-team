@@ -436,32 +436,20 @@ The workflow's first activity is `loopStartSnapshot(projectId)`, which returns a
 
 ```ts
 interface LoopStartSnapshot {
+  loopRunId: string;
+  workItemId: string;
   projectId: string;
-  takenAt: string;                   // ISO-8601
-  git: {
-    head: string;                    // local HEAD sha
-    remoteHead: string;              // origin/{defaultBranch} sha
-    syncStatus: 'clean' | 'diverged' | 'ahead' | 'behind';
-    workingTreeClean: boolean;
-  };
-  lastClosedLoop: {                  // from repo-scoped permanent memory
-    workItemId: string | null;
-    closedAt: string | null;
-    finalSummaryRef: string | null;
-  } | null;
-  runtime: {
-    controllerHealthy: boolean;
-    workerHealthy: boolean;
-    temporalReachable: boolean;
-    githubMcpReady: boolean;
-    ghCliAuthenticated: boolean;
-  };
-  recentEvents: AgentEvent[];        // last 20 events for this project
-  permanentMemory: MemoryEntry[];    // all repo-scoped permanent memories
+  repo: string;
+  startRepoSha: string;
+  startBranch: string;
+  startClean: boolean;
+  startSynced: boolean;
+  latestCompletedLoop?: string;      // full body text from repo-scoped latest_completed_loop memory
+  createdAt: string;                 // ISO-8601
 }
 ```
 
-Every agent activity receives this snapshot as part of its execution context. Agents MUST consult `lastClosedLoop.finalSummaryRef` to understand the prior state of the codebase before planning new work.
+Every agent activity receives this snapshot as part of its execution context. Agents MUST consult `latestCompletedLoop` when it is present to understand the prior state of the codebase before planning new work.
 
 ### 6.3 Loop closure
 
@@ -749,17 +737,24 @@ If any check fails, the work item MUST transition to `BLOCKED` and the failing i
 ```ts
 interface MemoryEntry {
   id: string;
-  projectId: string;
-  workItemId: string | null;
-  tier: 'repo-context' | 'permanent' | 'loop' | 'ephemeral';
-  key: string;                  // e.g. 'latest_completed_loop', 'adr-2026-04-001'
-  kind: 'research' | 'architecture' | 'decision' | 'failure' | 'release' | 'handoff' | 'context';
+  scope: 'global' | 'repo' | 'work_item' | 'agent';
+  key?: string;                 // e.g. 'latest_completed_loop' for upserted live memory
+  projectId?: string;
+  repo?: string;
+  workItemId?: string;
+  agent?: AgentRole;
+  kind: 'research' | 'architecture' | 'decision' | 'failure' | 'release' | 'handoff' | 'preference' | 'risk';
   title: string;
-  bodyMd: string;
-  bodyJson: Record<string, unknown> | null;
-  authorAgent: AgentRole | 'system';
+  content: string;
+  tags: string[];
+  confidence: 'low' | 'medium' | 'high';
+  importance: 1 | 2 | 3 | 4 | 5;
+  permanence: 'ephemeral' | 'session' | 'durable' | 'permanent';
+  source: string;
   createdAt: string;
-  supersededBy: string | null;  // for upserted keys (e.g. 'latest_completed_loop')
+  updatedAt: string;
+  supersededBy?: string | null; // previous live-key records point at the replacing record
+  expiresAt?: string;
 }
 ```
 
@@ -778,6 +773,7 @@ CREATE TABLE work_items (
   id          text PRIMARY KEY,
   payload    jsonb NOT NULL,
   state      text NOT NULL,
+  state_changed_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -802,11 +798,23 @@ CREATE TABLE agent_events (
 CREATE TABLE memory_records (
   id           text PRIMARY KEY,
   payload      jsonb NOT NULL,
+  key          text,
   scope        text NOT NULL,
   work_item_id text,
   importance   integer NOT NULL,
+  superseded_by text,
   updated_at   timestamptz NOT NULL DEFAULT now()
 );
+CREATE UNIQUE INDEX memory_records_live_key_idx
+  ON memory_records (
+    scope,
+    key,
+    coalesce(payload->>'projectId', ''),
+    coalesce(payload->>'repo', ''),
+    coalesce(work_item_id, ''),
+    coalesce(payload->>'agent', '')
+  )
+  WHERE key IS NOT NULL AND superseded_by IS NULL;
 
 CREATE TABLE workflow_claims (
   work_item_id text PRIMARY KEY,
@@ -887,7 +895,9 @@ capabilities:
     command: github-mcp-server
     args: [stdio, --dynamic-toolsets, --read-only]
     env: { GITHUB_PERSONAL_ACCESS_TOKEN: "${GH_TOKEN}" }
-    activate: { stages: [RND, BACKEND_BUILD, FRONTEND_BUILD, VERIFY, RELEASE] }
+    activate:
+      stages: [BACKEND_BUILD, VERIFY, RELEASE]
+      agents: ["backend-systems-engineering", "quality-security-privacy-release"]
   - id: playwright-mcp
     transport: stdio
     command: npx
