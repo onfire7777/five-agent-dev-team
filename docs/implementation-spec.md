@@ -64,7 +64,7 @@ Health checks gate startup order: `postgres` → `temporal` → `controller` →
 
 ### 3.3 Monorepo layout
 
-```
+```text
 five-agent-dev-team/
 ├── apps/
 │   ├── controller/        # HTTP API, scheduler, project registry
@@ -114,30 +114,30 @@ Every artifact MUST be persisted in two forms: Markdown (for diffs and pull-requ
 
 ```ts
 // packages/shared/src/schemas.ts (excerpt)
-export const WorkItemBrief = z.object({
-  workItemId: z.string().uuid(),
-  projectId: z.string().uuid(),
+export const WorkItemBriefSchema = z.object({
+  workItemId: z.string().min(1),
+  projectId: z.string().min(1),
   title: z.string().min(1).max(200),
-  requestType: z.enum(['feature','bug','perf','security','privacy','refactor','rnd']),
+  requestType: z.enum(['feature','bug','performance','security','privacy','refactor','research']),
   priority: z.enum(['p0','p1','p2','p3']),
-  businessGoal: z.string(),
-  userGoal: z.string(),
-  technicalGoal: z.string(),
-  scopeIn: z.array(z.string()),
-  scopeOut: z.array(z.string()),
-  acceptanceCriteria: z.array(z.object({ id: z.string(), text: z.string(), testable: z.boolean() })),
+  businessGoal: z.string().min(1),
+  userGoal: z.string().min(1),
+  technicalGoal: z.string().min(1),
+  scopeIn: z.array(z.string().min(1)),
+  scopeOut: z.array(z.string().min(1)),
+  acceptanceCriteria: z.array(AcceptanceCriterionSchema),
   affectedAreas: z.array(z.enum(['frontend','backend','infra','docs','tests'])),
   flags: z.object({
     frontendNeeded: z.boolean(),
     backendNeeded: z.boolean(),
-    rndNeeded: z.boolean(),
+    rndNeeded: z.boolean()
   }),
   riskLevels: z.object({
-    securityPrivacy: z.enum(['low','medium','high']),
-    performance: z.enum(['low','medium','high']),
+    securityPrivacy: RiskLevelSchema,
+    performance: RiskLevelSchema
   }),
-  openQuestions: z.array(z.string()),
-  routingDecision: z.string(),
+  openQuestions: z.array(z.string().min(1)),
+  routingDecision: z.string().min(1)
 });
 ```
 
@@ -175,7 +175,7 @@ This section is normative for the design of every agent prompt and every reusabl
 
 A **skill** is a self-contained, file-based capability that an agent loads on demand. Skills live under `packages/agents/skills/` in the canonical layout below; they are version-controlled alongside agent code.
 
-```
+```text
 packages/agents/skills/
 ├── shared/                     # skills available to every agent
 │   ├── code-review/
@@ -260,7 +260,7 @@ Every agent MUST have access to the following shared skills:
 
 Every agent prompt MUST be assembled from the following blocks, in this order. Block boundaries MUST be marked with `<<< BLOCK: name >>>` / `<<< END BLOCK >>>` delimiters so the agent can reliably locate each block.
 
-```
+```text
 <<< BLOCK: identity >>>
 You are the <Agent Name> for project <projectName>. Your sole responsibility
 is <one-sentence ownership from §4.1>. You MUST NOT take actions outside
@@ -371,7 +371,7 @@ Prompt revisions MUST be reviewed in pull requests like any other code; the impl
 
 Every work item is in exactly one state at any time. Only the transitions defined below are legal. The transition table lives in `packages/shared/src/state-machine.ts` and MUST be the single guard for all state-changing writes.
 
-```
+```text
 NEW
   → INTAKE              (controller accepts, validates project, snapshots loop start)
 INTAKE
@@ -481,7 +481,7 @@ On entry to `BLOCKED`, run `loopBlockedSummary(workItemId)` and write a structur
 
 ### 6.4 Parallelism rules
 
-```
+```text
 Permitted in parallel:
   - R&D research and Quality drafting test strategy (within the same work item)
   - Frontend build and Backend build (only after CONTRACT is locked)
@@ -611,7 +611,8 @@ The implementer MUST use the official server, `github/github-mcp-server`, versio
   env:
     GITHUB_PERSONAL_ACCESS_TOKEN: ${GH_TOKEN}
   activate:
-    stages: [RND, BACKEND_BUILD, FRONTEND_BUILD, VERIFY, RELEASE]
+    stages: [BACKEND_BUILD, VERIFY, RELEASE]
+    agents: ["backend-systems-engineering", "quality-security-privacy-release"]
 ```
 
 **Prohibited.** Custom GitHub wrapper scripts. The official server, the `gh` CLI, and Octokit together cover the full GitHub surface.
@@ -991,7 +992,7 @@ Releases run autonomously by default. Autonomy is conditional on every gate belo
 
 ### 15.1 Gate sequence (ordered)
 
-```
+```text
 1. Integration sync gate
    - Working tree is clean.
    - origin/<defaultBranch> is reachable.
@@ -1283,7 +1284,7 @@ docker compose exec controller node ./scripts/recover-workflow.js <work-item-id>
 
 **Repository hygiene rule.** After every change to this project's own repository, the operator MUST verify:
 
-```
+```bash
 git status --porcelain                                          # MUST be empty
 git rev-list --left-right --count origin/main...HEAD            # MUST return 0\t0
 gh run list --branch main --limit 1 --json conclusion           # MUST be "success"
