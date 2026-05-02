@@ -23,9 +23,31 @@ test.describe("dashboard smoke", () => {
     await page.goto("/");
 
     await expect(page.getByRole("heading", { name: "Autonomous Control" })).toBeVisible();
+    await expect(page.getByTestId("top-bar")).toBeVisible();
+    await expect(page.getByTestId("project-bar")).toBeVisible();
     await expect(page.getByTestId("work-intake")).toBeVisible();
     await expect(page.getByTestId("active-loop")).toBeVisible();
+    await expect(page.getByTestId("insight-panel")).toBeVisible();
     await expect(page.getByTestId("release-panel")).toBeVisible();
+
+    const surfacesRenderInOrder = await page.evaluate(() => {
+      const ids = ["top-bar", "project-bar", "work-intake", "active-loop", "insight-panel"];
+      const elements = ids.map((id) => document.querySelector(`[data-testid="${id}"]`));
+      return elements.every((element, index) => {
+        if (!element) return false;
+        if (index === 0) return true;
+        const previous = elements[index - 1];
+        return Boolean(previous && previous.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING);
+      });
+    });
+    expect(surfacesRenderInOrder).toBe(true);
+
+    await expect(page.getByTestId("project-picker")).toBeVisible();
+    await expect(page.getByTestId("project-status-chips")).toContainText("Sync offline");
+    await page.getByTestId("project-connect").getByText("+ Connect").click();
+    await expect(page.getByLabel("Name", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Owner/name", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Local path", { exact: true })).toBeVisible();
 
     await page.getByText("Work options").click();
     await expect(page.getByLabel("Type")).toBeVisible();

@@ -888,8 +888,13 @@ export function App() {
 
   async function connectProject() {
     setProjectError("");
-    if (!projectDraft.repoOwner.trim() || !projectDraft.repoName.trim() || !projectDraft.localPath.trim()) {
-      setProjectError("Repo owner, repo name, and local path are required.");
+    if (
+      !projectDraft.name.trim() ||
+      !projectDraft.repoOwner.trim() ||
+      !projectDraft.repoName.trim() ||
+      !projectDraft.localPath.trim()
+    ) {
+      setProjectError("Project name, owner/name, and local path are required.");
       return;
     }
     setLoading(true);
@@ -916,6 +921,15 @@ export function App() {
     } finally {
       setLoading(false);
     }
+  }
+
+  function updateProjectRepoSlug(value: string) {
+    const [repoOwner = "", repoName = ""] = value.split("/", 2);
+    setProjectDraft((draft) => ({
+      ...draft,
+      repoOwner: repoOwner.trim(),
+      repoName: repoName.trim()
+    }));
   }
 
   async function activateProject(projectId: string) {
@@ -1047,10 +1061,6 @@ export function App() {
         .slice(0, 5),
     [status.workItems, activeProject]
   );
-  const activeTeam = useMemo(
-    () => (activeProject ? status.projectTeams.find((team) => team.projectId === activeProject.projectId) : undefined),
-    [status.projectTeams, activeProject]
-  );
   const selected = useMemo(
     () => activeWorkItems.find((item) => item.id === selectedWorkItem) || activeWorkItems[0],
     [selectedWorkItem, activeWorkItems]
@@ -1061,6 +1071,7 @@ export function App() {
     (utility) => utility.status === "ready" || utility.status === "available"
   );
   const githubUtilityPreview = connectedGithubUtilities.slice(0, 5);
+  const projectRepoSlug = [projectDraft.repoOwner, projectDraft.repoName].filter(Boolean).join("/");
 
   useEffect(() => {
     if (!apiState.connected || !activeProject) return;
@@ -1079,7 +1090,7 @@ export function App() {
 
   return (
     <div className="app-shell">
-      <header className="top-header">
+      <header className="top-header" data-testid="top-bar">
         <div className="brand-lockup">
           <span className="brand-mark">
             <Bot size={18} />
@@ -1135,6 +1146,275 @@ export function App() {
             <span>{status.system.emergencyReason || apiMessage}</span>
           </div>
         )}
+
+        <section className="project-bar" aria-labelledby="project-bar-title" data-testid="project-bar">
+          <h2 className="sr-only" id="project-bar-title">
+            Project
+          </h2>
+          <div className="project-picker-line">
+            <label className="field project-picker-field">
+              <span>Project</span>
+              <select
+                value={activeProject?.id || ""}
+                onChange={(event) => {
+                  const project = projects.find((item) => item.id === event.target.value);
+                  if (!project) {
+                    selectProjectId("");
+                    return;
+                  }
+                  selectProjectId(project.id);
+                  hydrateProjectDraft(project, true);
+                  if (!project.active) activateProject(project.id);
+                }}
+                data-testid="project-picker"
+              >
+                <option value="">{projects.length ? "Select project" : "No connected projects"}</option>
+                {projects.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.name} - {project.repo}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div className="project-status-strip" aria-label="Project status" data-testid="project-status-chips">
+              <span className={`project-chip ${apiState.connected ? "ready" : "attention"}`}>
+                Sync {apiState.connected ? status.system.githubSync : "offline"}
+              </span>
+              <span className={`project-chip ${activeProject?.ghAuthed ? "ready" : "attention"}`}>
+                gh {activeProject?.ghAuthed ? "authenticated" : "needs auth"}
+              </span>
+              <span
+                className={`project-chip ${
+                  activeProject?.githubMcpAuthenticated || activeProject?.githubMcpEnabled === false
+                    ? "ready"
+                    : "attention"
+                }`}
+              >
+                MCP{" "}
+                {activeProject?.githubMcpAuthenticated
+                  ? "ready"
+                  : activeProject?.githubMcpEnabled === false
+                    ? "off"
+                    : "needs auth"}
+              </span>
+            </div>
+
+            <details className="project-connect" data-testid="project-connect">
+              <summary>
+                <Github size={15} />+ Connect
+              </summary>
+              <div
+                className="project-connect-grid"
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    connectProject();
+                  }
+                }}
+              >
+                <label className="field">
+                  <span>Name</span>
+                  <input
+                    value={projectDraft.name}
+                    onChange={(event) => setProjectDraft((draft) => ({ ...draft, name: event.target.value }))}
+                    placeholder="Project display name"
+                    required
+                  />
+                </label>
+                <label className="field">
+                  <span>Owner/name</span>
+                  <input
+                    value={projectRepoSlug}
+                    onChange={(event) => updateProjectRepoSlug(event.target.value)}
+                    placeholder="owner/repository"
+                    required
+                  />
+                </label>
+                <label className="field project-path">
+                  <span>Local path</span>
+                  <input
+                    value={projectDraft.localPath}
+                    onChange={(event) => setProjectDraft((draft) => ({ ...draft, localPath: event.target.value }))}
+                    placeholder="C:\\Users\\you\\Desktop\\repo"
+                    required
+                  />
+                </label>
+
+                <details className="project-advanced">
+                  <summary>Advanced</summary>
+                  <div className="project-advanced-grid">
+                    <label className="field">
+                      <span>Branch</span>
+                      <input
+                        value={projectDraft.defaultBranch}
+                        onChange={(event) =>
+                          setProjectDraft((draft) => ({ ...draft, defaultBranch: event.target.value }))
+                        }
+                        placeholder="main"
+                      />
+                    </label>
+                    <div
+                      className={`github-account-card ${githubAccount.connected ? "ready" : "attention"}`}
+                      data-testid="github-account-card"
+                    >
+                      <div className="github-account-main">
+                        {githubAccount.avatarUrl ? (
+                          <img className="github-account-avatar" src={githubAccount.avatarUrl} alt="" />
+                        ) : (
+                          <span className="github-account-avatar fallback">
+                            <Github size={16} />
+                          </span>
+                        )}
+                        <span>
+                          <strong>
+                            {githubAccount.connected ? `GitHub: ${githubAccount.login}` : "Connect GitHub account"}
+                          </strong>
+                          <small>
+                            {githubAccount.connected
+                              ? `${githubAccount.source === "local" ? "Dashboard OAuth" : githubAccount.sourceName || "Environment"} powers ${connectedGithubUtilities.length || "GitHub"} utilities.`
+                              : githubAccount.message}
+                          </small>
+                          {githubUtilityPreview.length > 0 && (
+                            <span className="github-utility-preview" aria-label="Connected GitHub utilities">
+                              {githubUtilityPreview.map((utility) => (
+                                <i key={utility.id}>{utility.label}</i>
+                              ))}
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                      <div className="github-account-actions">
+                        {githubConnect.status === "pending" && githubConnect.session ? (
+                          <>
+                            <span className="github-connect-code" aria-label="GitHub verification code">
+                              {githubConnect.session.userCode}
+                            </span>
+                            <a
+                              className="secondary-link"
+                              href={
+                                githubConnect.session.verificationUriComplete || githubConnect.session.verificationUri
+                              }
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              <Github size={14} />
+                              Open GitHub
+                            </a>
+                          </>
+                        ) : githubAccount.connected ? (
+                          githubAccount.source === "local" ? (
+                            <button
+                              className="secondary-button"
+                              type="button"
+                              onClick={disconnectGithubAccount}
+                              disabled={loading}
+                            >
+                              <CircleStop size={15} />
+                              Disconnect
+                            </button>
+                          ) : (
+                            <span className="github-managed">Env managed</span>
+                          )
+                        ) : (
+                          <button
+                            className="secondary-button"
+                            type="button"
+                            onClick={startGithubConnection}
+                            disabled={
+                              loading ||
+                              githubConnect.status === "starting" ||
+                              !apiState.connected ||
+                              !githubAccount.clientIdConfigured
+                            }
+                          >
+                            <Github size={15} />
+                            {githubAccount.clientIdConfigured ? "Connect GitHub" : "OAuth setup needed"}
+                          </button>
+                        )}
+                      </div>
+                      {(githubConnect.message || githubAccountError) && (
+                        <small
+                          className={
+                            githubConnect.status === "failed" || githubAccountError
+                              ? "github-account-message error"
+                              : "github-account-message"
+                          }
+                        >
+                          {githubAccountError || githubConnect.message}
+                        </small>
+                      )}
+                      {githubAccount.utilities.length > 0 && (
+                        <details className="github-utilities">
+                          <summary>Connected utilities</summary>
+                          <div>
+                            {githubAccount.utilities.map((utility) => (
+                              <span
+                                className={`github-utility ${utility.status}`}
+                                key={utility.id}
+                                title={utility.summary}
+                              >
+                                <strong>{utility.label}</strong>
+                                <em>{utility.status.replace(/_/g, " ")}</em>
+                              </span>
+                            ))}
+                          </div>
+                        </details>
+                      )}
+                    </div>
+                    <div className="project-switches">
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={projectDraft.githubMcpEnabled}
+                          onChange={(event) =>
+                            setProjectDraft((draft) => ({ ...draft, githubMcpEnabled: event.target.checked }))
+                          }
+                        />
+                        <span>GitHub MCP</span>
+                      </label>
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={projectDraft.githubWriteEnabled}
+                          onChange={(event) =>
+                            setProjectDraft((draft) => ({ ...draft, githubWriteEnabled: event.target.checked }))
+                          }
+                        />
+                        <span>MCP writes</span>
+                      </label>
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={projectDraft.webResearchEnabled}
+                          onChange={(event) =>
+                            setProjectDraft((draft) => ({ ...draft, webResearchEnabled: event.target.checked }))
+                          }
+                        />
+                        <span>Deep research</span>
+                      </label>
+                    </div>
+                  </div>
+                </details>
+
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={connectProject}
+                  disabled={loading || !apiState.connected}
+                >
+                  <Github size={15} />
+                  Connect
+                </button>
+              </div>
+            </details>
+          </div>
+          {projectError && (
+            <p className="form-error" role="alert">
+              {projectError}
+            </p>
+          )}
+        </section>
 
         <section className="command-panel" aria-labelledby="create-work-title" data-testid="work-intake">
           <h2 className="sr-only" id="create-work-title">
@@ -1254,268 +1534,10 @@ export function App() {
                 </div>
               </div>
             </details>
-
-            <details className="options-menu">
-              <summary>Project</summary>
-              <div
-                className="project-grid"
-                data-testid="project-connection"
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    connectProject();
-                  }
-                }}
-              >
-                <div className="project-current">
-                  <span className={`project-status ${activeProject?.status === "connected" ? "ready" : "attention"}`}>
-                    <Github size={15} />
-                    {activeProject ? activeProject.status.replace(/_/g, " ") : "No repo connected"}
-                  </span>
-                  <strong>{activeProject?.name || "Connect an isolated GitHub repo"}</strong>
-                  <small>
-                    {activeProject
-                      ? `${activeProject.repo} · ${activeProject.localPath}`
-                      : "Each repo gets its own five-agent team, memory namespace, GitHub stack, MCP tools, and work queue scope."}
-                  </small>
-                  {activeProject && (
-                    <div className="project-badges" aria-label="Project capabilities">
-                      <span>{activeProject.ghAuthed ? "CLI ready" : "CLI auth needed"}</span>
-                      <span>
-                        {activeProject.githubMcpAuthenticated
-                          ? "MCP ready"
-                          : activeProject.githubMcpEnabled
-                            ? "MCP auth needed"
-                            : "MCP off"}
-                      </span>
-                      <span>{activeProject.githubSdkConnected ? "SDK ready" : "SDK auth needed"}</span>
-                      <span>
-                        {activeTeam ? `${activeTeam.agentsOnline}/${activeTeam.agentsTotal} agents` : "5-agent team"}
-                      </span>
-                      <span>{activeProject.webResearchEnabled ? "Deep research" : "Research off"}</span>
-                    </div>
-                  )}
-                </div>
-
-                <div
-                  className={`github-account-card ${githubAccount.connected ? "ready" : "attention"}`}
-                  data-testid="github-account-card"
-                >
-                  <div className="github-account-main">
-                    {githubAccount.avatarUrl ? (
-                      <img className="github-account-avatar" src={githubAccount.avatarUrl} alt="" />
-                    ) : (
-                      <span className="github-account-avatar fallback">
-                        <Github size={16} />
-                      </span>
-                    )}
-                    <span>
-                      <strong>
-                        {githubAccount.connected ? `GitHub: ${githubAccount.login}` : "Connect GitHub account"}
-                      </strong>
-                      <small>
-                        {githubAccount.connected
-                          ? `${githubAccount.source === "local" ? "Dashboard OAuth" : githubAccount.sourceName || "Environment"} powers ${connectedGithubUtilities.length || "GitHub"} utilities.`
-                          : githubAccount.message}
-                      </small>
-                      {githubUtilityPreview.length > 0 && (
-                        <span className="github-utility-preview" aria-label="Connected GitHub utilities">
-                          {githubUtilityPreview.map((utility) => (
-                            <i key={utility.id}>{utility.label}</i>
-                          ))}
-                        </span>
-                      )}
-                    </span>
-                  </div>
-                  <div className="github-account-actions">
-                    {githubConnect.status === "pending" && githubConnect.session ? (
-                      <>
-                        <span className="github-connect-code" aria-label="GitHub verification code">
-                          {githubConnect.session.userCode}
-                        </span>
-                        <a
-                          className="secondary-link"
-                          href={githubConnect.session.verificationUriComplete || githubConnect.session.verificationUri}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          <Github size={14} />
-                          Open GitHub
-                        </a>
-                      </>
-                    ) : githubAccount.connected ? (
-                      githubAccount.source === "local" ? (
-                        <button
-                          className="secondary-button"
-                          type="button"
-                          onClick={disconnectGithubAccount}
-                          disabled={loading}
-                        >
-                          <CircleStop size={15} />
-                          Disconnect
-                        </button>
-                      ) : (
-                        <span className="github-managed">Env managed</span>
-                      )
-                    ) : (
-                      <button
-                        className="secondary-button"
-                        type="button"
-                        onClick={startGithubConnection}
-                        disabled={
-                          loading ||
-                          githubConnect.status === "starting" ||
-                          !apiState.connected ||
-                          !githubAccount.clientIdConfigured
-                        }
-                      >
-                        <Github size={15} />
-                        {githubAccount.clientIdConfigured ? "Connect GitHub" : "OAuth setup needed"}
-                      </button>
-                    )}
-                  </div>
-                  {(githubConnect.message || githubAccountError) && (
-                    <small
-                      className={
-                        githubConnect.status === "failed" || githubAccountError
-                          ? "github-account-message error"
-                          : "github-account-message"
-                      }
-                    >
-                      {githubAccountError || githubConnect.message}
-                    </small>
-                  )}
-                  {githubAccount.utilities.length > 0 && (
-                    <details className="github-utilities">
-                      <summary>Connected utilities</summary>
-                      <div>
-                        {githubAccount.utilities.map((utility) => (
-                          <span className={`github-utility ${utility.status}`} key={utility.id} title={utility.summary}>
-                            <strong>{utility.label}</strong>
-                            <em>{utility.status.replace(/_/g, " ")}</em>
-                          </span>
-                        ))}
-                      </div>
-                    </details>
-                  )}
-                </div>
-
-                <label className="field">
-                  <span>Project name</span>
-                  <input
-                    value={projectDraft.name}
-                    onChange={(event) => setProjectDraft((draft) => ({ ...draft, name: event.target.value }))}
-                    placeholder="Optional display name"
-                  />
-                </label>
-                <label className="field">
-                  <span>Owner</span>
-                  <input
-                    value={projectDraft.repoOwner}
-                    onChange={(event) => setProjectDraft((draft) => ({ ...draft, repoOwner: event.target.value }))}
-                    placeholder="GitHub owner"
-                  />
-                </label>
-                <label className="field">
-                  <span>Repo</span>
-                  <input
-                    value={projectDraft.repoName}
-                    onChange={(event) => setProjectDraft((draft) => ({ ...draft, repoName: event.target.value }))}
-                    placeholder="Repository name"
-                  />
-                </label>
-                <label className="field">
-                  <span>Branch</span>
-                  <input
-                    value={projectDraft.defaultBranch}
-                    onChange={(event) => setProjectDraft((draft) => ({ ...draft, defaultBranch: event.target.value }))}
-                    placeholder="main"
-                  />
-                </label>
-                <label className="field project-path">
-                  <span>Local repo path</span>
-                  <input
-                    value={projectDraft.localPath}
-                    onChange={(event) => setProjectDraft((draft) => ({ ...draft, localPath: event.target.value }))}
-                    placeholder="C:\\Users\\you\\Desktop\\repo"
-                  />
-                </label>
-
-                <div className="project-switches">
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={projectDraft.githubMcpEnabled}
-                      onChange={(event) =>
-                        setProjectDraft((draft) => ({ ...draft, githubMcpEnabled: event.target.checked }))
-                      }
-                    />
-                    <span>GitHub MCP</span>
-                  </label>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={projectDraft.githubWriteEnabled}
-                      onChange={(event) =>
-                        setProjectDraft((draft) => ({ ...draft, githubWriteEnabled: event.target.checked }))
-                      }
-                    />
-                    <span>MCP writes</span>
-                  </label>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={projectDraft.webResearchEnabled}
-                      onChange={(event) =>
-                        setProjectDraft((draft) => ({ ...draft, webResearchEnabled: event.target.checked }))
-                      }
-                    />
-                    <span>Deep research</span>
-                  </label>
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    onClick={connectProject}
-                    disabled={loading || !apiState.connected}
-                  >
-                    <Github size={15} />
-                    Connect
-                  </button>
-                </div>
-
-                {projects.length > 1 && (
-                  <div className="project-list">
-                    {projects.map((project) => (
-                      <button
-                        type="button"
-                        key={project.id}
-                        className={activeProject?.id === project.id ? "is-active" : ""}
-                        onClick={() => {
-                          selectProjectId(project.id);
-                          hydrateProjectDraft(project, true);
-                          if (!project.active) activateProject(project.id);
-                        }}
-                        disabled={loading}
-                      >
-                        <span>{project.name}</span>
-                        <small>
-                          {project.repo} · {project.active ? "team enabled" : "inactive"}
-                        </small>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </details>
           </form>
           {createError && (
             <p className="form-error" id="work-title-error" role="alert">
               {createError}
-            </p>
-          )}
-          {projectError && (
-            <p className="form-error" role="alert">
-              {projectError}
             </p>
           )}
         </section>
@@ -1585,7 +1607,7 @@ export function App() {
             )}
           </section>
 
-          <aside className="insight-panel" aria-labelledby="insight-title">
+          <aside className="insight-panel" aria-labelledby="insight-title" data-testid="insight-panel">
             <div className="panel-heading compact">
               <div>
                 <span>Insights</span>

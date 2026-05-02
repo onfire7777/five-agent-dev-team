@@ -539,6 +539,15 @@ jobs:
               body: `Codex Cloud ${{ steps.gate.outputs.stage_display }} ran but produced no file changes. The issue is blocked for lane triage.\n\nRun: ${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/actions/runs/${context.runId}`
             });
 
+      - name: Format generated changes
+        if: steps.changes.outputs.changed == 'true'
+        shell: bash
+        run: |
+          mapfile -t changed_files < <(git diff --name-only --diff-filter=ACM)
+          if [ "${#changed_files[@]}" -gt 0 ]; then
+            npx prettier --write --ignore-unknown "${changed_files[@]}"
+          fi
+
       - name: Verify generated changes
         if: steps.changes.outputs.changed == 'true'
         shell: bash
@@ -546,10 +555,16 @@ jobs:
           npm run check
           npm run logs:check
           docker compose config --no-interpolate --quiet
+          git diff --check
+          if [ "${{ steps.gate.outputs.stage }}" = "frontend" ]; then
+            npx playwright install --with-deps chromium
+            npm run test:e2e -- tests/e2e/dashboard-smoke.spec.ts
+          fi
           if [ "${{ steps.gate.outputs.stage }}" = "security" ]; then
             npm run audit:security
           fi
           if [ "${{ steps.gate.outputs.stage }}" = "quality" ]; then
+            npx playwright install --with-deps chromium
             npm run test:e2e
           fi
 
@@ -591,6 +606,10 @@ jobs:
             echo "- npm run check"
             echo "- npm run logs:check"
             echo "- docker compose config --no-interpolate --quiet"
+            echo "- git diff --check"
+            if [ "$STAGE" = "frontend" ]; then
+              echo "- npm run test:e2e -- tests/e2e/dashboard-smoke.spec.ts"
+            fi
             if [ "$STAGE" = "security" ]; then
               echo "- npm run audit:security"
             fi
