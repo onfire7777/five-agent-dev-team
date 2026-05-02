@@ -43,6 +43,7 @@ import {
   githubTokenSource,
   writeStoredGitHubAuth
 } from "../../../packages/shared/src/github-auth";
+import { scaffoldAgentTeam } from "./scaffold";
 
 const CreateWorkItemRequest = z.object({
   title: z.string().min(1),
@@ -837,6 +838,7 @@ app.post("/api/projects", async (req, res, next) => {
     const input = ProjectConnectionInputSchema.parse(req.body);
     const diagnostics = await inspectProjectConnection(input);
     const project = await store.upsertProjectConnection({ ...input, ...diagnostics });
+    await scaffoldAgentTeam(project.localPath);
     if (project.active) await writeTargetRepoConfig(project);
     await store.addEvent({
       level: project.status === "connected" ? "info" : "warn",
@@ -854,6 +856,7 @@ app.post("/api/projects/:id/activate", async (req, res, next) => {
     const activated = await store.activateProjectConnection(req.params.id);
     const diagnostics = await inspectProjectConnection(activated);
     const project = await store.upsertProjectConnection({ ...activated, active: true, ...diagnostics });
+    await scaffoldAgentTeam(project.localPath);
     await writeTargetRepoConfig(project);
     await store.addEvent({
       level: project.status === "connected" ? "info" : "warn",
