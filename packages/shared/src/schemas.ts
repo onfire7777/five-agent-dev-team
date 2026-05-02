@@ -105,7 +105,7 @@ export const StageArtifactSchema = z.object({
   promptHash: z.string().min(1).default("not-recorded"),
   skillIds: z.array(z.string().min(1)).default([]),
   capabilityIds: z.array(z.string().min(1)).default([]),
-  bodyMd: ArtifactMarkdownSchema.optional(),
+  bodyMd: ArtifactMarkdownSchema,
   bodyJson: ArtifactJsonBodySchema,
   createdAt: z.string().datetime()
 });
@@ -117,7 +117,7 @@ export const WorkItemBriefSchema = z.object({
   projectId: z.string().min(1),
   title: z.string().min(1).max(200),
   requestType: z.enum(["feature", "bug", "performance", "security", "privacy", "refactor", "research"]),
-  priority: z.enum(["p0", "p1", "p2", "p3"]),
+  priority: z.enum(["low", "medium", "high", "urgent"]),
   businessGoal: z.string().min(1),
   userGoal: z.string().min(1),
   technicalGoal: z.string().min(1),

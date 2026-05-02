@@ -276,6 +276,7 @@ describe("controller store workflow claims", () => {
       title: "Backend implementation summary",
       summary: "Lookup endpoints implemented.",
       nextStage: "VERIFY",
+      bodyMd: "## Backend implementation summary\n\nLookup endpoints implemented.",
       bodyJson: {
         workItemId: workItem.id,
         projectId: "project-a",
@@ -348,6 +349,7 @@ describe("controller store workflow claims", () => {
       promptHash: "test-prompt",
       skillIds: ["handoff-discipline"],
       capabilityIds: [],
+      bodyMd: "## Loop closure summary\n\nLoop complete and cleanly synced.",
       bodyJson: {
         loopRunId: "test-loop",
         workItemId: first.id,

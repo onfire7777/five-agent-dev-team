@@ -512,6 +512,7 @@ function verificationArtifact(): StageArtifact {
     promptHash: "test-prompt",
     skillIds: ["verification-plan"],
     capabilityIds: [],
+    bodyMd: "## Verification complete\n\nVerification passed with rollback plan.",
     bodyJson: {
       workItemId: "WI-RELEASE",
       status: "passed"

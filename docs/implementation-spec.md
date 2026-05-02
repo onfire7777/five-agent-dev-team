@@ -110,7 +110,7 @@ Prompt structure, skill packaging, and prompt-engineering rules for these agents
 
 ### 4.2 Required artifacts per agent
 
-Every artifact MUST be persisted in two forms: Markdown (for diffs and pull-request comments) and JSON (for machine consumption). Schemas live in `packages/shared/src/schemas.ts` as zod schemas; TypeScript types are inferred from them.
+Every stage artifact MUST be persisted in two forms: Markdown (for diffs and pull-request comments) and JSON (for machine consumption). `StageArtifactSchema` enforces both `bodyMd` and `bodyJson`; storage layers may persist them inside a single validated JSON payload. Schemas live in `packages/shared/src/schemas.ts` as zod schemas; TypeScript types are inferred from them.
 
 ```ts
 // packages/shared/src/schemas.ts (excerpt)
@@ -119,7 +119,7 @@ export const WorkItemBriefSchema = z.object({
   projectId: z.string().min(1),
   title: z.string().min(1).max(200),
   requestType: z.enum(['feature','bug','performance','security','privacy','refactor','research']),
-  priority: z.enum(['p0','p1','p2','p3']),
+  priority: z.enum(['low','medium','high','urgent']),
   businessGoal: z.string().min(1),
   userGoal: z.string().min(1),
   technicalGoal: z.string().min(1),
@@ -241,7 +241,7 @@ The `SKILL.md` body contains: a one-paragraph purpose statement, a numbered proc
 - A skill MUST NOT be auto-loaded if the activity does not match any trigger.
 - The runner MUST inject loaded skills into the agent prompt as a labeled block (see §4A.4).
 - An agent MAY explicitly request a non-triggered skill via the built-in `skill.load(id)` tool; the runner MUST verify that the agent's role appears in `audience` before granting access.
-- Total injected skill text per activity MUST NOT exceed 16 KB. If the activation set exceeds this limit, the runner MUST drop lower-priority skills (declared in `skills.priority` of the project config) and emit an event.
+- Total injected skill text per activity MUST NOT exceed 16 KB. If the activation set exceeds this limit, the runner MUST drop lower-priority skills using skill-level priority metadata/frontmatter and emit an event.
 
 ### 4A.3 Required shared skills
 
@@ -774,81 +774,55 @@ The `latest_completed_loop` key under tier `permanent` is the only memory record
 All tables live in schema `agent_team` of a single Postgres database. Migrations are managed via `node-pg-migrate` (default; any equivalent SQL migration tool is acceptable) under `apps/controller/migrations/`.
 
 ```sql
-CREATE TABLE projects (
-  project_id        uuid PRIMARY KEY,
-  name              text NOT NULL UNIQUE,
-  repo_owner        text NOT NULL,
-  repo_name         text NOT NULL,
-  default_branch    text NOT NULL DEFAULT 'main',
-  local_path        text NOT NULL,
-  config_json       jsonb NOT NULL,
-  active            boolean NOT NULL DEFAULT true,
-  created_at        timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (repo_owner, repo_name)
-);
-
 CREATE TABLE work_items (
-  work_item_id      uuid PRIMARY KEY,
-  project_id        uuid NOT NULL REFERENCES projects ON DELETE CASCADE,
-  title             text NOT NULL,
-  state             text NOT NULL,           -- enum enforced in app
-  state_changed_at  timestamptz NOT NULL DEFAULT now(),
-  request_type      text NOT NULL,
-  priority          text NOT NULL,
-  brief_json        jsonb NOT NULL,
-  workflow_id       text,                    -- temporal workflow id
-  created_at        timestamptz NOT NULL DEFAULT now(),
-  closed_at         timestamptz
+  id          text PRIMARY KEY,
+  payload    jsonb NOT NULL,
+  state      text NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX work_items_project_state_idx ON work_items (project_id, state);
 
-CREATE TABLE artifacts (
-  artifact_id       uuid PRIMARY KEY,
-  project_id        uuid NOT NULL REFERENCES projects ON DELETE CASCADE,
-  work_item_id      uuid NOT NULL REFERENCES work_items ON DELETE CASCADE,
-  stage             text NOT NULL,
-  kind              text NOT NULL,           -- 'WorkItemBrief', 'RnDPacket', ...
-  body_md           text NOT NULL,
-  body_json         jsonb NOT NULL,
-  author_agent      text NOT NULL,
-  created_at        timestamptz NOT NULL DEFAULT now()
+CREATE TABLE stage_artifacts (
+  id           bigserial PRIMARY KEY,
+  work_item_id text NOT NULL,
+  artifact_key text,
+  payload      jsonb NOT NULL,
+  created_at   timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX artifacts_work_item_idx ON artifacts (work_item_id, stage);
+CREATE UNIQUE INDEX stage_artifacts_artifact_key_idx
+  ON stage_artifacts (artifact_key)
+  WHERE artifact_key IS NOT NULL;
 
-CREATE TABLE memories (
-  memory_id         uuid PRIMARY KEY,
-  project_id        uuid NOT NULL REFERENCES projects ON DELETE CASCADE,
-  work_item_id      uuid REFERENCES work_items ON DELETE SET NULL,
-  tier              text NOT NULL,
-  key               text NOT NULL,
-  kind              text NOT NULL,
-  title             text NOT NULL,
-  body_md           text NOT NULL,
-  body_json         jsonb,
-  author_agent      text NOT NULL,
-  superseded_by     uuid REFERENCES memories ON DELETE SET NULL,
-  created_at        timestamptz NOT NULL DEFAULT now()
+CREATE TABLE agent_events (
+  sequence     bigserial PRIMARY KEY,
+  work_item_id text,
+  payload      jsonb NOT NULL,
+  created_at   timestamptz NOT NULL DEFAULT now()
 );
-CREATE UNIQUE INDEX memories_live_key_unique_idx ON memories (project_id, tier, key) WHERE superseded_by IS NULL;
-CREATE INDEX memories_project_tier_idx ON memories (project_id, tier);
 
-CREATE TABLE events (
-  event_id          bigserial PRIMARY KEY,
-  project_id        uuid NOT NULL REFERENCES projects ON DELETE CASCADE,
-  work_item_id      uuid REFERENCES work_items ON DELETE SET NULL,
-  type              text NOT NULL,
-  level             text NOT NULL DEFAULT 'info',
-  payload           jsonb NOT NULL,
-  created_at        timestamptz NOT NULL DEFAULT now()
+CREATE TABLE memory_records (
+  id           text PRIMARY KEY,
+  payload      jsonb NOT NULL,
+  scope        text NOT NULL,
+  work_item_id text,
+  importance   integer NOT NULL,
+  updated_at   timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX events_project_created_idx ON events (project_id, created_at DESC);
 
-CREATE TABLE emergency_stop (
-  scope             text PRIMARY KEY,        -- 'global' or 'project:<uuid>'
-  active            boolean NOT NULL,
-  reason            text,
-  set_at            timestamptz NOT NULL DEFAULT now(),
-  set_by            text NOT NULL DEFAULT 'operator'
+CREATE TABLE workflow_claims (
+  work_item_id text PRIMARY KEY,
+  claimed_at   timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE project_connections (
+  id         text PRIMARY KEY,
+  payload    jsonb NOT NULL,
+  active     boolean NOT NULL DEFAULT false,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE controller_flags (
+  key   text PRIMARY KEY,
+  value jsonb NOT NULL
 );
 ```
 

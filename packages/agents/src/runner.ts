@@ -341,6 +341,14 @@ function parseLiveArtifact(
     promptHash: preparation.promptHash,
     skillIds: preparation.skills.map((skill) => skill.id),
     capabilityIds: preparation.capabilityIds,
+    bodyMd:
+      typeof (parsed as any).bodyMd === "string"
+        ? (parsed as any).bodyMd
+        : `## ${String((parsed as any).title || definition.shortName)}\n\n${String((parsed as any).summary || rawOutput || "No summary returned.")}`,
+    bodyJson:
+      typeof (parsed as any).bodyJson === "object" && (parsed as any).bodyJson !== null
+        ? (parsed as any).bodyJson
+        : (parsed as Record<string, unknown>),
     createdAt: String((parsed as any).createdAt || new Date().toISOString())
   };
 
@@ -393,6 +401,23 @@ function createTemplateArtifact(
     promptHash: preparation.promptHash,
     skillIds: preparation.skills.map((skill) => skill.id),
     capabilityIds: preparation.capabilityIds,
+    bodyMd: `## ${liveSummary?.trim() || templateSummary(definition, context)}\n\n${templateDecisions(
+      definition,
+      context
+    )
+      .map((decision) => `- ${decision}`)
+      .join("\n")}`,
+    bodyJson: {
+      workItemId: context.workItem.id,
+      projectId: context.workItem.projectId,
+      repo: context.workItem.repo,
+      stage: context.stage,
+      ownerAgent: definition.role,
+      summary: liveSummary?.trim() || templateSummary(definition, context),
+      decisions: templateDecisions(definition, context),
+      risks: templateRisks(context),
+      nextStage
+    },
     createdAt: new Date().toISOString()
   };
   return StageArtifactSchema.parse(artifact);
@@ -426,6 +451,16 @@ function createInvalidLiveArtifact(
     promptHash: preparation.promptHash,
     skillIds: preparation.skills.map((skill) => skill.id),
     capabilityIds: preparation.capabilityIds,
+    bodyMd: `## Invalid live output\n\nLive agent output could not be parsed into a valid stage artifact.`,
+    bodyJson: {
+      workItemId: context.workItem.id,
+      projectId: context.workItem.projectId,
+      repo: context.workItem.repo,
+      stage: context.stage,
+      ownerAgent: definition.role,
+      status: "failed",
+      reason: "invalid-live-output"
+    },
     createdAt: new Date().toISOString()
   });
 }
