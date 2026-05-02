@@ -25,6 +25,7 @@ import {
   EmergencyControlRequestSchema,
   ProjectCapabilityStatusSchema,
   ProjectConnectionInputSchema,
+  ProjectConnectionSchema,
   OpportunityScanRunSchema,
   ReleaseClassSchema,
   WorkItemStateSchema,
@@ -43,6 +44,7 @@ import {
   githubTokenSource,
   writeStoredGitHubAuth
 } from "../../../packages/shared/src/github-auth";
+import { scaffoldAgentTeam } from "./scaffold";
 
 const CreateWorkItemRequest = z.object({
   title: z.string().min(1),
@@ -836,8 +838,10 @@ app.post("/api/projects", async (req, res, next) => {
   try {
     const input = ProjectConnectionInputSchema.parse(req.body);
     const diagnostics = await inspectProjectConnection(input);
+    const candidate = buildProjectConnectionCandidate(input, diagnostics);
+    await scaffoldAgentTeam(candidate.localPath);
+    if (candidate.active) await writeTargetRepoConfig(candidate);
     const project = await store.upsertProjectConnection({ ...input, ...diagnostics });
-    if (project.active) await writeTargetRepoConfig(project);
     await store.addEvent({
       level: project.status === "connected" ? "info" : "warn",
       type: "system",
@@ -851,10 +855,13 @@ app.post("/api/projects", async (req, res, next) => {
 
 app.post("/api/projects/:id/activate", async (req, res, next) => {
   try {
-    const activated = await store.activateProjectConnection(req.params.id);
-    const diagnostics = await inspectProjectConnection(activated);
-    const project = await store.upsertProjectConnection({ ...activated, active: true, ...diagnostics });
-    await writeTargetRepoConfig(project);
+    const current = await requireProjectConnection(req.params.id);
+    const activeInput = ProjectConnectionInputSchema.parse({ ...current, active: true });
+    const diagnostics = await inspectProjectConnection(activeInput);
+    const candidate = buildProjectConnectionCandidate(activeInput, diagnostics, current.createdAt);
+    await scaffoldAgentTeam(candidate.localPath);
+    await writeTargetRepoConfig(candidate);
+    const project = await store.upsertProjectConnection({ ...activeInput, ...diagnostics });
     await store.addEvent({
       level: project.status === "connected" ? "info" : "warn",
       type: "system",
@@ -940,6 +947,37 @@ async function writeTargetRepoConfig(project: ProjectConnection): Promise<void> 
   const projectConfigDir = process.env.AGENT_TEAM_PROJECT_CONFIG_DIR || ".agent-team/projects";
   await fs.mkdir(projectConfigDir, { recursive: true });
   await fs.writeFile(path.join(projectConfigDir, `${safeFileSegment(project.projectId)}.yaml`), yaml, "utf8");
+}
+
+function buildProjectConnectionCandidate(
+  input: ProjectConnectionInput,
+  diagnostics: ProjectConnectionDiagnostics,
+  createdAt = new Date().toISOString()
+): ProjectConnection {
+  const parsed = ProjectConnectionInputSchema.parse(input);
+  const projectId = parsed.projectId || safeFileSegment(`${parsed.repoOwner}-${parsed.repoName}`);
+  const repo = `${parsed.repoOwner}/${parsed.repoName}`;
+  return ProjectConnectionSchema.parse({
+    ...parsed,
+    ...diagnostics,
+    id: projectId,
+    projectId,
+    name: parsed.name || repo,
+    repo,
+    memoryNamespace: projectId,
+    contextDir: ".agent-team/context",
+    status: diagnostics.status || (parsed.active ? "connected" : "inactive"),
+    capabilities: diagnostics.capabilities || [],
+    validationErrors: diagnostics.validationErrors || [],
+    createdAt,
+    updatedAt: new Date().toISOString()
+  });
+}
+
+async function requireProjectConnection(id: string): Promise<ProjectConnection> {
+  const project = (await store.listProjectConnections()).find((candidate) => candidate.id === id);
+  if (!project) throw new HttpError(`Project connection ${id} was not found.`, 404);
+  return project;
 }
 
 async function removeTargetRepoConfig(project: ProjectConnection): Promise<void> {
