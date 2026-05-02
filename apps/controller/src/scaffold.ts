@@ -1,7 +1,8 @@
+import { constants, existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-const TEMPLATE_AGENT_TEAM_ROOT = path.resolve(process.cwd(), "templates", "target-repo", ".agent-team");
+const TEMPLATE_AGENT_TEAM_ROOT = resolveTemplateRoot();
 
 type ScaffoldFile = {
   source: string;
@@ -28,20 +29,27 @@ export async function scaffoldAgentTeam(localPath: string): Promise<void> {
   ];
 
   for (const file of files) {
-    if (await exists(file.target)) continue;
     await fs.mkdir(path.dirname(file.target), { recursive: true });
-    await fs.copyFile(file.source, file.target);
+    try {
+      await fs.copyFile(file.source, file.target, constants.COPYFILE_EXCL);
+    } catch (error) {
+      if (isNodeError(error) && error.code === "EEXIST") continue;
+      throw error;
+    }
     if (file.mode && process.platform !== "win32") {
       await fs.chmod(file.target, file.mode);
     }
   }
 }
 
-async function exists(target: string): Promise<boolean> {
-  try {
-    await fs.access(target);
-    return true;
-  } catch {
-    return false;
-  }
+function resolveTemplateRoot(): string {
+  const candidates = [
+    path.resolve(__dirname, "..", "..", "..", "templates", "target-repo", ".agent-team"),
+    path.resolve(__dirname, "..", "..", "..", "..", "templates", "target-repo", ".agent-team")
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) || candidates[0];
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error;
 }
