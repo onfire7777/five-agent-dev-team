@@ -19,14 +19,19 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  static-check:
+  static-check-node:
+    name: static-check (${{ matrix.node-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22, 24]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
-          node-version: 22
+          node-version: ${{ matrix.node-version }}
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
@@ -35,30 +40,56 @@ jobs:
       - run: npm run format:check
       - run: git diff --check
 
-  unit-integration:
+  static-check:
+    name: static-check
+    runs-on: ubuntu-latest
+    needs: static-check-node
+    timeout-minutes: 5
+    steps:
+      - run: echo "Node 22 and 24 static checks passed."
+
+  unit-integration-node:
+    name: unit-integration (${{ matrix.node-version }})
     runs-on: ubuntu-latest
     needs: static-check
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22, 24]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
-          node-version: 22
+          node-version: ${{ matrix.node-version }}
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
       - run: npm test
       - run: npm run build
 
-  e2e:
+  unit-integration:
+    name: unit-integration
+    runs-on: ubuntu-latest
+    needs: unit-integration-node
+    timeout-minutes: 5
+    steps:
+      - run: echo "Node 22 and 24 unit/integration checks passed."
+
+  e2e-node:
+    name: e2e (${{ matrix.node-version }})
     runs-on: ubuntu-latest
     needs: unit-integration
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22, 24]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
-          node-version: 22
+          node-version: ${{ matrix.node-version }}
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
@@ -74,19 +105,40 @@ jobs:
             test-results/
           if-no-files-found: ignore
 
-  security-audit:
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    needs: e2e-node
+    timeout-minutes: 5
+    steps:
+      - run: echo "Node 22 and 24 e2e checks passed."
+
+  security-audit-node:
+    name: security-audit (${{ matrix.node-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22, 24]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
-          node-version: 22
+          node-version: ${{ matrix.node-version }}
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
       - run: npm audit --audit-level=high
       - run: npm run audit:security
+
+  security-audit:
+    name: security-audit
+    runs-on: ubuntu-latest
+    needs: security-audit-node
+    timeout-minutes: 5
+    steps:
+      - run: echo "Node 22 and 24 security audits passed."
 
   secret-scan:
     runs-on: ubuntu-latest

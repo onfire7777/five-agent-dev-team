@@ -491,6 +491,7 @@ jobs:
             - Do not invent unqueued feature scope.
             - Add or update tests when behavior changes.
             - Leave a concise summary in codex-output.md.
+            - Do not ask follow-up questions. Either make the bounded change, or write a precise BLOCKED reason in codex-output.md.
 
             Expected verification before PR publication:
             ${{ steps.gate.outputs.verify_hint }}
@@ -556,7 +557,8 @@ jobs:
         id: publish_pr
         if: steps.changes.outputs.changed == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          CODEX_PUSH_TOKEN: ${{ secrets.CODEX_WORKFLOW_PUSH_TOKEN || github.token }}
+          GH_TOKEN: ${{ secrets.CODEX_WORKFLOW_PUSH_TOKEN || github.token }}
           STAGE: ${{ steps.gate.outputs.stage }}
           STAGE_DISPLAY: ${{ steps.gate.outputs.stage_display }}
           STAGE_LABEL: ${{ steps.gate.outputs.stage_label }}
@@ -570,6 +572,7 @@ jobs:
           git switch -c "$branch"
           git add -A
           git commit -m "Codex Cloud ${STAGE_DISPLAY}: issue #${TARGET_NUMBER}"
+          git remote set-url origin "https://x-access-token:${CODEX_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push --force-with-lease origin "$branch"
 
           {
