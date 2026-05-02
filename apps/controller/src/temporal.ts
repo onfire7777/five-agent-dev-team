@@ -2,7 +2,10 @@ import { Connection, Client } from "@temporalio/client";
 import type { WorkItem } from "../../../packages/shared/src";
 
 export function workflowIdForWorkItem(workItem: WorkItem): string {
-  return `wi-${workItem.projectId || "unscoped"}-${workItem.id}`;
+  if (!workItem.projectId) {
+    throw new Error(`Cannot start Temporal workflow for unscoped work item ${workItem.id}.`);
+  }
+  return `wi-${workItem.projectId}-${workItem.id}`;
 }
 
 export async function checkTemporalConnection(): Promise<boolean> {
@@ -33,9 +36,9 @@ export async function startAutonomousWorkflow(workItem: WorkItem): Promise<strin
   const address = process.env.TEMPORAL_ADDRESS;
   if (!address) return null;
 
-  const workflowId = workflowIdForWorkItem(workItem);
   let connection: Connection | null = null;
   try {
+    const workflowId = workflowIdForWorkItem(workItem);
     connection = await Connection.connect({ address });
     const client = new Client({
       connection,
@@ -50,7 +53,7 @@ export async function startAutonomousWorkflow(workItem: WorkItem): Promise<strin
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (/already started|already exists|workflow execution already/i.test(message)) {
-      return workflowId;
+      return workflowIdForWorkItem(workItem);
     }
     console.warn("Temporal workflow start skipped:", error instanceof Error ? error.message : error);
     return null;

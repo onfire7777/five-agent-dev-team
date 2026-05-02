@@ -60,7 +60,7 @@ Health checks gate startup order: `postgres` → `temporal` → `controller` →
 - The **controller** owns: HTTP serving, project registry, work-item intake, scheduler decisions, GitHub status surface, emergency stop, event store, and memory store.
 - The **worker** owns: Temporal activity execution, agent runs, repository operations, MCP session lifecycle, and verification command execution.
 - Controller and worker MUST NOT share in-memory state. Postgres is the only durable shared surface; Temporal is the only orchestration channel.
-- Repository writes MUST be serialized per repo via a Temporal mutex semaphore keyed by `projectId`. Reads are unrestricted.
+- Repository writes MUST be serialized per repo via controller workflow-claim/status gates. A Temporal mutex semaphore keyed by `projectId` MAY be added as a secondary safeguard. Reads are unrestricted.
 
 ### 3.3 Monorepo layout
 
@@ -930,7 +930,7 @@ All endpoints live under `/api`. The HTTP server MUST bind to `127.0.0.1` only. 
 | GET    | `/api/memories?projectId=...&tier=` | Filtered memory list. Cross-project reads are forbidden.                     |
 | GET    | `/api/events?projectId=...&limit=`  | Recent events. `limit` is clamped to `[1, 500]`; negative values are rejected with HTTP 400. |
 | GET    | `/api/events/stream?projectId=...`  | Server-sent events. Heartbeat comment every 15 seconds; initial backfill of the last 50 events. |
-| POST   | `/api/emergency-stop`               | Body: `{ scope: 'global' \| 'project:<id>', reason }`.                       |
+| POST   | `/api/emergency-stop`               | Body: `{ scope: 'global', reason }`. Project-scoped stops are not exposed until the runtime has project-scoped stop storage and activity checks. |
 | POST   | `/api/emergency-resume`             | Same body shape as emergency-stop. The `reason` field is required.           |
 
 All endpoints emit structured JSON logs (Pino is the **[default]** structured logger; any equivalent is acceptable). Error responses MUST NOT echo request bodies that may contain secrets.

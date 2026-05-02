@@ -1032,7 +1032,12 @@ export class PostgresStore extends MemoryStore {
           await client.query(
             `update memory_records
              set superseded_by = $1,
-                 payload = jsonb_set(payload, '{supersededBy}', to_jsonb($1::text), true),
+                 payload = jsonb_set(
+                   jsonb_set(payload, '{supersededBy}', to_jsonb($1::text), true),
+                   '{updatedAt}',
+                   to_jsonb($8::text),
+                   true
+                 ),
                  updated_at = now()
              where id <> $1
                and key = $2
@@ -1049,7 +1054,8 @@ export class PostgresStore extends MemoryStore {
               memory.projectId || "",
               memory.repo || "",
               memory.workItemId || "",
-              memory.agent || ""
+              memory.agent || "",
+              memory.updatedAt
             ]
           );
         }
