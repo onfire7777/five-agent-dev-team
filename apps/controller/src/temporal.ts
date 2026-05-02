@@ -1,5 +1,16 @@
-import { Connection, Client } from "@temporalio/client";
+import { Client, Connection, WorkflowNotFoundError } from "@temporalio/client";
 import type { WorkItem } from "../../../packages/shared/src";
+
+export type TemporalRecoveryAction = "cancel" | "terminate";
+
+export interface TemporalWorkflowRecoveryResult {
+  workflowId: string;
+  attempted: boolean;
+  recovered: boolean;
+  action: TemporalRecoveryAction;
+  reason: "cancelled" | "terminated" | "not_found" | "temporal_not_configured";
+  message: string;
+}
 
 export function workflowIdForWorkItem(workItem: WorkItem): string {
   if (!workItem.projectId) {
@@ -82,6 +93,81 @@ export async function signalProposalDecision(
   } catch (error) {
     console.warn("Temporal proposal decision signal skipped:", error instanceof Error ? error.message : error);
     return false;
+  } finally {
+    await connection?.close().catch(() => undefined);
+  }
+}
+
+export async function recoverAutonomousWorkflow(
+  workItem: WorkItem,
+  options: { action?: TemporalRecoveryAction; reason?: string } = {}
+): Promise<TemporalWorkflowRecoveryResult> {
+  const workflowId = workItem.projectId ? workflowIdForWorkItem(workItem) : `wi-unscoped-${workItem.id}`;
+  const action = options.action || "terminate";
+  const recoveryReason = options.reason || `Manual recovery requested for ${workItem.id}.`;
+  const address = process.env.TEMPORAL_ADDRESS;
+  if (!address) {
+    return {
+      workflowId,
+      attempted: false,
+      recovered: false,
+      action,
+      reason: "temporal_not_configured",
+      message: "TEMPORAL_ADDRESS is not configured; local workflow claim recovery can continue."
+    };
+  }
+  if (!workItem.projectId) {
+    return {
+      workflowId,
+      attempted: false,
+      recovered: false,
+      action,
+      reason: "not_found",
+      message: `Temporal workflow ${workflowId} cannot be resolved without projectId; local workflow claim recovery can continue.`
+    };
+  }
+
+  let connection: Connection | null = null;
+  try {
+    connection = await Connection.connect({ address });
+    const client = new Client({
+      connection,
+      namespace: process.env.TEMPORAL_NAMESPACE || "default"
+    });
+    const handle = client.workflow.getHandle(workflowId);
+    if (action === "cancel") {
+      await handle.cancel();
+      return {
+        workflowId,
+        attempted: true,
+        recovered: true,
+        action,
+        reason: "cancelled",
+        message: `Temporal workflow ${workflowId} was cancelled.`
+      };
+    }
+
+    await handle.terminate(recoveryReason);
+    return {
+      workflowId,
+      attempted: true,
+      recovered: true,
+      action,
+      reason: "terminated",
+      message: `Temporal workflow ${workflowId} was terminated.`
+    };
+  } catch (error) {
+    if (error instanceof WorkflowNotFoundError) {
+      return {
+        workflowId,
+        attempted: true,
+        recovered: false,
+        action,
+        reason: "not_found",
+        message: `Temporal workflow ${workflowId} was not found; local workflow claim recovery can continue.`
+      };
+    }
+    throw error;
   } finally {
     await connection?.close().catch(() => undefined);
   }
