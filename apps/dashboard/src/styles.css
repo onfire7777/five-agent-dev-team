@@ -255,6 +255,7 @@ button:disabled {
   font-weight: 700;
 }
 
+.project-bar,
 .command-panel,
 .flow-panel,
 .insight-panel {
@@ -264,8 +265,13 @@ button:disabled {
   box-shadow: none;
 }
 
+.project-bar,
 .command-panel {
   padding: 16px;
+}
+
+.project-bar {
+  margin-bottom: 14px;
 }
 
 .section-label {
@@ -405,42 +411,22 @@ button:focus-visible {
   accent-color: var(--color-primary);
 }
 
-.project-grid {
+.project-picker-line {
   display: grid;
-  grid-template-columns: minmax(240px, 1.2fr) repeat(3, minmax(120px, 0.6fr));
-  gap: 12px;
-  margin-top: 12px;
+  grid-template-columns: minmax(220px, 1fr) auto minmax(130px, auto);
+  gap: 10px;
+  align-items: end;
 }
 
-.project-current {
-  grid-row: span 2;
-  display: grid;
-  gap: 8px;
-  align-content: start;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: #fbfcfd;
-  padding: 12px;
+.project-picker-field {
   min-width: 0;
 }
 
-.project-current strong {
-  color: var(--color-primary);
-  font-size: 15px;
-}
-
-.project-current small,
-.project-list small {
-  color: #687386;
-  font-size: 12px;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
-.project-status,
-.project-badges,
+.project-status-strip,
+.project-chip,
 .project-switches,
 .project-switches label,
+.project-connect summary,
 .github-account-card,
 .github-account-main,
 .github-account-actions,
@@ -450,40 +436,106 @@ button:focus-visible {
   align-items: center;
 }
 
-.project-status {
-  gap: 7px;
-  width: max-content;
-  max-width: 100%;
-  border-radius: 999px;
-  padding: 5px 8px;
-  font-size: 11px;
-  font-weight: 850;
-  text-transform: capitalize;
+.project-status-strip {
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
-.project-status.ready {
+.project-chip {
+  min-height: 32px;
+  border-radius: 999px;
+  background: #fff4dc;
+  color: var(--status-warning);
+  padding: 6px 8px;
+  font-size: 11px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.project-chip.ready {
   background: #e8f8ef;
   color: var(--status-success);
 }
 
-.project-status.attention {
-  background: #fff4dc;
-  color: var(--status-warning);
+.project-connect {
+  position: relative;
 }
 
-.project-badges {
-  gap: 6px;
-  flex-wrap: wrap;
+.project-connect summary {
+  justify-content: center;
+  gap: 7px;
+  min-height: 42px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #1f2937;
+  cursor: pointer;
+  font-weight: 780;
+  list-style: none;
+  padding: 9px 12px;
+  white-space: nowrap;
 }
 
-.project-badges span {
-  border-radius: 999px;
-  background: #eef2f7;
-  color: #4f5b6e;
-  padding: 4px 7px;
+.project-connect summary::-webkit-details-marker,
+.project-advanced summary::-webkit-details-marker {
+  display: none;
+}
+
+.project-connect summary:hover {
+  border-color: var(--color-primary);
+}
+
+.project-connect-grid {
+  position: absolute;
+  right: 0;
+  z-index: 30;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(160px, 1fr));
+  gap: 12px;
+  width: min(760px, calc(100vw - 56px));
+  margin-top: 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-panel);
+  padding: 12px;
+  box-shadow: 0 12px 30px rgba(18, 24, 32, 0.12);
+}
+
+.project-advanced {
+  grid-column: 1 / -1;
+}
+
+.project-advanced summary {
+  width: max-content;
+  color: #384456;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 850;
+  list-style: none;
+}
+
+.project-advanced summary::after {
+  content: "↓";
+  color: #6a7484;
   font-size: 11px;
-  font-weight: 800;
-  text-transform: none;
+  margin-left: 6px;
+}
+
+.project-advanced[open] summary::after {
+  content: "↑";
+}
+
+.project-advanced-grid {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.7fr) minmax(0, 1.3fr);
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.project-advanced-grid .github-account-card,
+.project-advanced-grid .project-switches {
+  grid-column: 1 / -1;
 }
 
 .github-account-card {
@@ -703,7 +755,7 @@ button:focus-visible {
 }
 
 .project-path {
-  grid-column: 2 / 4;
+  grid-column: auto;
 }
 
 .project-switches {
@@ -726,35 +778,6 @@ button:focus-visible {
 
 .project-switches input {
   accent-color: var(--color-primary);
-}
-
-.project-list {
-  grid-column: 1 / -1;
-  display: grid;
-  gap: 8px;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-}
-
-.project-list button {
-  display: grid;
-  gap: 3px;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: #ffffff;
-  color: var(--color-primary);
-  padding: 10px;
-  text-align: left;
-}
-
-.project-list button.is-active {
-  border-color: var(--color-primary);
-  background: #f4f6f8;
-}
-
-.project-list span {
-  font-size: 13px;
-  font-weight: 850;
-  overflow-wrap: anywhere;
 }
 
 .form-error {
@@ -1560,15 +1583,25 @@ button:focus-visible {
 
   .workspace-grid,
   .options-grid,
-  .project-grid {
+  .project-picker-line,
+  .project-connect-grid,
+  .project-advanced-grid {
     grid-template-columns: 1fr;
   }
 
   .route-toggles,
   .github-account-card,
-  .project-path,
-  .project-list {
+  .project-path {
     grid-column: 1;
+  }
+
+  .project-status-strip {
+    justify-content: flex-start;
+  }
+
+  .project-connect-grid {
+    position: static;
+    width: 100%;
   }
 }
 
@@ -1594,6 +1627,7 @@ button:focus-visible {
   }
 
   .command-panel,
+  .project-bar,
   .flow-panel,
   .insight-panel {
     padding: 14px;
