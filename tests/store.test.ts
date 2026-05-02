@@ -392,6 +392,8 @@ describe("controller store workflow claims", () => {
 
   it("retrieves work item artifacts by work item and artifact id", async () => {
     const store = new MemoryStore();
+    const scope = await seedScanScope(store, "repo-a");
+    const otherScope = await seedScanScope(store, "repo-b");
     const workItem = await store.createWorkItem({
       title: "Artifact lookup",
       requestType: "feature",
@@ -402,15 +404,15 @@ describe("controller store workflow claims", () => {
       frontendNeeded: true,
       backendNeeded: false,
       rndNeeded: false,
-      projectId: "project-a",
-      repo: "owner/repo-a"
+      projectId: scope.projectId,
+      repo: scope.repo
     });
     const artifact = StageArtifactSchema.parse({
       artifactId: "artifact-lookup-1",
       artifactKind: "BackendImplSummary",
       workItemId: workItem.id,
-      projectId: "project-a",
-      repo: "owner/repo-a",
+      projectId: scope.projectId,
+      repo: scope.repo,
       stage: "BACKEND_BUILD",
       ownerAgent: "backend-systems-engineering",
       status: "passed",
@@ -420,7 +422,7 @@ describe("controller store workflow claims", () => {
       bodyMd: "## Backend implementation summary\n\nLookup endpoints implemented.",
       bodyJson: {
         workItemId: workItem.id,
-        projectId: "project-a",
+        projectId: scope.projectId,
         apiChanges: ["GET /api/work-items/:id", "GET /api/artifacts/:id"]
       },
       createdAt: new Date().toISOString()
@@ -428,10 +430,11 @@ describe("controller store workflow claims", () => {
 
     await store.addArtifact(artifact);
 
-    await expect(store.getArtifact("artifact-lookup-1")).resolves.toMatchObject({
+    await expect(store.getArtifact(scope, "artifact-lookup-1")).resolves.toMatchObject({
       artifactId: "artifact-lookup-1",
       workItemId: workItem.id
     });
+    await expect(store.getArtifact(otherScope, "artifact-lookup-1")).resolves.toBeNull();
     await expect(store.getWorkItemWithArtifacts(workItem.id)).resolves.toMatchObject({
       workItem: { id: workItem.id },
       artifacts: [{ artifactId: "artifact-lookup-1" }]

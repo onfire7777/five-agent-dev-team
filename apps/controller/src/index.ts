@@ -267,7 +267,8 @@ app.get("/api/work-items/:id", async (req, res, next) => {
 
 app.get("/api/artifacts/:id", async (req, res, next) => {
   try {
-    const artifact = await store.getArtifact(req.params.id);
+    const scope = await requireStrictProjectScope(req.query);
+    const artifact = await store.getArtifact(scope, req.params.id);
     if (!artifact) throw new HttpError(`Artifact ${req.params.id} was not found.`, 404);
     res.json(artifact);
   } catch (error) {
