@@ -98,6 +98,8 @@ jobs:
             const issueField = (issue, name) =>
               (issue.body || "").match(new RegExp(`^${name}:\\s*(.+)$`, "im"))?.[1]?.toLowerCase() || "";
             const inferIssueLane = (issue) => {
+              const explicitLane = issueField(issue, "Lane assignment");
+              if (laneOrder.includes(explicitLane)) return explicitLane;
               const labeledLane = issue.labels
                 .map((label) => label.name)
                 .find((label) => label.startsWith("lane:"))
@@ -112,8 +114,7 @@ jobs:
                 expectedFiles.includes("docker-compose") ||
                 expectedFiles.includes("package.json") ||
                 expectedFiles.includes("package-lock.json") ||
-                expectedFiles.includes("release/") ||
-                /\b(ci|workflow|github actions|gitleaks|secret scan|docker|compose|audit|permission|auth|release)\b/.test(basis)
+                expectedFiles.includes("release/")
               ) {
                 return "security";
               }
@@ -140,6 +141,9 @@ jobs:
                 /\b(docs|documentation|runbook|release notes)\b/.test(basis)
               ) {
                 return "docs";
+              }
+              if (/\b(ci|github actions|gitleaks|secret scan|docker|compose|audit|permission)\b/.test(basis)) {
+                return "security";
               }
               return laneOrder.includes(labeledLane) ? labeledLane : "";
             };
@@ -458,6 +462,10 @@ jobs:
           echo "OPENAI_API_KEY is required for Codex Cloud Build Pipeline." >&2
           exit 1
 
+      - name: Install Playwright system dependencies
+        if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'issue' && env.OPENAI_API_KEY != '' && (steps.gate.outputs.stage == 'frontend' || steps.gate.outputs.stage == 'quality')
+        run: npx playwright install --with-deps chromium
+
       - name: Run Codex cloud build stage
         id: run_codex
         if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'issue' && env.OPENAI_API_KEY != ''
@@ -486,6 +494,8 @@ jobs:
             Rules:
             - Implement only the queued issue scope.
             - Stay inside owned files: ${{ steps.gate.outputs.owned_files }}.
+            - This GitHub Actions run already claimed the issue with GitHub labels. Do not require local Windows state files under C:\Users\burni\.codex, and do not block only because those local control files are absent in the cloud runner.
+            - Treat the checked-out GitHub Actions workspace as the authoritative branch context. Do not run git fetch if the cloud checkout refuses writes to .git/FETCH_HEAD.
             - Keep the diff bounded and avoid unrelated cleanup.
             - Do not print secrets, weaken security gates, change branch protection, or push main.
             - Do not invent unqueued feature scope.
@@ -519,8 +529,15 @@ jobs:
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
         with:
           script: |
+            const fs = require("fs");
+            const path = require("path");
             const issue_number = Number("${{ steps.gate.outputs.target_number }}");
             const { owner, repo } = context.repo;
+            const outputPath = path.join(process.env.RUNNER_TEMP, "codex-cloud-artifacts", "codex-output.md");
+            const output = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, "utf8").trim() : "";
+            const outputBlock = output
+              ? `\n\nCodex output:\n\n\`\`\`text\n${output.slice(0, 2500)}\n\`\`\``
+              : "";
             await github.rest.issues.addLabels({
               owner,
               repo,
@@ -536,7 +553,7 @@ jobs:
               owner,
               repo,
               issue_number,
-              body: `Codex Cloud ${{ steps.gate.outputs.stage_display }} ran but produced no file changes. The issue is blocked for lane triage.\n\nRun: ${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/actions/runs/${context.runId}`
+              body: `Codex Cloud ${{ steps.gate.outputs.stage_display }} ran but produced no file changes. The issue is blocked for lane triage.\n\nRun: ${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/actions/runs/${context.runId}${outputBlock}`
             });
 
       - name: Format generated changes
@@ -557,14 +574,12 @@ jobs:
           docker compose config --no-interpolate --quiet
           git diff --check
           if [ "${{ steps.gate.outputs.stage }}" = "frontend" ]; then
-            npx playwright install --with-deps chromium
             npm run test:e2e -- tests/e2e/dashboard-smoke.spec.ts
           fi
           if [ "${{ steps.gate.outputs.stage }}" = "security" ]; then
             npm run audit:security
           fi
           if [ "${{ steps.gate.outputs.stage }}" = "quality" ]; then
-            npx playwright install --with-deps chromium
             npm run test:e2e
           fi
 
@@ -711,8 +726,15 @@ jobs:
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
         with:
           script: |
+            const fs = require("fs");
+            const path = require("path");
             const issue_number = Number("${{ steps.gate.outputs.target_number }}");
             const { owner, repo } = context.repo;
+            const outputPath = path.join(process.env.RUNNER_TEMP, "codex-cloud-artifacts", "codex-output.md");
+            const output = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, "utf8").trim() : "";
+            const outputBlock = output
+              ? `\n\nCodex output:\n\n\`\`\`text\n${output.slice(0, 2500)}\n\`\`\``
+              : "";
             await github.rest.issues.addLabels({
               owner,
               repo,
@@ -728,7 +750,7 @@ jobs:
               owner,
               repo,
               issue_number,
-              body: `Codex Cloud ${{ steps.gate.outputs.stage_display }} failed verification or PR publication and routed this item as blocked.\n\nRun: ${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/actions/runs/${context.runId}`
+              body: `Codex Cloud ${{ steps.gate.outputs.stage_display }} failed verification or PR publication and routed this item as blocked.\n\nRun: ${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/actions/runs/${context.runId}${outputBlock}`
             });
 
       - name: Upload Codex build output

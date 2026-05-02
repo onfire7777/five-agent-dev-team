@@ -67,6 +67,27 @@ async function expectOpportunityScanRunsNewestFirst(store: ControllerStore, repo
   await expect(store.listOpportunityScanRuns(scope)).resolves.toEqual([running, newer, updatedOlder]);
 }
 
+async function expectLatestEventBackfill(store: ControllerStore, workItemPrefix = "WI-EVENT") {
+  const events = [];
+
+  for (let index = 1; index <= 60; index += 1) {
+    events.push(
+      await store.addEvent({
+        workItemId: `${workItemPrefix}-${index}`,
+        stage: "VERIFY",
+        ownerAgent: "quality-security-privacy-release",
+        level: "info",
+        type: "stage_completed",
+        message: `Event ${index}`
+      })
+    );
+  }
+
+  await expect(store.listEvents(0, 50)).resolves.toEqual(events.slice(10));
+  await expect(store.listEvents(events[54].sequence, 10)).resolves.toEqual(events.slice(55));
+  await expect(store.listEvents(0, 0)).resolves.toEqual([]);
+}
+
 describe("controller store workflow claims", () => {
   it("prevents duplicate workflow claims for the same item", async () => {
     const store = new MemoryStore();
@@ -100,6 +121,11 @@ describe("controller store workflow claims", () => {
 
     expect(second.sequence).toBe(first.sequence + 1);
     await expect(store.listEvents(first.sequence, 10)).resolves.toEqual([second]);
+  });
+
+  it("returns the latest event backfill in ascending sequence order", async () => {
+    const store = new MemoryStore();
+    await expectLatestEventBackfill(store);
   });
 
   it("keeps project connections isolated and allows one team per repo", async () => {
@@ -232,6 +258,21 @@ describe("controller store workflow claims", () => {
       try {
         await store.init();
         await expectOpportunityScanRunsNewestFirst(store, `repo-scan-runs-${process.pid}-${Date.now()}`);
+      } finally {
+        await store.close();
+      }
+    }
+  );
+
+  it.skipIf(!process.env.POSTGRES_TEST_DATABASE_URL)(
+    "returns the latest event backfill in ascending sequence order in Postgres",
+    async () => {
+      const connectionString = process.env.POSTGRES_TEST_DATABASE_URL;
+      if (!connectionString) throw new Error("POSTGRES_TEST_DATABASE_URL is required for this test.");
+      const store = new PostgresStore(connectionString);
+      try {
+        await store.init();
+        await expectLatestEventBackfill(store, `WI-EVENT-PG-${process.pid}-${Date.now()}`);
       } finally {
         await store.close();
       }
