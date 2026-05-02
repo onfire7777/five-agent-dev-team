@@ -379,30 +379,45 @@ INTAKE
   → CONTRACT            (rndNeeded=false AND risk=low → skip R&D)
   → BLOCKED             (intake validation fails)
 RND
-  → CONTRACT            (R&D packet approved by gate)
+  → PROPOSAL            (R&D produces a proposal packet)
+  → CONTRACT            (R&D packet is already approved by gate)
   → BLOCKED             (R&D gate fails)
+PROPOSAL
+  → AWAITING_ACCEPTANCE (proposal needs operator acceptance)
+  → CONTRACT            (proposal auto-accepted or accepted inline)
+  → RND                 (proposal needs more research)
+  → CLOSED              (proposal rejected as not worth building)
+  → BLOCKED             (proposal gate fails)
+AWAITING_ACCEPTANCE
+  → CONTRACT            (operator accepts proposal)
+  → RND                 (operator requests more research)
+  → CLOSED              (operator rejects proposal)
+  → BLOCKED             (acceptance gate fails)
 CONTRACT
   → FRONTEND_BUILD      (frontendNeeded only)
   → BACKEND_BUILD       (backendNeeded only)
   → INTEGRATION         (both flags → fan-out, then converge here)
 FRONTEND_BUILD | BACKEND_BUILD
   → INTEGRATION         (single-side build complete, no fan-out needed)
+  → VERIFY              (single-side build can verify directly when no integration branch is needed)
   → BLOCKED             (build fails non-recoverably)
 INTEGRATION
   → VERIFY              (merge to integration branch successful)
+  → FRONTEND_BUILD | BACKEND_BUILD  (integration finds owned fixable issues)
   → BLOCKED             (merge conflict unresolvable by agents)
 VERIFY
   → RELEASE             (all gates pass)
-  → CHANGES_REQUESTED   (verification finds fixable issues)
+  → FRONTEND_BUILD | BACKEND_BUILD  (verification finds fixable implementation issues)
+  → RND                 (verification finds a contract or research gap)
   → BLOCKED             (verification finds unfixable issues)
-CHANGES_REQUESTED
-  → FRONTEND_BUILD | BACKEND_BUILD  (route to owning agent)
 RELEASE
   → CLOSED              (release succeeds + sync verified)
+  → VERIFY              (release gate requires re-verification)
   → BLOCKED             (release gate or sync fails)
 BLOCKED
   → INTAKE              (operator unblocks via dashboard with reason)
-  → CLOSED              (operator abandons)
+  → RND | PROPOSAL | AWAITING_ACCEPTANCE | CONTRACT | FRONTEND_BUILD | BACKEND_BUILD | VERIFY | RELEASE
+                         (operator routes to the corrected recovery stage)
 ```
 
 Every transition MUST persist `state` and `state_changed_at`, and MUST emit a typed event row. State MUST NOT be set directly via SQL outside the state-machine module.
@@ -578,7 +593,7 @@ interface CapabilityRef {
 
 | Capability                    | Transport         | When loaded                                                          |
 |-------------------------------|-------------------|----------------------------------------------------------------------|
-| `github-mcp` (official)       | stdio             | `RND`, `BUILD`, `VERIFY`, `RELEASE`; for backend and quality agents. |
+| `github-mcp` (official)       | stdio             | `BACKEND_BUILD`, `VERIFY`, `RELEASE`; for backend and quality agents. |
 | `gh-cli` (shim invoking `gh`) | stdio             | `INTEGRATION` and `RELEASE`.                                         |
 | `playwright-mcp`              | stdio             | `VERIFY`; for frontend and quality agents, when web tests are touched. |
 | `chrome-devtools-mcp`         | stdio             | `VERIFY`; for frontend, when performance-related keywords match.     |
@@ -609,7 +624,7 @@ The following is the authoritative list of MCP servers, command-line tools, and 
 
 | ID                       | Status     | Transport         | Source                                     | Loaded for                                             |
 |--------------------------|------------|-------------------|--------------------------------------------|--------------------------------------------------------|
-| `github-mcp`             | [required] | stdio             | `github/github-mcp-server` v1.0.3+         | Backend + Quality agents during RND, BUILD, VERIFY, RELEASE. |
+| `github-mcp`             | [required] | stdio             | `github/github-mcp-server` v1.0.3+         | Backend during BACKEND_BUILD; Quality during VERIFY; both during RELEASE. |
 | `filesystem-mcp`         | [required] | stdio             | `@modelcontextprotocol/server-filesystem`  | Frontend + Backend during BUILD; root scoped to `localPath`. |
 | `git-mcp`                | [required] | stdio             | `@modelcontextprotocol/server-git`         | All builders during BUILD and INTEGRATION.             |
 | `memory-mcp`             | [required] | stdio (in-process)| Internal — wraps the §10 memory store      | All agents at every stage.                             |
@@ -682,7 +697,7 @@ Agents MUST NOT spawn MCP processes directly. The runner manages every MCP sessi
 
 ## 9. GitHub Integration Surface
 
-The system uses three GitHub integration layers, applied in priority order. The agent runner makes all three available to backend and quality agents and selects the appropriate layer based on the operation class.
+The system uses four GitHub integration layers, applied in priority order. The agent runner makes all four available to backend and quality agents and selects the appropriate layer based on the operation class.
 
 ### 9.1 Tool selection rule
 
@@ -811,9 +826,9 @@ CREATE TABLE memories (
   body_json         jsonb,
   author_agent      text NOT NULL,
   superseded_by     uuid REFERENCES memories ON DELETE SET NULL,
-  created_at        timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (project_id, tier, key, superseded_by)
+  created_at        timestamptz NOT NULL DEFAULT now()
 );
+CREATE UNIQUE INDEX memories_live_key_unique_idx ON memories (project_id, tier, key) WHERE superseded_by IS NULL;
 CREATE INDEX memories_project_tier_idx ON memories (project_id, tier);
 
 CREATE TABLE events (
