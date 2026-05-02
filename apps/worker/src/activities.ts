@@ -31,6 +31,7 @@ import {
   runRoleAgent,
   type TeamBusMessage
 } from "../../../packages/agents/src";
+import { listWorkflowRuns } from "../../../packages/github/src";
 import { createStore, type ControllerStore, type StrictProjectScope } from "../../controller/src/store";
 
 const exec = util.promisify(childProcess.exec);
@@ -904,16 +905,16 @@ async function readGitHubActionsEvidence(config: TargetRepoConfig): Promise<Evid
   }
 
   try {
-    const result = await exec(
-      `gh run list --repo ${repo} --branch ${branch} --limit 1 --json status,conclusion,url,workflowName,headSha`,
-      {
+    const runs = await listWorkflowRuns({
+      repo,
+      branch,
+      limit: 1,
+      options: {
         cwd: repoPath,
-        env: githubAuthEnv(),
         timeout: 30_000,
         maxBuffer: 1024 * 1024
       }
-    );
-    const runs = JSON.parse(result.stdout || "[]") as Array<Record<string, unknown>>;
+    });
     const latest = runs[0];
     if (!latest) {
       const summary = `No GitHub Actions runs were found for ${repo}@${branch}.`;
