@@ -68,6 +68,14 @@ const ProjectScopeRequest = z.object({
   repo: z.string().min(1)
 });
 
+const EventsQueryRequest = z.object({
+  projectId: z.preprocess((value) => {
+    const normalized = Array.isArray(value) ? value[0] : value;
+    if (normalized === undefined || normalized === null || normalized === "") return undefined;
+    return normalized;
+  }, z.string().min(1).optional())
+});
+
 const TeamBusMessageRequest = ProjectScopeRequest.extend({
   id: z.string().min(1).optional(),
   workItemId: z.string().min(1).optional(),
@@ -282,7 +290,8 @@ app.get("/api/events", async (req, res, next) => {
   try {
     const after = strictIntegerQuery(req.query.after, "after", 0, 0, Number.MAX_SAFE_INTEGER);
     const limit = strictIntegerQuery(req.query.limit, "limit", 50, 1, 500);
-    res.json(await store.listEvents(after, limit));
+    const { projectId } = EventsQueryRequest.parse(req.query);
+    res.json(await store.listEvents(after, limit, projectId));
   } catch (error) {
     next(error);
   }
@@ -895,7 +904,9 @@ app.get("/api/events/stream", async (req, res) => {
   res.flushHeaders?.();
 
   let lastSequence: number;
+  let projectId: string | undefined;
   try {
+    ({ projectId } = EventsQueryRequest.parse(req.query));
     lastSequence = strictIntegerQuery(req.query.after, "after", 0, 0, Number.MAX_SAFE_INTEGER);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Invalid event stream cursor.";
@@ -906,7 +917,7 @@ app.get("/api/events/stream", async (req, res) => {
   }
 
   const sendEvents = async (): Promise<boolean> => {
-    const events = await store.listEvents(lastSequence, 50);
+    const events = await store.listEvents(lastSequence, 50, projectId);
     let wrote = false;
     for (const event of events) {
       lastSequence = event.sequence;

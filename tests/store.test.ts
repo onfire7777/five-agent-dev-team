@@ -128,6 +128,74 @@ describe("controller store workflow claims", () => {
     await expectLatestEventBackfill(store);
   });
 
+  it("filters events by projectId and excludes unscoped events", async () => {
+    const store = new MemoryStore();
+    await store.upsertProjectConnection({
+      repoOwner: "owner",
+      repoName: "repo-a",
+      localPath: "C:/repos/repo-a",
+      active: true
+    });
+    await store.upsertProjectConnection({
+      repoOwner: "owner",
+      repoName: "repo-b",
+      localPath: "C:/repos/repo-b",
+      active: true
+    });
+
+    const workItemA = await store.createWorkItem({
+      title: "Project A event",
+      requestType: "feature",
+      priority: "medium",
+      dependencies: [],
+      acceptanceCriteria: [],
+      riskLevel: "medium",
+      frontendNeeded: true,
+      backendNeeded: true,
+      rndNeeded: true,
+      projectId: "owner-repo-a",
+      repo: "owner/repo-a"
+    });
+    const workItemB = await store.createWorkItem({
+      title: "Project B event",
+      requestType: "feature",
+      priority: "medium",
+      dependencies: [],
+      acceptanceCriteria: [],
+      riskLevel: "medium",
+      frontendNeeded: true,
+      backendNeeded: true,
+      rndNeeded: true,
+      projectId: "owner-repo-b",
+      repo: "owner/repo-b"
+    });
+
+    const eventA = await store.addEvent({
+      workItemId: workItemA.id,
+      stage: "VERIFY",
+      ownerAgent: "quality-security-privacy-release",
+      level: "info",
+      type: "stage_completed",
+      message: "Project A event"
+    });
+    const eventB = await store.addEvent({
+      workItemId: workItemB.id,
+      stage: "VERIFY",
+      ownerAgent: "quality-security-privacy-release",
+      level: "info",
+      type: "stage_completed",
+      message: "Project B event"
+    });
+    await store.addEvent({
+      level: "info",
+      type: "system",
+      message: "Unscoped event"
+    });
+
+    await expect(store.listEvents(0, 10, workItemA.projectId)).resolves.toEqual([eventA]);
+    await expect(store.listEvents(0, 10, workItemB.projectId)).resolves.toEqual([eventB]);
+  });
+
   it("keeps project connections isolated and allows one team per repo", async () => {
     const store = new MemoryStore();
 
@@ -143,6 +211,7 @@ describe("controller store workflow claims", () => {
       defaultBranchVerified: true,
       lastValidatedAt: new Date().toISOString()
     });
+    await new Promise((resolve) => setTimeout(resolve, 5));
     const second = await store.upsertProjectConnection({
       repoOwner: "owner",
       repoName: "repo-b",
