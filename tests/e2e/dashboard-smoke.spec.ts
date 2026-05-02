@@ -1,4 +1,64 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Request } from "@playwright/test";
+
+function createStatus(emergencyStop = false) {
+  return {
+    system: {
+      name: "AI Dev Team Controller",
+      operational: true,
+      emergencyStop,
+      queueDepth: 1,
+      agentsOnline: 5,
+      agentsTotal: 5,
+      githubSync: "synced",
+      systemLoad: 0.2,
+      emergencyReason: emergencyStop ? "[global] Operator dashboard control" : "",
+      scheduler: {
+        maxConcurrentAgentRuns: 5
+      }
+    },
+    pipeline: {
+      INTAKE: 0,
+      RND: 0,
+      PROPOSAL: 0,
+      ARCHITECTURE_REVIEW: 0,
+      BACKEND_BUILD: 0,
+      FRONTEND_BUILD: 0,
+      INTEGRATION: 0,
+      VERIFY: 1,
+      RELEASE: 0,
+      CLOSED: 0,
+      BLOCKED: 0
+    },
+    projectTeams: [],
+    workItems: [],
+    artifacts: [],
+    releaseReadiness: {
+      status: "ready",
+      target: "Local verification",
+      checks: []
+    },
+    logs: [],
+    sharedContext: {
+      activeThreads: [],
+      research: []
+    }
+  };
+}
+
+function readEmergencyPayload(request: Request) {
+  let payload: unknown;
+  try {
+    payload = request.postDataJSON();
+  } catch {
+    return null;
+  }
+
+  if (!payload || typeof payload !== "object") return null;
+  const { scope, reason } = payload as Record<string, unknown>;
+  if (typeof scope !== "string" || !scope.trim()) return null;
+  if (typeof reason !== "string" || !reason.trim()) return null;
+  return { scope, reason };
+}
 
 test.describe("dashboard smoke", () => {
   test("loads the operator dashboard without viewport overflow", async ({ page }) => {
@@ -73,5 +133,99 @@ test.describe("dashboard smoke", () => {
 
     expect(Math.max(viewport.scrollWidth, viewport.bodyScrollWidth)).toBeLessThanOrEqual(viewport.clientWidth + 2);
     expect(consoleErrors).toEqual([]);
+  });
+
+  test("posts emergency stop and resume controls", async ({ page }) => {
+    let emergencyStop = false;
+    const postedPaths: string[] = [];
+
+    await page.route("http://127.0.0.1:4310/api/**", async (route) => {
+      const url = new URL(route.request().url());
+      const request = route.request();
+      const jsonHeaders = {
+        "access-control-allow-origin": "*",
+        "content-type": "application/json"
+      };
+
+      if (url.pathname === "/api/status") {
+        await route.fulfill({
+          status: 200,
+          headers: jsonHeaders,
+          body: JSON.stringify(createStatus(emergencyStop))
+        });
+        return;
+      }
+      if (url.pathname === "/api/memories" || url.pathname === "/api/projects") {
+        await route.fulfill({ status: 200, headers: jsonHeaders, body: "[]" });
+        return;
+      }
+      if (url.pathname === "/api/github/account") {
+        await route.fulfill({
+          status: 200,
+          headers: jsonHeaders,
+          body: JSON.stringify({
+            connected: false,
+            source: "none",
+            scopes: [],
+            utilities: [],
+            clientIdConfigured: false,
+            message: "Not connected"
+          })
+        });
+        return;
+      }
+      if (request.method() === "POST" && url.pathname === "/api/emergency-stop") {
+        const payload = readEmergencyPayload(request);
+        if (!payload) {
+          await route.fulfill({
+            status: 400,
+            headers: jsonHeaders,
+            body: JSON.stringify({ error: "missing emergency scope or reason" })
+          });
+          return;
+        }
+        postedPaths.push(url.pathname);
+        emergencyStop = true;
+        await route.fulfill({
+          status: 200,
+          headers: jsonHeaders,
+          body: JSON.stringify({ emergencyStop: true, ...payload })
+        });
+        return;
+      }
+      if (request.method() === "POST" && url.pathname === "/api/emergency-resume") {
+        const payload = readEmergencyPayload(request);
+        if (!payload) {
+          await route.fulfill({
+            status: 400,
+            headers: jsonHeaders,
+            body: JSON.stringify({ error: "missing emergency scope or reason" })
+          });
+          return;
+        }
+        postedPaths.push(url.pathname);
+        emergencyStop = false;
+        await route.fulfill({
+          status: 200,
+          headers: jsonHeaders,
+          body: JSON.stringify({ emergencyStop: false, ...payload })
+        });
+        return;
+      }
+
+      await route.fulfill({ status: 404, headers: jsonHeaders, body: JSON.stringify({ error: "not found" }) });
+    });
+
+    await page.goto("/");
+
+    const emergencyToggle = page.getByTestId("emergency-toggle");
+    await expect(emergencyToggle).toHaveText(/Stop/);
+    await emergencyToggle.click();
+    await expect(emergencyToggle).toHaveText(/Resume/);
+    await expect(page.getByRole("status")).toContainText("Operator dashboard control");
+
+    await emergencyToggle.click();
+    await expect(emergencyToggle).toHaveText(/Stop/);
+    expect(postedPaths).toEqual(["/api/emergency-stop", "/api/emergency-resume"]);
   });
 });

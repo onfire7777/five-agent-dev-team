@@ -365,10 +365,11 @@ export class MemoryStore implements ControllerStore {
   }
 
   async listEvents(afterSequence = 0, limit = 50): Promise<AgentEvent[]> {
-    return this.events
-      .filter((event) => event.sequence > afterSequence)
-      .sort((a, b) => a.sequence - b.sequence)
-      .slice(0, limit);
+    const normalizedLimit = Math.max(0, limit);
+    const sorted = [...this.events].sort((a, b) => a.sequence - b.sequence);
+    if (normalizedLimit === 0) return [];
+    if (afterSequence <= 0) return sorted.slice(-normalizedLimit);
+    return sorted.filter((event) => event.sequence > afterSequence).slice(0, normalizedLimit);
   }
 
   async listMemories(workItemId?: string): Promise<MemoryRecord[]> {
@@ -980,15 +981,30 @@ export class PostgresStore extends MemoryStore {
   }
 
   override async listEvents(afterSequence = 0, limit = 50): Promise<AgentEvent[]> {
+    const normalizedLimit = Math.max(0, limit);
+    if (normalizedLimit === 0) return [];
+    if (afterSequence <= 0) {
+      const result = await this.pool.query(
+        `select payload from (
+           select payload, sequence from agent_events
+           order by sequence desc
+           limit $1
+         ) recent_events
+         order by sequence asc`,
+        [normalizedLimit]
+      );
+      const stored = result.rows.map((row) => AgentEventSchema.parse(row.payload));
+      return stored.length ? stored : super.listEvents(afterSequence, normalizedLimit);
+    }
     const result = await this.pool.query(
       `select payload from agent_events
        where sequence > $1
        order by sequence asc
        limit $2`,
-      [afterSequence, limit]
+      [afterSequence, normalizedLimit]
     );
     const stored = result.rows.map((row) => AgentEventSchema.parse(row.payload));
-    return stored.length ? stored : super.listEvents(afterSequence, limit);
+    return stored.length ? stored : super.listEvents(afterSequence, normalizedLimit);
   }
 
   override async claimWorkItemForWorkflow(id: string): Promise<boolean> {

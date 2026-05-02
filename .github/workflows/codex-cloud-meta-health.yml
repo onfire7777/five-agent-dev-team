@@ -196,6 +196,84 @@ jobs:
                 ["agent:queued", "agent:claimed", "agent:running", "agent:merge-gate"].includes(label.name)
               )
             );
+            const laneOrder = ["backend", "frontend", "quality", "security", "docs"];
+            const issueField = (issue, name) =>
+              (issue.body || "").match(new RegExp(`^${name}:\\s*(.+)$`, "im"))?.[1]?.toLowerCase() || "";
+            const labelNamesFor = (issue) => issue.labels.map((label) => label.name);
+            const inferIssueLane = (issue) => {
+              const explicitLane = issueField(issue, "Lane assignment");
+              if (laneOrder.includes(explicitLane)) return explicitLane;
+              const expectedFiles = issueField(issue, "Expected files");
+              if (
+                expectedFiles.includes(".github/") ||
+                expectedFiles.includes("dockerfile") ||
+                expectedFiles.includes("docker-compose") ||
+                expectedFiles.includes("package.json") ||
+                expectedFiles.includes("package-lock.json") ||
+                expectedFiles.includes("release/")
+              ) {
+                return "security";
+              }
+              if (
+                expectedFiles.includes("apps/controller/") ||
+                expectedFiles.includes("apps/worker/") ||
+                expectedFiles.includes("packages/shared/") ||
+                expectedFiles.includes("packages/github/")
+              ) {
+                return "backend";
+              }
+              if (expectedFiles.includes("apps/dashboard/")) return "frontend";
+              if (expectedFiles.includes("tests/") || expectedFiles.includes("playwright.config")) return "quality";
+              if (expectedFiles.includes("readme.md") || expectedFiles.includes("docs/")) return "docs";
+              const labeledLane = labelNamesFor(issue)
+                .find((label) => label.startsWith("lane:"))
+                ?.slice("lane:".length);
+              return laneOrder.includes(labeledLane) ? labeledLane : "";
+            };
+            const retryableBlockedIssues = openIssues
+              .filter((issue) => /^QUEUE_ITEM_READY:\s*yes\s*$/im.test(issue.body || ""))
+              .filter((issue) => {
+                const labels = labelNamesFor(issue);
+                return (
+                  labels.includes("agent:blocked") &&
+                  labels.includes("blocker:lane-stop") &&
+                  labels.includes("execution:codex-cloud")
+                );
+              })
+              .map((issue) => ({ issue, lane: inferIssueLane(issue) }))
+              .filter((item) => laneOrder.includes(item.lane))
+              .sort((a, b) => new Date(a.issue.created_at) - new Date(b.issue.created_at));
+
+            if (!openPrs.length && !queueIssues.length && retryableBlockedIssues.length) {
+              const { issue, lane } = retryableBlockedIssues[0];
+              const labels = labelNamesFor(issue);
+              await github.rest.issues.addLabels({
+                owner,
+                repo,
+                issue_number: issue.number,
+                labels: ["agent:queued", `lane:${lane}`]
+              });
+              for (const label of labels.filter(
+                (name) =>
+                  ["agent:blocked", "blocker:lane-stop", "agent:claimed", "agent:running"].includes(name) ||
+                  (name.startsWith("lane:") && name !== `lane:${lane}`)
+              )) {
+                try {
+                  await github.rest.issues.removeLabel({ owner, repo, issue_number: issue.number, name: label });
+                } catch {}
+              }
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issue.number,
+                body: `Meta Health requeued this recoverable lane-stop item for the ${lane} lane because there are no open PRs and no active queued/running agent issues.\n\nRun: ${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/actions/runs/${context.runId}`
+              });
+              warnings.push({
+                class: "advisory",
+                title: `requeued blocked queue issue #${issue.number}`,
+                detail: `Issue #${issue.number} was returned to agent:queued for lane:${lane}.`
+              });
+            }
 
             let dependabotOpen = null;
             if (process.env.HAS_CODEX_HEALTH_TOKEN === "true") {
@@ -250,6 +328,7 @@ jobs:
               }`,
               `Open PRs: ${openPrs.length}`,
               `Open queued/running agent issues: ${queueIssues.length}`,
+              `Retryable blocked lane-stop issues: ${retryableBlockedIssues.length}`,
               `Open Dependabot alerts: ${dependabotOpen === null ? "unavailable" : dependabotOpen}`,
               "",
               blockers.length
