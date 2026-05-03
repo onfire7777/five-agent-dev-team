@@ -45,7 +45,7 @@ jobs:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           model: ${{ env.CODEX_ACTION_MODEL }}
           effort: ${{ env.CODEX_ACTION_EFFORT }}
-          codex-args: '--config model_verbosity="medium"'
+          codex-args: '--enable fast_mode --config model_verbosity="medium"'
           sandbox: read-only
           safety-strategy: drop-sudo
           allow-users: onfire7777
