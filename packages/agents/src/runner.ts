@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import type { AgentDefinition } from "./definitions";
@@ -437,11 +438,7 @@ async function readRepoContext(
   const relativePath = normalizeRequestedContextPath(context, requestedPath);
   const resolved = path.resolve(root, relativePath);
   assertInside(root, resolved, "repo.context.read path escapes the configured context directory.");
-  const stat = await fs.lstat(resolved);
-  if (!stat.isFile() || stat.isSymbolicLink()) {
-    throw new Error("repo.context.read can read regular context files only.");
-  }
-  const buffer = await fs.readFile(resolved);
+  const buffer = await readRegularContextFile(resolved);
   const truncated = buffer.byteLength > MAX_CONTEXT_FILE_BYTES;
   const content = buffer.subarray(0, MAX_CONTEXT_FILE_BYTES).toString("utf8");
   return {
@@ -450,6 +447,19 @@ async function readRepoContext(
     content,
     truncated
   };
+}
+
+async function readRegularContextFile(resolved: string): Promise<Buffer> {
+  const handle = await fs.open(resolved, readOnlyNoFollowFlags());
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
+      throw new Error("repo.context.read can read regular context files only.");
+    }
+    return await handle.readFile();
+  } finally {
+    await handle.close();
+  }
 }
 
 async function writeStageArtifact(
@@ -622,6 +632,11 @@ function assertInside(root: string, candidate: string, message: string): void {
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
     throw new Error(message);
   }
+}
+
+function readOnlyNoFollowFlags(): number {
+  const noFollow = (fsConstants as Record<string, number | undefined>).O_NOFOLLOW ?? 0;
+  return fsConstants.O_RDONLY | noFollow;
 }
 
 function toPosixPath(value: string): string {
