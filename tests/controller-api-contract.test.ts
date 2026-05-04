@@ -10,6 +10,7 @@ type HeaderValue = number | string | readonly string[];
 let app: Express;
 
 beforeAll(async () => {
+  vi.stubEnv("NODE_ENV", "test");
   vi.stubEnv("DATABASE_URL", "");
   vi.stubEnv("AGENT_TEAM_CONFIG", "__missing_agent_team_config_for_controller_api_contract_tests__.yaml");
   vi.stubEnv("AGENT_TEAM_ALLOW_DEFAULT_CONFIG", "");

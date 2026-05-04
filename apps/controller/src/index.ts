@@ -1932,10 +1932,16 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
 });
 
 if (process.env.NODE_ENV !== "test") {
-  store.init().then(() => {
-    startSmartScheduler(store);
-    app.listen(port, host, () => {
-      console.log(`AI Dev Team controller listening on http://${host}:${port}`);
+  void store
+    .init()
+    .then(() => {
+      startSmartScheduler(store);
+      app.listen(port, host, () => {
+        console.log(`AI Dev Team controller listening on http://${host}:${port}`);
+      });
+    })
+    .catch((error: unknown) => {
+      console.error("Controller startup failed during initialization.", error);
+      process.exit(1);
     });
-  });
 }
