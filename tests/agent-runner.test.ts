@@ -641,6 +641,26 @@ Use the plugin-provided browser smoke procedure when the work item requires UI r
           targetRepoConfig: config
         })
       ).resolves.toMatchObject({ live: false });
+
+      const warningSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+      try {
+        await expect(
+          runRoleAgent(getAgentDefinition("backend-systems-engineering"), {
+            workItem: budgetWorkItem,
+            stage: "BACKEND_BUILD",
+            previousArtifacts: [],
+            targetRepoConfig: config,
+            emitEvent: async () => {
+              throw new Error("event sink unavailable");
+            }
+          })
+        ).resolves.toMatchObject({ live: false });
+        expect(warningSpy).toHaveBeenCalledWith("Failed to emit dropped-skill budget event; continuing agent run.", {
+          code: "AGENT_EVENT_EMIT_FAILED"
+        });
+      } finally {
+        warningSpy.mockRestore();
+      }
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
       restoreEnv("AGENT_LIVE_MODE", originalLiveMode);

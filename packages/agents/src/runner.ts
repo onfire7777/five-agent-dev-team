@@ -134,11 +134,17 @@ export async function runRoleAgent(definition: AgentDefinition, context: AgentRu
 async function emitDroppedSkillBudgetEvent(context: AgentRunContext, droppedSkillIds: string[]): Promise<void> {
   if (!droppedSkillIds.length || !context.emitEvent) return;
 
-  await context.emitEvent({
-    level: "warn",
-    type: "system",
-    message: `Skill injection budget dropped ${droppedSkillIds.length} skill(s) for work item ${context.workItem.id} during ${context.stage}: ${droppedSkillIds.join(", ")}.`
-  });
+  try {
+    await context.emitEvent({
+      level: "warn",
+      type: "system",
+      message: `Skill injection budget dropped ${droppedSkillIds.length} skill(s) for work item ${context.workItem.id} during ${context.stage}: ${droppedSkillIds.join(", ")}.`
+    });
+  } catch {
+    process.emitWarning("Failed to emit dropped-skill budget event; continuing agent run.", {
+      code: "AGENT_EVENT_EMIT_FAILED"
+    });
+  }
 }
 
 async function prepareAgentRun(
