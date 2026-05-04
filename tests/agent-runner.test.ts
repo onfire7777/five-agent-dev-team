@@ -10,17 +10,21 @@ const liveAgentMock = vi.hoisted(() => ({
   models: [] as string[],
   prompts: [] as string[],
   tools: [] as any[][],
-  hostedSearchCalls: 0
+  hostedSearchCalls: 0,
+  finalOutput: undefined as string | undefined,
+  artifactWriteInput: undefined as Record<string, unknown> | undefined
 }));
 
 vi.mock("@openai/agents", () => {
   class Agent {
     model: string;
+    tools: any[];
 
     constructor(options: { model: string; tools?: any[] }) {
       this.model = options.model;
+      this.tools = options.tools || [];
       liveAgentMock.models.push(options.model);
-      liveAgentMock.tools.push(options.tools || []);
+      liveAgentMock.tools.push(this.tools);
     }
   }
 
@@ -29,18 +33,27 @@ vi.mock("@openai/agents", () => {
     run: vi.fn(async (agent: Agent, prompt: string) => {
       liveAgentMock.prompts.push(prompt);
       if (agent.model === "gpt-primary") throw new Error("primary failed");
+      if (liveAgentMock.artifactWriteInput) {
+        const artifactTool = agent.tools.find(
+          (tool: any) => (tool.qualifiedName || `${tool.namespace}.${tool.name}`) === "artifact.write"
+        );
+        if (!artifactTool) throw new Error("artifact.write mock tool was not registered.");
+        await artifactTool.execute(liveAgentMock.artifactWriteInput);
+      }
       return {
-        finalOutput: JSON.stringify({
-          status: "passed",
-          title: "Fallback completed",
-          summary: "Fallback model completed the stage.",
-          decisions: ["Used fallback model."],
-          risks: [],
-          filesChanged: [],
-          testsRun: [],
-          releaseReadiness: "unknown",
-          nextStage: "CONTRACT"
-        })
+        finalOutput:
+          liveAgentMock.finalOutput ??
+          JSON.stringify({
+            status: "passed",
+            title: "Fallback completed",
+            summary: "Fallback model completed the stage.",
+            decisions: ["Used fallback model."],
+            risks: [],
+            filesChanged: [],
+            testsRun: [],
+            releaseReadiness: "unknown",
+            nextStage: "CONTRACT"
+          })
       };
     }),
     MCPServers: {
@@ -105,6 +118,55 @@ function restoreEnv(name: string, value: string | undefined): void {
     return;
   }
   process.env[name] = value;
+}
+
+function liveStageArtifactJson(overrides: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    status: "passed",
+    title: "Live backend artifact",
+    summary: "Live backend completed.",
+    decisions: ["Returned raw artifact JSON."],
+    risks: [],
+    filesChanged: ["packages/agents/src/runner.ts"],
+    testsRun: ["npm test -- tests/agent-runner.test.ts"],
+    releaseReadiness: "unknown",
+    nextStage: "INTEGRATION",
+    bodyMd: "## Live backend artifact",
+    bodyJson: { ok: true },
+    ...overrides
+  });
+}
+
+async function runLiveBackendAgent(
+  finalOutput: string,
+  options: { artifactWriteInput?: Record<string, unknown> } = {}
+) {
+  const originalLiveMode = process.env.AGENT_LIVE_MODE;
+  const originalOpenAiKey = process.env.OPENAI_API_KEY;
+  const originalAgentModel = process.env.AGENT_MODEL;
+  liveAgentMock.models.length = 0;
+  liveAgentMock.prompts.length = 0;
+  liveAgentMock.tools.length = 0;
+  liveAgentMock.hostedSearchCalls = 0;
+  liveAgentMock.finalOutput = finalOutput;
+  liveAgentMock.artifactWriteInput = options.artifactWriteInput;
+  process.env.AGENT_LIVE_MODE = "true";
+  process.env.OPENAI_API_KEY = "test-key";
+  process.env.AGENT_MODEL = "gpt-fallback";
+  try {
+    return await runRoleAgent(getAgentDefinition("backend-systems-engineering"), {
+      workItem: { ...workItem, state: "BACKEND_BUILD" },
+      stage: "BACKEND_BUILD",
+      previousArtifacts: [],
+      targetRepoConfig: liveTargetConfig()
+    });
+  } finally {
+    liveAgentMock.finalOutput = undefined;
+    liveAgentMock.artifactWriteInput = undefined;
+    restoreEnv("AGENT_LIVE_MODE", originalLiveMode);
+    restoreEnv("OPENAI_API_KEY", originalOpenAiKey);
+    restoreEnv("AGENT_MODEL", originalAgentModel);
+  }
 }
 
 describe("agent runner", () => {
@@ -204,6 +266,68 @@ describe("agent runner", () => {
       restoreEnv("OPENAI_API_KEY", originalOpenAiKey);
       restoreEnv("AGENT_MODEL", originalAgentModel);
     }
+  });
+
+  it("accepts raw live StageArtifact JSON and applies runner metadata", async () => {
+    const result = await runLiveBackendAgent(
+      liveStageArtifactJson({
+        workItemId: "wrong-work-item",
+        ownerAgent: "frontend-ux-engineering",
+        promptHash: "spoofed-prompt-hash",
+        skillIds: ["spoofed-skill"],
+        capabilityIds: ["spoofed-capability"]
+      })
+    );
+
+    expect(result.live).toBe(true);
+    expect(result.artifact.status).toBe("passed");
+    expect(result.artifact.workItemId).toBe(workItem.id);
+    expect(result.artifact.ownerAgent).toBe("backend-systems-engineering");
+    expect(result.artifact.promptHash).toBe(
+      crypto
+        .createHash("sha256")
+        .update(liveAgentMock.prompts.at(-1) || "")
+        .digest("hex")
+    );
+    expect(result.artifact.skillIds).toContain("secure-coding");
+    expect(result.artifact.skillIds).not.toContain("spoofed-skill");
+    expect(result.artifact.capabilityIds).toContain("builtin:artifact.write");
+    expect(result.artifact.capabilityIds).not.toContain("spoofed-capability");
+  });
+
+  it.each([
+    ["prose wrapped JSON", `Before\n${liveStageArtifactJson({ summary: "STRICT_MARKER wrapped" })}\nAfter`],
+    ["fenced JSON", `\`\`\`json\n${liveStageArtifactJson({ summary: "STRICT_MARKER fenced" })}\n\`\`\``]
+  ])("fails closed for non-raw live output: %s", async (_name, finalOutput) => {
+    const result = await runLiveBackendAgent(finalOutput);
+
+    expect(result.artifact.status).toBe("failed");
+    expect(result.artifact.nextStage).toBe("BLOCKED");
+    expect(result.artifact.bodyMd).not.toContain("STRICT_MARKER");
+    expect(JSON.stringify(result.artifact.bodyJson)).not.toContain("STRICT_MARKER");
+  });
+
+  it("keeps artifact.write capture authoritative over invalid live output", async () => {
+    const result = await runLiveBackendAgent("Prose output that should not be parsed.", {
+      artifactWriteInput: {
+        title: "Captured backend artifact",
+        summary: "artifact.write captured the authoritative artifact.",
+        status: "passed",
+        decisions: ["Use artifact.write."],
+        risks: [],
+        filesChanged: ["packages/agents/src/runner.ts"],
+        testsRun: ["npm test -- tests/agent-runner.test.ts"],
+        releaseReadiness: "unknown",
+        nextStage: "INTEGRATION",
+        bodyMd: "## Captured backend artifact",
+        bodyJson: { captured: true }
+      }
+    });
+
+    expect(result.artifact.status).toBe("passed");
+    expect(result.artifact.title).toBe("Captured backend artifact");
+    expect(result.artifact.bodyJson).toEqual({ captured: true });
+    expect(result.rawOutput).toBe("Prose output that should not be parsed.");
   });
 
   it("does not mount hosted search just because a web search MCP server is active", async () => {
