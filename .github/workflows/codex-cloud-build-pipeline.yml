@@ -134,7 +134,8 @@ jobs:
                 expectedFiles.includes("apps/controller/") ||
                 expectedFiles.includes("apps/worker/") ||
                 expectedFiles.includes("packages/shared/") ||
-                expectedFiles.includes("packages/github/")
+                expectedFiles.includes("packages/github/") ||
+                expectedFiles.includes("packages/agents/src/")
               ) {
                 return "backend";
               }
@@ -224,7 +225,7 @@ jobs:
                 display: "Backend/Core",
                 lane: "backend",
                 label: "codex-stage:backend-core",
-                files: "apps/controller/**, apps/worker/**, packages/shared/**, packages/github/**, backend/schema/store/controller tests",
+                files: "apps/controller/**, apps/worker/**, packages/shared/**, packages/github/**, packages/agents/src/**, backend/schema/store/controller/agent/plugin/release tests",
                 verify: "npm run check && npm run logs:check && docker compose config --no-interpolate --quiet"
               },
               frontend: {

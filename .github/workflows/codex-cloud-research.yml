@@ -151,7 +151,7 @@ jobs:
             Only propose work that maps to the implementation spec and real product behavior, and can run in codex-cloud, codex-action, or agentic-workflow.
             When no PR or active queue issue exists, prefer producing the next bounded implementation slice from docs/implementation-spec.md.
             Choose the lane from the expected file ownership, not from the broad topic:
-            - backend: apps/controller/**, apps/worker/**, packages/shared/**, packages/github/**, backend/schema/store/controller tests.
+            - backend: apps/controller/**, apps/worker/**, packages/shared/**, packages/github/**, packages/agents/src/**, backend/schema/store/controller/agent/plugin/release tests.
             - frontend: apps/dashboard/** and dashboard e2e coverage.
             - quality: tests/**, Playwright config, test utilities, reproductions, and acceptance evidence only.
             - security: .github/**, CI workflows, Dockerfile, docker-compose.yml, .env.example, package*.json, audit/security/check scripts, release/**, auth/security/permission work.

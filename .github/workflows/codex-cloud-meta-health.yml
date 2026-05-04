@@ -230,7 +230,8 @@ jobs:
                 expectedFiles.includes("apps/controller/") ||
                 expectedFiles.includes("apps/worker/") ||
                 expectedFiles.includes("packages/shared/") ||
-                expectedFiles.includes("packages/github/")
+                expectedFiles.includes("packages/github/") ||
+                expectedFiles.includes("packages/agents/src/")
               ) {
                 return "backend";
               }
