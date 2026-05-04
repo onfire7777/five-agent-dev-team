@@ -140,6 +140,50 @@ describe("release activities", () => {
     expect(store.updatedStates).toEqual([{ id: "WI-RELEASE", state: "BLOCKED" }]);
   });
 
+  it("fails closed before release when a required plugin release gate lacks safe evaluation", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-plugin-release-gate-"));
+    const configPath = path.join(tempDir, "agent-team.config.yaml");
+    await fs.writeFile(
+      configPath,
+      configYaml(tempDir).replace(
+        "  plugins: []",
+        `  plugins:
+    - name: Browser Gate
+      packageName: "@agent-team/browser-gate"
+      enabled: true
+      allowlisted: true
+      repo: owner/repo
+      contributions:
+        releaseGates:
+          - id: browser-smoke-gate
+            command: "npm run browser:smoke"
+            required: true`
+      ),
+      "utf8"
+    );
+    const store = fakeStore();
+    const { performAutonomousRelease } = await loadActivities(store);
+
+    process.env.AGENT_TEAM_CONFIG = configPath;
+    process.env.AGENT_LOCAL_CHECKS_PASSED = "true";
+    process.env.AGENT_GITHUB_ACTIONS_PASSED = "true";
+    process.env.AGENT_SECRET_SCAN_PASSED = "true";
+    process.env.AGENT_ROLLBACK_PLAN_PRESENT = "true";
+    process.env.AGENT_REQUIRE_RUNTIME_HEALTH = "false";
+    process.env.AGENT_COMMAND_TIMEOUT_MS = "10000";
+
+    try {
+      const artifact = await performAutonomousRelease(workItem(), [verificationArtifact()]);
+
+      expect(artifact.status).toBe("blocked");
+      expect(artifact.summary).toContain("Required plugin release gate browser-smoke-gate");
+      expect(artifact.testsRun).toContain("plugin-release-gate:browser-smoke-gate:missing");
+      await expect(fs.access(path.join(tempDir, "release.marker"))).rejects.toThrow();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("detects write-capable GitHub integrations by category", async () => {
     const { hasGithubWriteIntegration } = await loadActivities(fakeStore());
     const config = targetRepoConfig(process.cwd());

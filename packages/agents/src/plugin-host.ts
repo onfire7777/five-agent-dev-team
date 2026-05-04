@@ -29,7 +29,6 @@ export async function initializePlugins(config: TargetRepoConfig): Promise<Loade
       if (plugin.repo && plugin.repo !== `${config.repo.owner}/${config.repo.name}`) {
         throw new Error(`Plugin ${plugin.name} is scoped to another repo.`);
       }
-      assertNoUnsupportedContributions(plugin);
       loaded.push({ plugin, contribution: plugin.contributions });
       if (plugin.initCommand) await runLifecycleCommand(plugin.initCommand, config.repo.localPath);
     }
@@ -57,9 +56,7 @@ export async function disposePlugins(plugins: LoadedPlugin[], cwd: string): Prom
 
 export function mergePluginContributions(config: TargetRepoConfig, plugins: LoadedPlugin[]): TargetRepoConfig {
   if (!plugins.length) return config;
-  for (const loaded of plugins) {
-    assertNoUnsupportedContributions(loaded.plugin);
-  }
+  const pluginContributions = mergeContributions(config.integrations.pluginContributions, plugins);
   return {
     ...config,
     integrations: {
@@ -69,20 +66,20 @@ export function mergePluginContributions(config: TargetRepoConfig, plugins: Load
         ...plugins.flatMap((loaded) => loaded.contribution.capabilities)
       ],
       mcpServers: [...config.integrations.mcpServers, ...plugins.flatMap((loaded) => loaded.contribution.mcpServers)],
+      pluginContributions,
       plugins: config.integrations.plugins
     }
   };
 }
 
-function assertNoUnsupportedContributions(plugin: AgentTeamPlugin): void {
-  const unsupported = [
-    plugin.contributions.skills.length ? "skills" : null,
-    plugin.contributions.tools.length ? "tools" : null,
-    plugin.contributions.releaseGates.length ? "releaseGates" : null
-  ].filter((value): value is string => Boolean(value));
-  if (unsupported.length) {
-    throw new Error(`Plugin ${plugin.name} declares unsupported contributions: ${unsupported.join(", ")}.`);
-  }
+function mergeContributions(existing: PluginContribution | undefined, plugins: LoadedPlugin[]): PluginContribution {
+  return {
+    capabilities: [...(existing?.capabilities || []), ...plugins.flatMap((loaded) => loaded.contribution.capabilities)],
+    mcpServers: [...(existing?.mcpServers || []), ...plugins.flatMap((loaded) => loaded.contribution.mcpServers)],
+    skills: [...(existing?.skills || []), ...plugins.flatMap((loaded) => loaded.contribution.skills)],
+    tools: [...(existing?.tools || []), ...plugins.flatMap((loaded) => loaded.contribution.tools)],
+    releaseGates: [...(existing?.releaseGates || []), ...plugins.flatMap((loaded) => loaded.contribution.releaseGates)]
+  };
 }
 
 async function runLifecycleCommand(command: string, cwd: string): Promise<void> {

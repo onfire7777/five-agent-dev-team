@@ -690,16 +690,39 @@ export async function performAutonomousRelease(
   workItem: WorkItem,
   previousArtifacts: StageArtifact[]
 ): Promise<StageArtifact> {
-  const config = await loadReleaseConfig(workItem);
-  const scopedWorkItem = scopeWorkItemToProject(workItem, config);
-  await ensureNotStopped(scopedWorkItem.id, config);
+  const baseConfig = await loadReleaseConfig(workItem);
+  const scopedWorkItem = scopeWorkItemToProject(workItem, baseConfig);
+  await ensureNotStopped(scopedWorkItem.id, baseConfig);
+  const loadedPlugins = await initializePlugins(baseConfig);
+  const config = mergePluginContributions(baseConfig, loadedPlugins);
+  try {
+    return await performAutonomousReleaseWithConfig(scopedWorkItem, previousArtifacts, config);
+  } finally {
+    await disposePlugins(loadedPlugins, config.repo.localPath || process.cwd()).catch(() => undefined);
+  }
+}
+
+async function performAutonomousReleaseWithConfig(
+  scopedWorkItem: WorkItem,
+  previousArtifacts: StageArtifact[],
+  config: TargetRepoConfig
+): Promise<StageArtifact> {
   const releaseTag = releaseTagForWorkItem(scopedWorkItem);
   const rollback = rollbackPlanForRelease(scopedWorkItem, config, releaseTag);
-  const { signal, syncReasons } = await collectReleaseSignal(scopedWorkItem, config, previousArtifacts, releaseTag);
-  const preReleaseDecision = evaluateReleasePolicy(config, {
-    ...signal,
-    releaseProofPresent: signal.releaseProofPresent || Boolean(config.commands.release.trim())
-  });
+  const { signal, syncReasons, pluginReleaseGateResults } = await collectReleaseSignal(
+    scopedWorkItem,
+    config,
+    previousArtifacts,
+    releaseTag
+  );
+  const preReleaseDecision = withPluginReleaseGateDecision(
+    evaluateReleasePolicy(config, {
+      ...signal,
+      releaseProofPresent: signal.releaseProofPresent || Boolean(config.commands.release.trim())
+    }),
+    config,
+    pluginReleaseGateResults
+  );
   const releaseCommand = preReleaseDecision.allowed
     ? await runReleaseCommand(config, scopedWorkItem, releaseTag)
     : null;
@@ -717,10 +740,14 @@ export async function performAutonomousRelease(
     signal.releaseProofPresent ||
     Boolean(releaseCommand?.ok) ||
     (await hasReleaseProof(scopedWorkItem, config, releaseTag));
-  const decision = evaluateReleasePolicy(config, {
-    ...signal,
-    releaseProofPresent
-  });
+  const decision = withPluginReleaseGateDecision(
+    evaluateReleasePolicy(config, {
+      ...signal,
+      releaseProofPresent
+    }),
+    config,
+    pluginReleaseGateResults
+  );
   const postReleaseHealthPassed = !postReleaseHealth || !postReleaseHealth.required || postReleaseHealth.ok;
   const releaseAllowed = decision.allowed && (!releaseCommand || releaseCommand.ok) && postReleaseHealthPassed;
   const releasePacket = ReleasePacketSchema.parse({
@@ -736,6 +763,7 @@ export async function performAutonomousRelease(
         passed: decision.allowed,
         evidence: decision.allowed ? "Policy allowed release." : decision.requiredFixes.join("; ")
       },
+      ...pluginReleaseGatePacketEntries(config, pluginReleaseGateResults),
       {
         name: "release-command",
         passed: !releaseCommand || releaseCommand.ok,
@@ -798,6 +826,7 @@ export async function performAutonomousRelease(
       "secret scan",
       `release-proof:${releaseProofPresent ? "present" : "missing"}`,
       "release verification",
+      ...pluginReleaseGateTestNames(config, pluginReleaseGateResults),
       ...(releaseCommand ? [`release:${releaseCommand.ok ? "passed" : "failed"}`] : []),
       ...(postReleaseHealth ? [`post-release-health:${postReleaseHealth.ok ? "passed" : "failed"}`] : []),
       ...(rollbackCommand ? [`rollback:${rollbackCommand.ok ? "passed" : "failed"}`] : [])
@@ -960,7 +989,7 @@ async function collectReleaseSignal(
   config: TargetRepoConfig,
   previousArtifacts: StageArtifact[],
   releaseTag?: string
-): Promise<{ signal: VerificationSignal; syncReasons: string[] }> {
+): Promise<{ signal: VerificationSignal; syncReasons: string[]; pluginReleaseGateResults: Record<string, boolean> }> {
   const [gitSyncInput, githubActions] = await Promise.all([
     readGitSyncInput(workItem, config),
     readGitHubActionsEvidence(config)
@@ -992,8 +1021,103 @@ async function collectReleaseSignal(
     syncReasons: uniqueStrings([
       ...sync.reasons,
       ...(githubActions.required && !githubActions.ok ? githubActions.risks : [])
-    ])
+    ]),
+    pluginReleaseGateResults: collectPluginReleaseGateResults(config, previousArtifacts)
   };
+}
+
+function collectPluginReleaseGateResults(
+  config: TargetRepoConfig,
+  previousArtifacts: StageArtifact[]
+): Record<string, boolean> {
+  const gateIds = new Set((config.integrations.pluginContributions?.releaseGates || []).map((gate) => gate.id));
+  if (!gateIds.size) return {};
+  const results: Record<string, boolean> = {};
+  for (const artifact of previousArtifacts) {
+    const structured = (artifact.bodyJson as { pluginReleaseGateResults?: unknown }).pluginReleaseGateResults;
+    if (structured && typeof structured === "object" && !Array.isArray(structured)) {
+      for (const [id, passed] of Object.entries(structured)) {
+        if (gateIds.has(id) && typeof passed === "boolean") results[id] = passed;
+      }
+    }
+    for (const id of gateIds) {
+      if (artifact.testsRun.includes(`plugin-release-gate:${id}:passed`)) results[id] = true;
+      if (artifact.testsRun.includes(`plugin-release-gate:${id}:failed`)) results[id] = false;
+    }
+  }
+  return results;
+}
+
+function withPluginReleaseGateDecision(
+  decision: ReturnType<typeof evaluateReleasePolicy>,
+  config: TargetRepoConfig,
+  results: Record<string, boolean>
+): ReturnType<typeof evaluateReleasePolicy> {
+  const gateDecision = evaluatePluginReleaseGates(config, results);
+  const requiredFixes = [...decision.requiredFixes, ...gateDecision.requiredFixes];
+  const allowed = decision.allowed && requiredFixes.length === 0;
+  return {
+    allowed,
+    recommendation: allowed ? "go" : "no_go",
+    reasons: [...decision.reasons, ...gateDecision.reasons],
+    requiredFixes
+  };
+}
+
+function evaluatePluginReleaseGates(
+  config: TargetRepoConfig,
+  results: Record<string, boolean>
+): { reasons: string[]; requiredFixes: string[] } {
+  const reasons: string[] = [];
+  const requiredFixes: string[] = [];
+  for (const gate of config.integrations.pluginContributions?.releaseGates || []) {
+    const result = results[gate.id];
+    if (result === true) {
+      reasons.push(`Plugin release gate ${gate.id} passed.`);
+    } else if (gate.required && result === false) {
+      requiredFixes.push(`Required plugin release gate ${gate.id} failed.`);
+    } else if (gate.required) {
+      requiredFixes.push(`Required plugin release gate ${gate.id} has not been evaluated safely.`);
+    } else {
+      reasons.push(`Optional plugin release gate ${gate.id} is registered but not required.`);
+    }
+  }
+  return { reasons, requiredFixes };
+}
+
+function pluginReleaseGatePacketEntries(
+  config: TargetRepoConfig,
+  results: Record<string, boolean>
+): Array<{ name: string; passed: boolean; evidence: string }> {
+  return (config.integrations.pluginContributions?.releaseGates || []).map((gate) => {
+    const result = results[gate.id];
+    if (result === true) {
+      return { name: `plugin:${gate.id}`, passed: true, evidence: "Plugin release gate passed." };
+    }
+    if (result === false) {
+      return {
+        name: `plugin:${gate.id}`,
+        passed: !gate.required,
+        evidence: gate.required
+          ? "Required plugin release gate failed."
+          : "Optional plugin release gate failed without blocking release."
+      };
+    }
+    return {
+      name: `plugin:${gate.id}`,
+      passed: !gate.required,
+      evidence: gate.required
+        ? "Required plugin release gate has not been evaluated safely."
+        : "Optional plugin release gate was not evaluated."
+    };
+  });
+}
+
+function pluginReleaseGateTestNames(config: TargetRepoConfig, results: Record<string, boolean>): string[] {
+  return (config.integrations.pluginContributions?.releaseGates || []).map((gate) => {
+    const result = results[gate.id];
+    return `plugin-release-gate:${gate.id}:${result === true ? "passed" : result === false ? "failed" : "missing"}`;
+  });
 }
 
 async function readGitSyncInput(workItem: WorkItem, config: TargetRepoConfig) {

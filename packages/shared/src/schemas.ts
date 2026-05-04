@@ -894,34 +894,42 @@ export const CapabilityPackSchema = z.object({
 
 export type CapabilityPack = z.infer<typeof CapabilityPackSchema>;
 
+const PluginRelativePathSchema = z
+  .string()
+  .min(1)
+  .refine(
+    (value) => !ABSOLUTE_LOCAL_PATH_REGEX.test(value) && !/(^|[\\/])\.\.([\\/]|$)/.test(value),
+    "Plugin paths must be relative and stay inside the connected repository."
+  );
+
+export const PluginSkillContributionSchema = z.object({
+  id: z.string().min(1),
+  relativePath: PluginRelativePathSchema
+});
+
+export type PluginSkillContribution = z.infer<typeof PluginSkillContributionSchema>;
+
+export const PluginToolContributionSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().min(1)
+});
+
+export type PluginToolContribution = z.infer<typeof PluginToolContributionSchema>;
+
+export const PluginReleaseGateSchema = z.object({
+  id: z.string().min(1),
+  command: z.string().min(1),
+  required: z.boolean().default(true)
+});
+
+export type PluginReleaseGate = z.infer<typeof PluginReleaseGateSchema>;
+
 export const PluginContributionSchema = z.object({
   capabilities: z.array(CapabilityPackSchema).default([]),
   mcpServers: z.array(McpServerConfigSchema).default([]),
-  skills: z
-    .array(
-      z.object({
-        id: z.string().min(1),
-        relativePath: z.string().min(1)
-      })
-    )
-    .default([]),
-  tools: z
-    .array(
-      z.object({
-        name: z.string().min(1),
-        description: z.string().min(1)
-      })
-    )
-    .default([]),
-  releaseGates: z
-    .array(
-      z.object({
-        id: z.string().min(1),
-        command: z.string().min(1),
-        required: z.boolean().default(true)
-      })
-    )
-    .default([])
+  skills: z.array(PluginSkillContributionSchema).default([]),
+  tools: z.array(PluginToolContributionSchema).default([]),
+  releaseGates: z.array(PluginReleaseGateSchema).default([])
 });
 
 export type PluginContribution = z.infer<typeof PluginContributionSchema>;
@@ -1017,6 +1025,7 @@ export const TargetRepoConfigSchema = z.object({
       }),
       mcpServers: z.array(McpServerConfigSchema).default([]),
       capabilityPacks: z.array(CapabilityPackSchema).default([]),
+      pluginContributions: PluginContributionSchema.optional(),
       plugins: z.array(AgentTeamPluginSchema).default([])
     })
     .default({

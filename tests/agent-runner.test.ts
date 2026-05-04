@@ -1,4 +1,7 @@
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { getAgentDefinition, resolveMcpEnv, runRoleAgent } from "../packages/agents/src";
 import { DEFAULT_RELEASE_COMMAND, TargetRepoConfigSchema, type WorkItem } from "../packages/shared/src";
@@ -323,15 +326,65 @@ describe("agent runner", () => {
     expect(result.artifact.testsRun).toEqual([]);
     expect(result.artifact.releaseReadiness).toBe("unknown");
   });
+
+  it("loads triggered plugin-contributed skills from merged runtime contributions", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-plugin-skill-"));
+    try {
+      const skillPath = path.join(tempDir, "skills", "browser-smoke", "SKILL.md");
+      await fs.mkdir(path.dirname(skillPath), { recursive: true });
+      await fs.writeFile(
+        skillPath,
+        `---
+id: browser-smoke
+name: Browser Smoke
+audience:
+  - backend-systems-engineering
+priority: 80
+trigger:
+  always: true
+---
+Use the plugin-provided browser smoke procedure when the work item requires UI release evidence.
+`,
+        "utf8"
+      );
+
+      const result = await runRoleAgent(getAgentDefinition("backend-systems-engineering"), {
+        workItem: { ...workItem, state: "BACKEND_BUILD" },
+        stage: "BACKEND_BUILD",
+        previousArtifacts: [],
+        targetRepoConfig: liveTargetConfig({
+          repoPath: tempDir,
+          pluginContributions: {
+            capabilities: [],
+            mcpServers: [],
+            skills: [{ id: "browser-smoke", relativePath: "skills/browser-smoke/SKILL.md" }],
+            tools: [{ name: "browser.screenshot", description: "Capture a browser screenshot." }],
+            releaseGates: [{ id: "browser-smoke-gate", command: "npm run browser:smoke", required: true }]
+          }
+        })
+      });
+
+      expect(result.artifact.skillIds).toContain("browser-smoke");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
 });
 
-function liveTargetConfig(overrides: { mcpServers?: unknown[]; capabilityPacks?: unknown[] } = {}) {
+function liveTargetConfig(
+  overrides: {
+    mcpServers?: unknown[];
+    capabilityPacks?: unknown[];
+    pluginContributions?: unknown;
+    repoPath?: string;
+  } = {}
+) {
   return TargetRepoConfigSchema.parse({
     repo: {
       owner: "owner",
       name: "repo",
       defaultBranch: "main",
-      localPath: process.cwd()
+      localPath: overrides.repoPath || process.cwd()
     },
     commands: {
       install: "npm ci",
@@ -345,7 +398,8 @@ function liveTargetConfig(overrides: { mcpServers?: unknown[]; capabilityPacks?:
     integrations: {
       mcpServers: overrides.mcpServers || [],
       capabilityPacks: overrides.capabilityPacks || [],
-      plugins: []
+      plugins: [],
+      ...(overrides.pluginContributions ? { pluginContributions: overrides.pluginContributions } : {})
     },
     models: {
       primaryCodingModel: "gpt-primary",
