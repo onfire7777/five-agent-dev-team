@@ -23,7 +23,7 @@ export const TERMINAL_WORK_ITEM_STATES: WorkItemState[] = ["CLOSED", "BLOCKED"];
 
 const transitions: Record<WorkItemState, WorkItemState[]> = {
   NEW: ["INTAKE", "BLOCKED"],
-  INTAKE: ["RND", "CONTRACT", "VERIFY", "BLOCKED"],
+  INTAKE: ["RND", "CONTRACT", "BLOCKED"],
   RND: ["PROPOSAL", "CONTRACT", "BLOCKED"],
   PROPOSAL: ["AWAITING_ACCEPTANCE", "CONTRACT", "RND", "CLOSED", "BLOCKED"],
   AWAITING_ACCEPTANCE: ["CONTRACT", "RND", "CLOSED", "BLOCKED"],
