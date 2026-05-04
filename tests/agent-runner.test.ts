@@ -570,7 +570,121 @@ Use the plugin-provided browser smoke procedure when the work item requires UI r
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("emits one warning event when the skill injection budget drops skills", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-skill-budget-"));
+    const originalLiveMode = process.env.AGENT_LIVE_MODE;
+    const originalOpenAiKey = process.env.OPENAI_API_KEY;
+    const originalAgentModel = process.env.AGENT_MODEL;
+    const emitted: unknown[] = [];
+    const skillIds = ["budget-skill-01", "budget-skill-02", "budget-skill-03", "budget-skill-04", "budget-skill-05"];
+    try {
+      for (const [index, id] of skillIds.entries()) {
+        const skillPath = path.join(tempDir, "skills", id, "SKILL.md");
+        await fs.mkdir(path.dirname(skillPath), { recursive: true });
+        await fs.writeFile(skillPath, budgetSkillFixture(id, 200 - index), "utf8");
+      }
+
+      liveAgentMock.models.length = 0;
+      liveAgentMock.prompts.length = 0;
+      process.env.AGENT_LIVE_MODE = "true";
+      process.env.OPENAI_API_KEY = "test-key";
+      process.env.AGENT_MODEL = "gpt-fallback";
+
+      const budgetWorkItem = { ...workItem, id: "WI-SKILL-BUDGET", state: "BACKEND_BUILD" as const };
+      const config = liveTargetConfig({
+        repoPath: tempDir,
+        pluginContributions: {
+          capabilities: [],
+          mcpServers: [],
+          skills: skillIds.map((id) => ({ id, relativePath: `skills/${id}/SKILL.md` })),
+          tools: [],
+          releaseGates: []
+        }
+      });
+      const result = await runRoleAgent(getAgentDefinition("backend-systems-engineering"), {
+        workItem: budgetWorkItem,
+        stage: "BACKEND_BUILD",
+        previousArtifacts: [],
+        targetRepoConfig: config,
+        emitEvent: async (event) => {
+          emitted.push(event);
+        }
+      });
+
+      expect(emitted).toHaveLength(1);
+      expect(emitted[0]).toMatchObject({
+        level: "warn",
+        type: "system",
+        message: expect.stringContaining("WI-SKILL-BUDGET")
+      });
+      expect((emitted[0] as { message: string }).message).toContain("BACKEND_BUILD");
+      expect((emitted[0] as { message: string }).message).toContain("budget-skill-05");
+      expect((emitted[0] as { message: string }).message).not.toContain("BODY_MARKER_SHOULD_NOT_SURFACE");
+      expect(result.artifact.skillIds).toEqual(
+        expect.arrayContaining(["budget-skill-01", "budget-skill-02", "budget-skill-03", "budget-skill-04"])
+      );
+      expect(result.artifact.skillIds).not.toContain("budget-skill-05");
+      const livePrompt = liveAgentMock.prompts.at(-1);
+      if (!livePrompt) throw new Error("Live prompt was not captured.");
+      expect(livePrompt).toContain("Dropped skills: budget-skill-05");
+      expect(livePrompt).not.toContain("BODY_MARKER_SHOULD_NOT_SURFACE_budget-skill-05");
+
+      process.env.AGENT_LIVE_MODE = "false";
+      delete process.env.OPENAI_API_KEY;
+      delete process.env.AGENT_MODEL;
+      await expect(
+        runRoleAgent(getAgentDefinition("backend-systems-engineering"), {
+          workItem: budgetWorkItem,
+          stage: "BACKEND_BUILD",
+          previousArtifacts: [],
+          targetRepoConfig: config
+        })
+      ).resolves.toMatchObject({ live: false });
+
+      const warningSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+      try {
+        await expect(
+          runRoleAgent(getAgentDefinition("backend-systems-engineering"), {
+            workItem: budgetWorkItem,
+            stage: "BACKEND_BUILD",
+            previousArtifacts: [],
+            targetRepoConfig: config,
+            emitEvent: async () => {
+              throw new Error("event sink unavailable");
+            }
+          })
+        ).resolves.toMatchObject({ live: false });
+        expect(warningSpy).toHaveBeenCalledWith("Failed to emit dropped-skill budget event; continuing agent run.", {
+          code: "AGENT_EVENT_EMIT_FAILED"
+        });
+      } finally {
+        warningSpy.mockRestore();
+      }
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+      restoreEnv("AGENT_LIVE_MODE", originalLiveMode);
+      restoreEnv("OPENAI_API_KEY", originalOpenAiKey);
+      restoreEnv("AGENT_MODEL", originalAgentModel);
+    }
+  });
 });
+
+function budgetSkillFixture(id: string, priority: number): string {
+  return `---
+id: ${id}
+name: ${id}
+audience:
+  - backend-systems-engineering
+priority: ${priority}
+trigger:
+  always: true
+---
+Budget fixture body for ${id}.
+BODY_MARKER_SHOULD_NOT_SURFACE_${id}
+${"x".repeat(3_850)}
+`;
+}
 
 function findTool(tools: any[], qualifiedName: string): any {
   const tool = tools.find(
