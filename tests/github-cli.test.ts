@@ -151,7 +151,7 @@ describe("GitHub MCP config", () => {
       category: "github",
       transport: "stdio",
       command: "github-mcp-server",
-      args: ["stdio", "--read-only"],
+      args: ["stdio", "--dynamic-toolsets", "--read-only"],
       env: {
         GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_PERSONAL_ACCESS_TOKEN}",
         GITHUB_TOKEN: "${GITHUB_PERSONAL_ACCESS_TOKEN}"
@@ -161,7 +161,7 @@ describe("GitHub MCP config", () => {
     expect(
       buildGitHubMcpStdioConfig({ readOnly: false, tokenEnv: "GITHUB_TOKEN", extraArgs: ["--toolsets", "repos"] })
     ).toMatchObject({
-      args: ["stdio", "--toolsets", "repos"],
+      args: ["stdio", "--dynamic-toolsets", "--toolsets", "repos"],
       env: {
         GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_TOKEN}",
         GITHUB_TOKEN: "${GITHUB_TOKEN}"
