@@ -121,6 +121,7 @@ export async function runRoleAgent(definition: AgentDefinition, context: AgentRu
     mode: (process.env.AGENT_EXECUTION_MODE as any) || DEFAULT_SCHEDULER_POLICY.mode
   };
   const preparation = await prepareAgentRun(definition, context);
+  await emitDroppedSkillBudgetEvent(context, preparation.droppedSkillIds);
 
   if ((process.env.AGENT_LIVE_MODE === "true" || shouldUseLiveApi(policy)) && process.env.OPENAI_API_KEY) {
     return runLiveOpenAIAgent(definition, context);
@@ -128,6 +129,16 @@ export async function runRoleAgent(definition: AgentDefinition, context: AgentRu
 
   const artifact = createTemplateArtifact(definition, context, preparation);
   return { artifact, rawOutput: artifact.summary, live: false };
+}
+
+async function emitDroppedSkillBudgetEvent(context: AgentRunContext, droppedSkillIds: string[]): Promise<void> {
+  if (!droppedSkillIds.length || !context.emitEvent) return;
+
+  await context.emitEvent({
+    level: "warn",
+    type: "system",
+    message: `Skill injection budget dropped ${droppedSkillIds.length} skill(s) for work item ${context.workItem.id} during ${context.stage}: ${droppedSkillIds.join(", ")}.`
+  });
 }
 
 async function prepareAgentRun(
