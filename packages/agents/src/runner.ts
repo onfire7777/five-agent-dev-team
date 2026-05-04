@@ -576,7 +576,11 @@ function assertScopeField(record: Record<string, unknown>, field: string, expect
 }
 
 function repoContextRoot(context: AgentRunContext): string {
-  const repoRoot = path.resolve(context.targetRepoConfig?.repo.localPath || process.cwd());
+  const repoLocalPath = context.targetRepoConfig?.repo.localPath?.trim();
+  if (!repoLocalPath) {
+    throw new Error("repo.context.read is unavailable because no connected repository context is configured.");
+  }
+  const repoRoot = path.resolve(repoLocalPath);
   const contextDir = context.targetRepoConfig?.context.defaultContextDir || ".agent-team/context";
   const root = path.resolve(repoRoot, contextDir);
   assertInside(repoRoot, root, "Configured context directory escapes the connected repository.");

@@ -431,6 +431,35 @@ describe("agent runner", () => {
     }
   });
 
+  it("fails closed when repo context is requested without a connected repo", async () => {
+    const originalLiveMode = process.env.AGENT_LIVE_MODE;
+    const originalOpenAiKey = process.env.OPENAI_API_KEY;
+    const originalAgentModel = process.env.AGENT_MODEL;
+    liveAgentMock.models.length = 0;
+    liveAgentMock.prompts.length = 0;
+    liveAgentMock.tools.length = 0;
+    liveAgentMock.hostedSearchCalls = 0;
+    process.env.AGENT_LIVE_MODE = "true";
+    process.env.OPENAI_API_KEY = "test-key";
+    process.env.AGENT_MODEL = "gpt-fallback";
+    try {
+      await runRoleAgent(getAgentDefinition("backend-systems-engineering"), {
+        workItem: { ...workItem, state: "BACKEND_BUILD" },
+        stage: "BACKEND_BUILD",
+        previousArtifacts: []
+      });
+
+      const tools = liveAgentMock.tools.at(-1) || [];
+      await expect(findTool(tools, "repo_context.read").execute({ path: "guide.md" })).rejects.toThrow(
+        /no connected repository context/
+      );
+    } finally {
+      restoreEnv("AGENT_LIVE_MODE", originalLiveMode);
+      restoreEnv("OPENAI_API_KEY", originalOpenAiKey);
+      restoreEnv("AGENT_MODEL", originalAgentModel);
+    }
+  });
+
   it("preserves successful agent results when MCP close fails", async () => {
     const originalLiveMode = process.env.AGENT_LIVE_MODE;
     const originalOpenAiKey = process.env.OPENAI_API_KEY;
