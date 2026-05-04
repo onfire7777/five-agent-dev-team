@@ -159,7 +159,7 @@ const WorkItemProposalDecisionRequest = z.object({
   feedback: z.string().optional()
 });
 
-const app = express();
+export const app = express();
 const store = createStore();
 const port = Number(process.env.PORT || 4310);
 const host = process.env.HOST || "127.0.0.1";
@@ -1861,7 +1861,7 @@ async function requireConnectedProjectForWork(input: z.infer<typeof CreateWorkIt
   if (/^(1|true|yes)$/i.test(process.env.AGENT_TEAM_ALLOW_DEFAULT_CONFIG || "")) return;
   const projects = await store.listProjectConnections();
   if (!projects.length) {
-    throw new HttpError("Connect a target GitHub repository before starting autonomous work.", 400);
+    throw new HttpError("Connect a target GitHub repository before starting autonomous work.", 422);
   }
   const project =
     input.projectId || input.repo
@@ -1931,9 +1931,17 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
     });
 });
 
-store.init().then(() => {
-  startSmartScheduler(store);
-  app.listen(port, host, () => {
-    console.log(`AI Dev Team controller listening on http://${host}:${port}`);
-  });
-});
+if (process.env.NODE_ENV !== "test") {
+  void store
+    .init()
+    .then(() => {
+      startSmartScheduler(store);
+      app.listen(port, host, () => {
+        console.log(`AI Dev Team controller listening on http://${host}:${port}`);
+      });
+    })
+    .catch((error: unknown) => {
+      console.error("Controller startup failed during initialization.", error);
+      process.exit(1);
+    });
+}
