@@ -493,6 +493,7 @@ jobs:
           sandbox: workspace-write
           safety-strategy: drop-sudo
           allow-users: onfire7777
+          allow-bots: true
           output-file: codex-output.md
           prompt: |
             You are the Codex Cloud ${{ steps.gate.outputs.stage_display }} specialist for onfire7777/five-agent-dev-team.
