@@ -76,6 +76,7 @@ vi.mock("@openai/agents", () => {
       options.tools.map((tool: any) => ({
         ...tool,
         namespace: options.name,
+        namespaceDescription: options.description,
         qualifiedName: `${options.name}.${tool.name}`
       }))
     )
@@ -379,6 +380,17 @@ describe("agent runner", () => {
       expect(toolNames).toEqual(
         expect.arrayContaining(["memory.search", "repo_context.read", "artifact.write", "event.emit", "skill.load"])
       );
+      const livePrompt = liveAgentMock.prompts.at(-1);
+      if (!livePrompt) throw new Error("Live prompt was not captured.");
+      for (const callName of ["memory.search", "repo_context.read", "artifact.write", "event.emit", "skill.load"]) {
+        const metadata = promptToolMetadata(livePrompt, callName);
+        const tool = findTool(tools, callName);
+        expect(tool.description).toContain(`Preconditions: ${metadata.preconditions}`);
+        expect(tool.description).toContain(`Side effects: ${metadata.sideEffects}`);
+        expect(tool.description).toContain(`Idempotency: ${metadata.idempotency}`);
+        expect(tool.namespaceDescription).toContain(`Side effects: ${metadata.sideEffects}`);
+        expect(tool.namespaceDescription).toContain(`Idempotency: ${metadata.idempotency}`);
+      }
 
       await expect(findTool(tools, "memory.search").execute({ query: "strict", limit: 5 })).resolves.toMatchObject({
         count: 1,
@@ -568,6 +580,30 @@ function findTool(tools: any[], qualifiedName: string): any {
     throw new Error(`Tool ${qualifiedName} was not registered.`);
   }
   return tool;
+}
+
+function promptToolMetadata(
+  prompt: string,
+  callName: string
+): { preconditions: string; sideEffects: string; idempotency: string } {
+  const toolBlock = JSON.parse(extractPromptBlock(prompt, "tools")) as {
+    builtIns: Array<Record<string, unknown>>;
+  };
+  const metadata = toolBlock.builtIns.find((tool) => tool.callName === callName);
+  if (!metadata) throw new Error(`Prompt metadata for ${callName} was not found.`);
+  for (const field of ["preconditions", "sideEffects", "idempotency"]) {
+    if (typeof metadata[field] !== "string" || !metadata[field].trim()) {
+      throw new Error(`Prompt metadata for ${callName} is missing ${field}.`);
+    }
+  }
+  return metadata as { preconditions: string; sideEffects: string; idempotency: string };
+}
+
+function extractPromptBlock(prompt: string, name: string): string {
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = prompt.match(new RegExp(`<<< BLOCK: ${escapedName} >>>\\n([\\s\\S]*?)\\n<<< END BLOCK >>>`));
+  if (!match) throw new Error(`Prompt block ${name} was not found.`);
+  return match[1];
 }
 
 function liveTargetConfig(

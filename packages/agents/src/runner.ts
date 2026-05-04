@@ -12,7 +12,7 @@ import type {
   WorkItem,
   WorkItemState
 } from "../../shared/src";
-import { assembleCanonicalPrompt } from "./prompt";
+import { assembleCanonicalPrompt, BUILT_IN_TOOL_SAFETY_METADATA, type BuiltInToolCallName } from "./prompt";
 import { loadSkillById, loadTriggeredSkills, type LoadedSkill } from "./skills";
 import {
   DEFAULT_SCHEDULER_POLICY,
@@ -309,50 +309,76 @@ function createBuiltInTools(
 
   const memorySearch = sdk.tool({
     name: "search",
-    description: "Search scoped durable memory from the current project, repository, work item, or agent.",
+    description: builtInToolDescription("memory.search"),
     parameters: MemorySearchInputSchema,
     execute: async (input: unknown) => searchScopedMemories(context, definition, input)
   });
   const repoContextRead = sdk.tool({
     name: "read",
-    description: "Read files from the configured repo context directory only.",
+    description: builtInToolDescription("repo_context.read"),
     parameters: RepoContextReadInputSchema,
     execute: async (input: unknown) => readRepoContext(context, input)
   });
   const artifactWrite = sdk.tool({
     name: "write",
-    description: "Validate and capture exactly one StageArtifact for this run.",
+    description: builtInToolDescription("artifact.write"),
     parameters: ArtifactWriteInputSchema,
     execute: async (input: unknown) => writeStageArtifact(definition, context, preparation, artifactCapture, input)
   });
   const eventEmit = sdk.tool({
     name: "emit",
-    description: "Emit a scoped workflow event through the current activity handler.",
+    description: builtInToolDescription("event.emit"),
     parameters: EventEmitInputSchema,
     execute: async (input: unknown) => emitScopedEvent(context, input)
   });
   const skillLoad = sdk.tool({
     name: "load",
-    description: "Load one skill by id when it is allowed for the current agent role.",
+    description: builtInToolDescription("skill.load"),
     parameters: SkillLoadInputSchema,
     execute: async (input: unknown) => loadAllowedSkill(definition, context, input)
   });
 
   return [
-    ...namespaceTool(sdk, "memory", "Project, repository, work-item, and agent-scoped memory tools.", [
+    ...namespaceTool(sdk, "memory", builtInNamespaceDescription("memory.search"), [
       { id: "builtin:memory.search", tool: memorySearch }
     ]),
-    ...namespaceTool(sdk, "repo_context", "Curated connected-repository context tools.", [
+    ...namespaceTool(sdk, "repo_context", builtInNamespaceDescription("repo_context.read"), [
       { id: "builtin:repo.context.read", tool: repoContextRead }
     ]),
-    ...namespaceTool(sdk, "artifact", "Validated stage artifact tools.", [
+    ...namespaceTool(sdk, "artifact", builtInNamespaceDescription("artifact.write"), [
       { id: "builtin:artifact.write", tool: artifactWrite }
     ]),
-    ...namespaceTool(sdk, "event", "Scoped workflow event tools.", [{ id: "builtin:event.emit", tool: eventEmit }]),
-    ...namespaceTool(sdk, "skill", "Audience-checked skill loading tools.", [
+    ...namespaceTool(sdk, "event", builtInNamespaceDescription("event.emit"), [
+      { id: "builtin:event.emit", tool: eventEmit }
+    ]),
+    ...namespaceTool(sdk, "skill", builtInNamespaceDescription("skill.load"), [
       { id: "builtin:skill.load", tool: skillLoad }
     ])
   ];
+}
+
+function builtInToolDescription(callName: BuiltInToolCallName): string {
+  const metadata = builtInToolMetadata(callName);
+  return [
+    metadata.description,
+    `Preconditions: ${metadata.preconditions}`,
+    `Side effects: ${metadata.sideEffects}`,
+    `Idempotency: ${metadata.idempotency}`
+  ].join(" ");
+}
+
+function builtInNamespaceDescription(callName: BuiltInToolCallName): string {
+  const metadata = builtInToolMetadata(callName);
+  return [
+    `Built-in namespace for ${metadata.callName}.`,
+    `Preconditions: ${metadata.preconditions}`,
+    `Side effects: ${metadata.sideEffects}`,
+    `Idempotency: ${metadata.idempotency}`
+  ].join(" ");
+}
+
+function builtInToolMetadata(callName: BuiltInToolCallName) {
+  return BUILT_IN_TOOL_SAFETY_METADATA.find((tool) => tool.callName === callName)!;
 }
 
 function namespaceTool(
