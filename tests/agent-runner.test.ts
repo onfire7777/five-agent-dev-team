@@ -9,6 +9,7 @@ import { DEFAULT_RELEASE_COMMAND, TargetRepoConfigSchema, type WorkItem } from "
 const liveAgentMock = vi.hoisted(() => ({
   models: [] as string[],
   prompts: [] as string[],
+  tools: [] as any[][],
   hostedSearchCalls: 0
 }));
 
@@ -16,9 +17,10 @@ vi.mock("@openai/agents", () => {
   class Agent {
     model: string;
 
-    constructor(options: { model: string }) {
+    constructor(options: { model: string; tools?: any[] }) {
       this.model = options.model;
       liveAgentMock.models.push(options.model);
+      liveAgentMock.tools.push(options.tools || []);
     }
   }
 
@@ -61,7 +63,22 @@ vi.mock("@openai/agents", () => {
     webSearchTool: vi.fn(() => {
       liveAgentMock.hostedSearchCalls += 1;
       return {};
-    })
+    }),
+    tool: vi.fn((options: any) => ({
+      type: "function",
+      name: options.name,
+      description: options.description,
+      parameters: options.parameters,
+      strict: options.strict ?? true,
+      execute: options.execute
+    })),
+    toolNamespace: vi.fn((options: any) =>
+      options.tools.map((tool: any) => ({
+        ...tool,
+        namespace: options.name,
+        qualifiedName: `${options.name}.${tool.name}`
+      }))
+    )
   };
 });
 
@@ -260,11 +277,154 @@ describe("agent runner", () => {
         })
       });
 
-      expect(result.artifact.capabilityIds).toEqual(["mcp:connected-mcp"]);
+      expect(result.artifact.capabilityIds).toEqual(
+        expect.arrayContaining(["mcp:connected-mcp", "builtin:artifact.write"])
+      );
+      expect(result.artifact.capabilityIds).not.toContain("mcp:dropped-mcp");
       expect(liveAgentMock.prompts.at(-1)).toContain("mcp:connected-mcp");
       expect(liveAgentMock.prompts.at(-1)).not.toContain("mcp:dropped-mcp");
     } finally {
       vi.mocked(agents.MCPServers.open).mockReset();
+      restoreEnv("AGENT_LIVE_MODE", originalLiveMode);
+      restoreEnv("OPENAI_API_KEY", originalOpenAiKey);
+      restoreEnv("AGENT_MODEL", originalAgentModel);
+    }
+  });
+
+  it("registers and scopes live runner built-in tools", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-builtins-"));
+    const originalLiveMode = process.env.AGENT_LIVE_MODE;
+    const originalOpenAiKey = process.env.OPENAI_API_KEY;
+    const originalAgentModel = process.env.AGENT_MODEL;
+    const now = new Date().toISOString();
+    liveAgentMock.models.length = 0;
+    liveAgentMock.prompts.length = 0;
+    liveAgentMock.tools.length = 0;
+    liveAgentMock.hostedSearchCalls = 0;
+    process.env.AGENT_LIVE_MODE = "true";
+    process.env.OPENAI_API_KEY = "test-key";
+    process.env.AGENT_MODEL = "gpt-fallback";
+    try {
+      await fs.mkdir(path.join(tempDir, ".agent-team", "context"), { recursive: true });
+      await fs.writeFile(
+        path.join(tempDir, ".agent-team", "context", "guide.md"),
+        "# Guide\n\nScoped context.",
+        "utf8"
+      );
+      const scopedWorkItem = {
+        ...workItem,
+        id: "WI-TOOLS",
+        projectId: "project-a",
+        repo: "owner/repo",
+        state: "BACKEND_BUILD" as const
+      };
+      const emitted: unknown[] = [];
+      const result = await runRoleAgent(getAgentDefinition("backend-systems-engineering"), {
+        workItem: scopedWorkItem,
+        stage: "BACKEND_BUILD",
+        previousArtifacts: [],
+        targetRepoConfig: liveTargetConfig({ repoPath: tempDir }),
+        memories: [
+          {
+            id: "mem-1",
+            scope: "work_item",
+            projectId: "project-a",
+            repo: "owner/repo",
+            workItemId: "WI-TOOLS",
+            kind: "decision",
+            title: "Use strict tools",
+            content: "Built-in tool results must stay scoped.",
+            tags: ["tools"],
+            confidence: "high",
+            importance: 5,
+            permanence: "durable",
+            source: "test",
+            createdAt: now,
+            updatedAt: now
+          },
+          {
+            id: "mem-2",
+            scope: "work_item",
+            projectId: "other-project",
+            repo: "owner/repo",
+            workItemId: "WI-OTHER",
+            kind: "decision",
+            title: "Do not leak",
+            content: "This memory belongs to another project.",
+            tags: [],
+            confidence: "high",
+            importance: 5,
+            permanence: "durable",
+            source: "test",
+            createdAt: now,
+            updatedAt: now
+          }
+        ],
+        emitEvent: async (event) => {
+          emitted.push(event);
+        }
+      });
+
+      expect(result.artifact.capabilityIds).toEqual(
+        expect.arrayContaining([
+          "builtin:memory.search",
+          "builtin:repo.context.read",
+          "builtin:artifact.write",
+          "builtin:event.emit",
+          "builtin:skill.load"
+        ])
+      );
+      const tools = liveAgentMock.tools.at(-1) || [];
+      const toolNames = tools.map((tool) => tool.qualifiedName || `${tool.namespace}.${tool.name}`);
+      expect(toolNames).toEqual(
+        expect.arrayContaining(["memory.search", "repo_context.read", "artifact.write", "event.emit", "skill.load"])
+      );
+
+      await expect(findTool(tools, "memory.search").execute({ query: "strict", limit: 5 })).resolves.toMatchObject({
+        count: 1,
+        records: [expect.objectContaining({ id: "mem-1" })]
+      });
+
+      const repoTool = findTool(tools, "repo_context.read");
+      await expect(repoTool.execute({ path: "guide.md" })).resolves.toMatchObject({
+        path: "guide.md",
+        content: expect.stringContaining("Scoped context.")
+      });
+      await expect(repoTool.execute({ path: "../package.json" })).rejects.toThrow(/escapes/);
+
+      const artifactTool = findTool(tools, "artifact.write");
+      await expect(artifactTool.execute({ workItemId: "wrong", title: "Bad", summary: "Bad" })).rejects.toThrow(
+        /mismatched workItemId/
+      );
+      await expect(
+        artifactTool.execute({
+          title: "Backend built-in tools ready",
+          summary: "Built-in tools were validated.",
+          status: "passed",
+          decisions: ["Use runner-owned tools."],
+          risks: [],
+          filesChanged: ["packages/agents/src/runner.ts"],
+          testsRun: ["agent-runner"],
+          releaseReadiness: "unknown",
+          nextStage: "INTEGRATION",
+          bodyMd: "## Backend built-in tools ready",
+          bodyJson: { ok: true }
+        })
+      ).resolves.toMatchObject({ status: "captured", workItemId: "WI-TOOLS" });
+
+      await expect(
+        findTool(tools, "event.emit").execute({ type: "agent.blocked", level: "warn", message: "Need routing." })
+      ).resolves.toEqual({ status: "emitted", type: "agent.blocked" });
+      expect(emitted).toContainEqual({ type: "agent.blocked", level: "warn", message: "Need routing." });
+
+      const skillTool = findTool(tools, "skill.load");
+      await expect(skillTool.execute({ id: "api-contract-design" })).resolves.toMatchObject({
+        id: "api-contract-design",
+        audience: ["backend-systems-engineering"]
+      });
+      await expect(skillTool.execute({ id: "react-component-design" })).rejects.toThrow(/not available/);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
       restoreEnv("AGENT_LIVE_MODE", originalLiveMode);
       restoreEnv("OPENAI_API_KEY", originalOpenAiKey);
       restoreEnv("AGENT_MODEL", originalAgentModel);
@@ -370,6 +530,16 @@ Use the plugin-provided browser smoke procedure when the work item requires UI r
     }
   });
 });
+
+function findTool(tools: any[], qualifiedName: string): any {
+  const tool = tools.find(
+    (candidate) => (candidate.qualifiedName || `${candidate.namespace}.${candidate.name}`) === qualifiedName
+  );
+  if (!tool) {
+    throw new Error(`Tool ${qualifiedName} was not registered.`);
+  }
+  return tool;
+}
 
 function liveTargetConfig(
   overrides: {

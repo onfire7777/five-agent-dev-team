@@ -41,15 +41,7 @@ const MAX_SKILL_BODY_BYTES = 4_096;
 const ABSOLUTE_PATH_REGEX = /^(?:\/|[A-Za-z]:[\\/])/;
 
 export async function loadTriggeredSkills(input: SkillActivationInput): Promise<SkillLoadResult> {
-  const root = path.resolve(process.cwd(), "packages/agents/skills");
-  const files = await findSkillFiles(root);
-  const declaredPluginSkills = pluginSkillFiles(input.targetRepoConfig);
-  const candidates = (
-    await Promise.all([
-      ...files.map(readSkillFile),
-      ...declaredPluginSkills.map(({ declaration, filePath }) => readDeclaredPluginSkillFile(declaration, filePath))
-    ])
-  ).filter((skill): skill is LoadedSkill & { trigger?: SkillFrontmatter["trigger"] } => Boolean(skill));
+  const candidates = await loadSkillCandidates(input.targetRepoConfig);
 
   const active = candidates
     .filter((skill) => skill.audience.includes(input.agent))
@@ -69,6 +61,32 @@ export async function loadTriggeredSkills(input: SkillActivationInput): Promise<
     skills.push(stripTrigger(skill));
   }
   return { skills, droppedSkillIds };
+}
+
+export async function loadSkillById(input: SkillActivationInput, id: string): Promise<LoadedSkill> {
+  const candidates = await loadSkillCandidates(input.targetRepoConfig);
+  const skill = candidates.find((candidate) => candidate.id === id);
+  if (!skill) {
+    throw new Error(`Skill ${id} was not found.`);
+  }
+  if (!skill.audience.includes(input.agent)) {
+    throw new Error(`Skill ${id} is not available to ${input.agent}.`);
+  }
+  return stripTrigger(skill);
+}
+
+async function loadSkillCandidates(
+  config?: TargetRepoConfig
+): Promise<Array<LoadedSkill & { trigger?: SkillFrontmatter["trigger"] }>> {
+  const root = path.resolve(process.cwd(), "packages/agents/skills");
+  const files = await findSkillFiles(root);
+  const declaredPluginSkills = pluginSkillFiles(config);
+  return (
+    await Promise.all([
+      ...files.map(readSkillFile),
+      ...declaredPluginSkills.map(({ declaration, filePath }) => readDeclaredPluginSkillFile(declaration, filePath))
+    ])
+  ).filter((skill): skill is LoadedSkill & { trigger?: SkillFrontmatter["trigger"] } => Boolean(skill));
 }
 
 function pluginSkillFiles(

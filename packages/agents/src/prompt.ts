@@ -80,11 +80,31 @@ export function assembleCanonicalPrompt(input: PromptAssemblyInput): PromptAssem
       JSON.stringify(
         {
           builtIns: [
-            { name: "memory.search", description: "Read project-scoped durable memory records." },
-            { name: "repo.context.read", description: "Read curated project context files inside the connected repo." },
-            { name: "artifact.write", description: "Persist exactly one validated stage artifact." },
-            { name: "event.emit", description: "Emit a project-scoped workflow event." },
-            { name: "skill.load", description: "Request an audience-allowed skill by id." }
+            {
+              name: "memory.search",
+              callName: "memory.search",
+              description: "Read project-scoped durable memory records."
+            },
+            {
+              name: "repo.context.read",
+              callName: "repo_context.read",
+              description: "Read curated project context files inside the connected repo."
+            },
+            {
+              name: "artifact.write",
+              callName: "artifact.write",
+              description: "Persist exactly one validated stage artifact."
+            },
+            {
+              name: "event.emit",
+              callName: "event.emit",
+              description: "Emit a project-scoped workflow event."
+            },
+            {
+              name: "skill.load",
+              callName: "skill.load",
+              description: "Request an audience-allowed skill by id."
+            }
           ],
           activeCapabilityIds: input.capabilityIds
         },

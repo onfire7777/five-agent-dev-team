@@ -406,7 +406,19 @@ async function runAgentWithTeamContext(
       proposalStage,
       teamMessages,
       teamDirection: [...buildTeamDirection(input, proposalStage), ...(input.teamDirection || [])],
-      loopContext: [...buildLoopContext(input.previousArtifacts), ...(input.loopContext || [])]
+      loopContext: [...buildLoopContext(input.previousArtifacts), ...(input.loopContext || [])],
+      emitEvent: async (event) => {
+        await store.addEvent({
+          workItemId: scopedWorkItem.id,
+          projectId: scopedWorkItem.projectId,
+          repo: scopedWorkItem.repo,
+          stage: input.stage,
+          ownerAgent: definition.role,
+          level: event.level,
+          type: event.type === "agent.blocked" ? "stage_failed" : event.type,
+          message: event.message
+        });
+      }
     });
     return { artifact: result.artifact, definition, store, workItem: scopedWorkItem };
   } finally {
