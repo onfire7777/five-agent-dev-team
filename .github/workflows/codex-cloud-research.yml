@@ -55,6 +55,18 @@ jobs:
               state: "open",
               per_page: 100
             });
+            const isDependencyPr = (pr) => {
+              const author = pr.user?.login || "";
+              const headRef = pr.head?.ref || "";
+              const labels = (pr.labels || []).map((label) => label.name || label);
+              return (
+                author.toLowerCase().includes("dependabot") ||
+                headRef.startsWith("dependabot/") ||
+                labels.includes("dependencies")
+              );
+            };
+            const dependencyPrs = openPrs.filter(isDependencyPr);
+            const blockingOpenPrs = openPrs.filter((pr) => !isDependencyPr(pr));
             const openIssuesRaw = await github.paginate(github.rest.issues.listForRepo, {
               owner,
               repo,
@@ -69,10 +81,10 @@ jobs:
                 )
               );
 
-            if (!force && (openPrs.length || activeQueueIssues.length)) {
+            if (!force && (blockingOpenPrs.length || activeQueueIssues.length)) {
               return JSON.stringify({
                 run: false,
-                reason: `skipped: openPrs=${openPrs.length}, activeQueueIssues=${activeQueueIssues.length}`
+                reason: `skipped: blockingOpenPrs=${blockingOpenPrs.length}, dependencyPrs=${dependencyPrs.length}, activeQueueIssues=${activeQueueIssues.length}`
               });
             }
 

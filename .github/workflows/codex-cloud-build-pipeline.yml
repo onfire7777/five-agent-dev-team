@@ -94,6 +94,18 @@ jobs:
               state: "open",
               per_page: 100
             });
+            const isDependencyPr = (pr) => {
+              const author = pr.user?.login || "";
+              const headRef = pr.head?.ref || "";
+              const labels = (pr.labels || []).map((label) => label.name || label);
+              return (
+                author.toLowerCase().includes("dependabot") ||
+                headRef.startsWith("dependabot/") ||
+                labels.includes("dependencies")
+              );
+            };
+            const dependencyPrs = openPrs.filter(isDependencyPr);
+            const blockingOpenPrs = openPrs.filter((pr) => !isDependencyPr(pr));
             const laneOrder = ["backend", "frontend", "quality", "security", "docs"];
             const issueField = (issue, name) =>
               (issue.body || "").match(new RegExp(`^${name}:\\s*(.+)$`, "im"))?.[1]?.toLowerCase() || "";
@@ -284,9 +296,12 @@ jobs:
             }
 
             if (["backend", "frontend", "quality", "security", "docs"].includes(stage)) {
-              if (openPrs.length && !force) {
+              if (blockingOpenPrs.length && !force) {
                 core.setOutput("should_run", "false");
-                core.setOutput("reason", `skipped: ${openPrs.length} open PR(s); Captain must integrate first`);
+                core.setOutput(
+                  "reason",
+                  `skipped: ${blockingOpenPrs.length} non-dependency open PR(s); dependencyPrs=${dependencyPrs.length}`
+                );
                 return;
               }
               const target = openIssues

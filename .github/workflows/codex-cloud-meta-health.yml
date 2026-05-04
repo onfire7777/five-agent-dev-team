@@ -183,6 +183,18 @@ jobs:
               state: "open",
               per_page: 100
             });
+            const isDependencyPr = (pr) => {
+              const author = pr.user?.login || "";
+              const headRef = pr.head?.ref || "";
+              const labels = (pr.labels || []).map((label) => label.name || label);
+              return (
+                author.toLowerCase().includes("dependabot") ||
+                headRef.startsWith("dependabot/") ||
+                labels.includes("dependencies")
+              );
+            };
+            const dependencyPrs = openPrs.filter(isDependencyPr);
+            const blockingOpenPrs = openPrs.filter((pr) => !isDependencyPr(pr));
 
             const openIssuesRaw = await github.paginate(github.rest.issues.listForRepo, {
               owner,
@@ -244,7 +256,7 @@ jobs:
               .filter((item) => laneOrder.includes(item.lane))
               .sort((a, b) => new Date(a.issue.created_at) - new Date(b.issue.created_at));
 
-            if (!openPrs.length && !queueIssues.length && retryableBlockedIssues.length) {
+            if (!blockingOpenPrs.length && !queueIssues.length && retryableBlockedIssues.length) {
               const { issue, lane } = retryableBlockedIssues[0];
               const labels = labelNamesFor(issue);
               await github.rest.issues.addLabels({
@@ -327,6 +339,8 @@ jobs:
                 buildWorkflowCanWritePullRequests === null ? "unavailable" : String(buildWorkflowCanWritePullRequests)
               }`,
               `Open PRs: ${openPrs.length}`,
+              `Dependency PRs (non-blocking): ${dependencyPrs.length}`,
+              `Blocking PRs: ${blockingOpenPrs.length}`,
               `Open queued/running agent issues: ${queueIssues.length}`,
               `Retryable blocked lane-stop issues: ${retryableBlockedIssues.length}`,
               `Open Dependabot alerts: ${dependabotOpen === null ? "unavailable" : dependabotOpen}`,

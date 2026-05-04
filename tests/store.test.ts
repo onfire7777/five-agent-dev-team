@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MemoryStore,
   PostgresStore,
@@ -11,6 +11,14 @@ import {
   type MemoryRecord,
   type StageArtifact
 } from "../packages/shared/src";
+
+beforeEach(() => {
+  vi.stubEnv("AGENT_TEAM_CONFIG", "__missing_agent_team_config_for_store_tests__.yaml");
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 async function seedScanScope(store: ControllerStore, repoName: string): Promise<StrictProjectScope> {
   await store.upsertProjectConnection({
