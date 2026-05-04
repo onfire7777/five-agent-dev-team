@@ -379,7 +379,7 @@ export class MemoryStore implements ControllerStore {
     const filtered = projectId
       ? (() => {
           const workItemsById = new Map(this.workItems.map((item) => [item.id, item.projectId]));
-          return sorted.filter((event) => event.workItemId && workItemsById.get(event.workItemId) === projectId);
+          return sorted.filter((event) => eventMatchesProject(event, workItemsById, projectId));
         })()
       : sorted;
     if (afterSequence <= 0) return filtered.slice(-normalizedLimit);
@@ -925,8 +925,12 @@ export class PostgresStore extends MemoryStore {
         `select payload from (
            select agent_events.payload, agent_events.sequence
            from agent_events
-           join work_items on work_items.id = agent_events.work_item_id
-           where work_items.payload ->> 'projectId' = $1
+           left join work_items on work_items.id = agent_events.work_item_id
+           where agent_events.payload ->> 'projectId' = $1
+              or (
+                agent_events.payload ->> 'projectId' is null
+                and work_items.payload ->> 'projectId' = $1
+              )
            order by agent_events.sequence desc
            limit $2
          ) recent_events
@@ -938,9 +942,15 @@ export class PostgresStore extends MemoryStore {
     }
     const result = await this.pool.query(
       `select agent_events.payload from agent_events
-       join work_items on work_items.id = agent_events.work_item_id
+       left join work_items on work_items.id = agent_events.work_item_id
        where agent_events.sequence > $1
-         and work_items.payload ->> 'projectId' = $2
+         and (
+           agent_events.payload ->> 'projectId' = $2
+           or (
+             agent_events.payload ->> 'projectId' is null
+             and work_items.payload ->> 'projectId' = $2
+           )
+         )
        order by agent_events.sequence asc
        limit $3`,
       [afterSequence, projectId, normalizedLimit]
@@ -1736,6 +1746,15 @@ function isSameLiveMemoryKey(left: MemoryRecord, right: MemoryRecord): boolean {
     (left.workItemId || "") === (right.workItemId || "") &&
     (left.agent || "") === (right.agent || "")
   );
+}
+
+function eventMatchesProject(
+  event: AgentEvent,
+  workItemsById: Map<string, string | undefined>,
+  projectId: string
+): boolean {
+  if (event.projectId !== undefined) return event.projectId === projectId;
+  return Boolean(event.workItemId && workItemsById.get(event.workItemId) === projectId);
 }
 
 function sortProjectConnections(connections: ProjectConnection[]): ProjectConnection[] {

@@ -138,18 +138,8 @@ describe("controller store workflow claims", () => {
 
   it("filters events by projectId and excludes unscoped events", async () => {
     const store = new MemoryStore();
-    await store.upsertProjectConnection({
-      repoOwner: "owner",
-      repoName: "repo-a",
-      localPath: "C:/repos/repo-a",
-      active: true
-    });
-    await store.upsertProjectConnection({
-      repoOwner: "owner",
-      repoName: "repo-b",
-      localPath: "C:/repos/repo-b",
-      active: true
-    });
+    const scopeA = await seedScanScope(store, "repo-a");
+    const scopeB = await seedScanScope(store, "repo-b");
 
     const workItemA = await store.createWorkItem({
       title: "Project A event",
@@ -161,8 +151,8 @@ describe("controller store workflow claims", () => {
       frontendNeeded: true,
       backendNeeded: true,
       rndNeeded: true,
-      projectId: "owner-repo-a",
-      repo: "owner/repo-a"
+      projectId: scopeA.projectId,
+      repo: scopeA.repo
     });
     const workItemB = await store.createWorkItem({
       title: "Project B event",
@@ -174,8 +164,8 @@ describe("controller store workflow claims", () => {
       frontendNeeded: true,
       backendNeeded: true,
       rndNeeded: true,
-      projectId: "owner-repo-b",
-      repo: "owner/repo-b"
+      projectId: scopeB.projectId,
+      repo: scopeB.repo
     });
 
     const eventA = await store.addEvent({
@@ -194,14 +184,30 @@ describe("controller store workflow claims", () => {
       type: "stage_completed",
       message: "Project B event"
     });
+    const directEventA = await store.addEvent({
+      projectId: scopeA.projectId,
+      repo: scopeA.repo,
+      level: "info",
+      type: "system",
+      message: "Project A direct system event"
+    });
     await store.addEvent({
       level: "info",
       type: "system",
       message: "Unscoped event"
     });
+    const directEventB = await store.addEvent({
+      projectId: scopeB.projectId,
+      repo: scopeB.repo,
+      level: "info",
+      type: "system",
+      message: "Project B direct system event"
+    });
 
-    await expect(store.listEvents(0, 10, workItemA.projectId)).resolves.toEqual([eventA]);
-    await expect(store.listEvents(0, 10, workItemB.projectId)).resolves.toEqual([eventB]);
+    await expect(store.listEvents(0, 10, scopeA.projectId)).resolves.toEqual([eventA, directEventA]);
+    await expect(store.listEvents(0, 10, scopeB.projectId)).resolves.toEqual([eventB, directEventB]);
+    await expect(store.listEvents(0, 1, scopeA.projectId)).resolves.toEqual([directEventA]);
+    await expect(store.listEvents(eventA.sequence, 10, scopeA.projectId)).resolves.toEqual([directEventA]);
   });
 
   it("keeps project connections isolated and allows one team per repo", async () => {
