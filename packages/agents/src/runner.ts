@@ -817,19 +817,11 @@ function parseLiveArtifact(
 }
 
 function parseJsonObject(rawOutput: string): unknown {
-  const fenced = rawOutput.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const candidate = fenced?.[1] || rawOutput;
   try {
-    return JSON.parse(candidate);
+    const parsed = JSON.parse(rawOutput);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
   } catch {
-    const start = candidate.indexOf("{");
-    const end = candidate.lastIndexOf("}");
-    if (start === -1 || end <= start) return null;
-    try {
-      return JSON.parse(candidate.slice(start, end + 1));
-    } catch {
-      return null;
-    }
+    return null;
   }
 }
 
