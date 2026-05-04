@@ -10,7 +10,7 @@ on:
     - cron: "55 * * * *"
     - cron: "59 * * * *"
   workflow_run:
-    workflows: ["Codex Cloud Research", "CI"]
+    workflows: ["CI"]
     types: [completed]
   workflow_dispatch:
     inputs:
@@ -74,9 +74,6 @@ jobs:
             const stageInput = context.payload.inputs?.stage;
             let stage = stageInput || scheduleToStage.get(context.payload.schedule);
             const force = context.payload.inputs?.force === "true" || context.payload.inputs?.force === true;
-            const autoFromResearch =
-              context.eventName === "workflow_run" &&
-              context.payload.workflow_run?.name === "Codex Cloud Research";
             const autoFromCi =
               context.eventName === "workflow_run" &&
               context.payload.workflow_run?.name === "CI";
@@ -177,39 +174,7 @@ jobs:
               }
             };
 
-            if (autoFromResearch) {
-              if (context.payload.workflow_run.conclusion !== "success") {
-                core.setOutput("stage", "auto");
-                core.setOutput("stage_display", "Research handoff");
-                core.setOutput("should_run", "false");
-                core.setOutput("reason", `Research run ended with ${context.payload.workflow_run.conclusion || "unknown"}`);
-                return;
-              }
-
-              const queuedTargets = openIssues
-                .filter((issue) => issue.labels.some((label) => label.name === "agent:queued"))
-                .filter((issue) => issue.labels.some((label) => label.name === "execution:codex-cloud"))
-                .map((issue) => {
-                  return { issue, lane: inferIssueLane(issue) };
-                })
-                .filter((item) => laneOrder.includes(item.lane))
-                .sort((a, b) => {
-                  const laneDelta = laneOrder.indexOf(a.lane) - laneOrder.indexOf(b.lane);
-                  if (laneDelta !== 0) return laneDelta;
-                  return new Date(a.issue.created_at) - new Date(b.issue.created_at);
-                });
-
-              if (!queuedTargets.length) {
-                core.setOutput("stage", "auto");
-                core.setOutput("stage_display", "Research handoff");
-                core.setOutput("should_run", "false");
-                core.setOutput("reason", "Research completed without a queued codex-cloud lane issue");
-                return;
-              }
-
-              stage = queuedTargets[0].lane;
-              await syncLaneLabels(queuedTargets[0].issue, stage);
-            } else if (autoFromCi) {
+            if (autoFromCi) {
               if (context.payload.workflow_run.conclusion !== "success") {
                 core.setOutput("stage", "captain");
                 core.setOutput("stage_display", "Captain Integrator");
@@ -484,6 +449,7 @@ jobs:
 
       - name: Run Codex cloud build stage
         id: run_codex
+        continue-on-error: true
         if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'issue' && env.OPENAI_API_KEY != ''
         uses: openai/codex-action@a26d2d4d8b78a694338b8e3715c3630254340b2c
         with:
@@ -513,6 +479,7 @@ jobs:
             - Stay inside owned files: ${{ steps.gate.outputs.owned_files }}.
             - This GitHub Actions run already claimed the issue with GitHub labels. Do not require local Windows state files under C:\Users\burni\.codex, and do not block only because those local control files are absent in the cloud runner.
             - Treat the checked-out GitHub Actions workspace as the authoritative branch context. Do not run git fetch if the cloud checkout refuses writes to .git/FETCH_HEAD.
+            - Do not enumerate $HOME/.codex, broad filesystem trees, or unrelated generated/cache directories. Inspect only repository files needed for the target issue.
             - Keep the diff bounded and avoid unrelated cleanup.
             - Do not print secrets, weaken security gates, change branch protection, or push main.
             - Do not invent unqueued feature scope.

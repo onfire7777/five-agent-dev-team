@@ -12,7 +12,7 @@ on:
         type: boolean
 
 permissions:
-  actions: read
+  actions: write
   contents: read
   issues: write
   pull-requests: read
@@ -178,6 +178,7 @@ jobs:
             Score: <22-30>/30
 
       - name: Create or refresh queue issue
+        id: queue_issue
         if: steps.run_codex.outputs.final-message != ''
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
         env:
@@ -189,6 +190,7 @@ jobs:
             await core.summary.addRaw(`## Codex Cloud Research Output\n\n${output}`).write();
 
             if (!/^QUEUE_ITEM_READY:\s*yes\s*$/im.test(output)) {
+              core.setOutput("queue_ready", "false");
               core.notice("Codex did not produce a queue item.");
               return;
             }
@@ -259,16 +261,42 @@ jobs:
                 body,
                 labels
               });
+              core.setOutput("queue_ready", "true");
+              core.setOutput("issue_number", String(existing.number));
+              core.setOutput("lane", lane);
               return;
             }
 
-            await github.rest.issues.create({
+            const created = await github.rest.issues.create({
               owner,
               repo,
               title: issueTitle,
               body,
               labels
             });
+            core.setOutput("queue_ready", "true");
+            core.setOutput("issue_number", String(created.data.number));
+            core.setOutput("lane", lane);
+
+      - name: Dispatch build for queued issue
+        if: steps.queue_issue.outputs.queue_ready == 'true'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const lane = "${{ steps.queue_issue.outputs.lane }}";
+            const issueNumber = "${{ steps.queue_issue.outputs.issue_number }}";
+            await github.rest.actions.createWorkflowDispatch({
+              owner,
+              repo,
+              workflow_id: "codex-cloud-build-pipeline.yml",
+              ref: "main",
+              inputs: {
+                stage: lane,
+                force: "false"
+              }
+            });
+            core.notice(`Dispatched Codex Cloud Build Pipeline for issue #${issueNumber} lane=${lane}`);
 
       - name: Upload Codex research output
         if: always() && contains(steps.gate.outputs.result, '"run":true')
