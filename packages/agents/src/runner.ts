@@ -1,5 +1,10 @@
+import fs from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import path from "node:path";
+import { z } from "zod";
 import type { AgentDefinition } from "./definitions";
 import type {
+  AgentEvent,
   McpServerConfig,
   MemoryRecord,
   StageArtifact,
@@ -8,7 +13,7 @@ import type {
   WorkItemState
 } from "../../shared/src";
 import { assembleCanonicalPrompt } from "./prompt";
-import { loadTriggeredSkills, type LoadedSkill } from "./skills";
+import { loadSkillById, loadTriggeredSkills, type LoadedSkill } from "./skills";
 import {
   DEFAULT_SCHEDULER_POLICY,
   githubToken,
@@ -25,6 +30,12 @@ export interface TeamBusMessage {
   message: string;
 }
 
+export type AgentToolEventInput = {
+  level: AgentEvent["level"];
+  type: AgentEvent["type"] | "agent.blocked";
+  message: string;
+};
+
 export interface AgentRunContext {
   workItem: WorkItem;
   stage: WorkItemState;
@@ -36,6 +47,7 @@ export interface AgentRunContext {
   teamMessages?: TeamBusMessage[];
   teamDirection?: string[];
   loopContext?: string[];
+  emitEvent?: (event: AgentToolEventInput) => Promise<void>;
 }
 
 export interface AgentRunResult {
@@ -61,6 +73,47 @@ type ConfiguredHostedTool = {
   id: string;
   tool: any;
 };
+
+const BUILT_IN_TOOL_IDS = [
+  "builtin:memory.search",
+  "builtin:repo.context.read",
+  "builtin:artifact.write",
+  "builtin:event.emit",
+  "builtin:skill.load"
+];
+const MAX_MEMORY_RESULTS = 10;
+const DEFAULT_MEMORY_RESULTS = 5;
+const MAX_CONTEXT_FILES = 20;
+const MAX_CONTEXT_FILE_BYTES = 12_000;
+
+const MemorySearchInputSchema = z.object({
+  query: z.string().default(""),
+  limit: z.number().int().min(1).max(MAX_MEMORY_RESULTS).default(DEFAULT_MEMORY_RESULTS)
+});
+const RepoContextReadInputSchema = z.object({
+  path: z.string().trim().optional()
+});
+const ArtifactWriteInputSchema = z.object({}).passthrough();
+const EventEmitInputSchema = z.object({
+  level: z.enum(["info", "warn", "error"]).default("info"),
+  type: z
+    .enum([
+      "workflow_claimed",
+      "stage_started",
+      "stage_completed",
+      "stage_failed",
+      "verification",
+      "release",
+      "scheduler",
+      "system",
+      "agent.blocked"
+    ])
+    .default("system"),
+  message: z.string().trim().min(1).max(2_000)
+});
+const SkillLoadInputSchema = z.object({
+  id: z.string().trim().min(1)
+});
 
 export async function runRoleAgent(definition: AgentDefinition, context: AgentRunContext): Promise<AgentRunResult> {
   const policy = {
@@ -158,8 +211,16 @@ async function runLiveOpenAIAgentWithModel(
         }
       )
     : null;
-  const capabilityIds = runtimeCapabilityIds(configuredMcpServers, mcpSession?.active || [], hostedTools);
+  const builtInCapabilityIds = canRegisterBuiltInTools(sdk) ? BUILT_IN_TOOL_IDS : [];
+  const capabilityIds = runtimeCapabilityIds(
+    configuredMcpServers,
+    mcpSession?.active || [],
+    hostedTools,
+    builtInCapabilityIds
+  );
   const preparation = await prepareAgentRun(definition, context, model, capabilityIds);
+  const artifactCapture: { artifact: StageArtifact | null } = { artifact: null };
+  const builtInTools = createBuiltInTools(sdk, definition, context, preparation, artifactCapture);
 
   try {
     const agent = new AgentCtor({
@@ -167,12 +228,13 @@ async function runLiveOpenAIAgentWithModel(
       instructions: definition.instructions,
       model,
       mcpServers: mcpSession?.active || [],
-      tools: hostedTools.map(({ tool }) => tool)
+      tools: [...hostedTools.map(({ tool }) => tool), ...builtInTools.map(({ tool }) => tool)]
     });
 
     const result = await run(agent, preparation.prompt);
     const rawOutput = String(result?.finalOutput ?? result?.output ?? result ?? "");
     const artifact =
+      artifactCapture.artifact ||
       parseLiveArtifact(definition, context, rawOutput, preparation) ||
       createInvalidLiveArtifact(definition, context, rawOutput, preparation);
     return { artifact, rawOutput, live: true };
@@ -232,15 +294,370 @@ function createHostedTools(sdk: any, definition: AgentDefinition, context: Agent
   ];
 }
 
+function canRegisterBuiltInTools(sdk: any): boolean {
+  return typeof sdk.tool === "function" && typeof sdk.toolNamespace === "function";
+}
+
+function createBuiltInTools(
+  sdk: any,
+  definition: AgentDefinition,
+  context: AgentRunContext,
+  preparation: AgentRunPreparation,
+  artifactCapture: { artifact: StageArtifact | null }
+): ConfiguredHostedTool[] {
+  if (!canRegisterBuiltInTools(sdk)) return [];
+
+  const memorySearch = sdk.tool({
+    name: "search",
+    description: "Search scoped durable memory from the current project, repository, work item, or agent.",
+    parameters: MemorySearchInputSchema,
+    execute: async (input: unknown) => searchScopedMemories(context, definition, input)
+  });
+  const repoContextRead = sdk.tool({
+    name: "read",
+    description: "Read files from the configured repo context directory only.",
+    parameters: RepoContextReadInputSchema,
+    execute: async (input: unknown) => readRepoContext(context, input)
+  });
+  const artifactWrite = sdk.tool({
+    name: "write",
+    description: "Validate and capture exactly one StageArtifact for this run.",
+    parameters: ArtifactWriteInputSchema,
+    execute: async (input: unknown) => writeStageArtifact(definition, context, preparation, artifactCapture, input)
+  });
+  const eventEmit = sdk.tool({
+    name: "emit",
+    description: "Emit a scoped workflow event through the current activity handler.",
+    parameters: EventEmitInputSchema,
+    execute: async (input: unknown) => emitScopedEvent(context, input)
+  });
+  const skillLoad = sdk.tool({
+    name: "load",
+    description: "Load one skill by id when it is allowed for the current agent role.",
+    parameters: SkillLoadInputSchema,
+    execute: async (input: unknown) => loadAllowedSkill(definition, context, input)
+  });
+
+  return [
+    ...namespaceTool(sdk, "memory", "Project, repository, work-item, and agent-scoped memory tools.", [
+      { id: "builtin:memory.search", tool: memorySearch }
+    ]),
+    ...namespaceTool(sdk, "repo_context", "Curated connected-repository context tools.", [
+      { id: "builtin:repo.context.read", tool: repoContextRead }
+    ]),
+    ...namespaceTool(sdk, "artifact", "Validated stage artifact tools.", [
+      { id: "builtin:artifact.write", tool: artifactWrite }
+    ]),
+    ...namespaceTool(sdk, "event", "Scoped workflow event tools.", [{ id: "builtin:event.emit", tool: eventEmit }]),
+    ...namespaceTool(sdk, "skill", "Audience-checked skill loading tools.", [
+      { id: "builtin:skill.load", tool: skillLoad }
+    ])
+  ];
+}
+
+function namespaceTool(
+  sdk: any,
+  name: string,
+  description: string,
+  tools: ConfiguredHostedTool[]
+): ConfiguredHostedTool[] {
+  const namespaced = sdk.toolNamespace({
+    name,
+    description,
+    tools: tools.map(({ tool }) => tool)
+  });
+  return tools.map(({ id }, index) => ({ id, tool: namespaced[index] }));
+}
+
+function searchScopedMemories(context: AgentRunContext, definition: AgentDefinition, input: unknown) {
+  const { query, limit } = MemorySearchInputSchema.parse(input);
+  const needle = query.trim().toLowerCase();
+  const records = (context.memories || [])
+    .filter((memory) => memoryMatchesScope(memory, context.workItem, definition))
+    .filter((memory) => {
+      if (!needle) return true;
+      return [memory.title, memory.content, memory.kind, memory.key, ...(memory.tags || [])]
+        .filter(Boolean)
+        .join("\n")
+        .toLowerCase()
+        .includes(needle);
+    })
+    .sort((a, b) => b.importance - a.importance || b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, limit)
+    .map((memory) => ({
+      id: memory.id,
+      scope: memory.scope,
+      kind: memory.kind,
+      title: memory.title,
+      content: memory.content.slice(0, 2_000),
+      tags: memory.tags,
+      confidence: memory.confidence,
+      importance: memory.importance,
+      updatedAt: memory.updatedAt
+    }));
+
+  return {
+    query,
+    limit,
+    count: records.length,
+    records
+  };
+}
+
+function memoryMatchesScope(memory: MemoryRecord, workItem: WorkItem, definition: AgentDefinition): boolean {
+  if (memory.projectId && memory.projectId !== workItem.projectId) return false;
+  if (memory.repo && memory.repo !== workItem.repo) return false;
+  if (memory.workItemId && memory.workItemId !== workItem.id) return false;
+  if (memory.agent && memory.agent !== definition.role) return false;
+
+  if (memory.scope === "work_item") return memory.workItemId === workItem.id;
+  if (memory.scope === "repo") return Boolean(workItem.repo && memory.repo === workItem.repo);
+  if (memory.scope === "agent") return memory.agent === definition.role;
+  return false;
+}
+
+async function readRepoContext(
+  context: AgentRunContext,
+  input: unknown
+): Promise<{
+  root: string;
+  files?: string[];
+  path?: string;
+  content?: string;
+  truncated?: boolean;
+}> {
+  const { path: requestedPath } = RepoContextReadInputSchema.parse(input);
+  const root = repoContextRoot(context);
+  if (!requestedPath) {
+    return {
+      root: displayRepoContextRoot(context),
+      files: await listContextFiles(root)
+    };
+  }
+
+  const relativePath = normalizeRequestedContextPath(context, requestedPath);
+  const resolved = path.resolve(root, relativePath);
+  assertInside(root, resolved, "repo.context.read path escapes the configured context directory.");
+  const buffer = await readRegularContextFile(resolved);
+  const truncated = buffer.byteLength > MAX_CONTEXT_FILE_BYTES;
+  const content = buffer.subarray(0, MAX_CONTEXT_FILE_BYTES).toString("utf8");
+  return {
+    root: displayRepoContextRoot(context),
+    path: toPosixPath(path.relative(root, resolved)),
+    content,
+    truncated
+  };
+}
+
+async function readRegularContextFile(resolved: string): Promise<Buffer> {
+  const handle = await fs.open(resolved, readOnlyNoFollowFlags());
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
+      throw new Error("repo.context.read can read regular context files only.");
+    }
+    return await handle.readFile();
+  } finally {
+    await handle.close();
+  }
+}
+
+async function writeStageArtifact(
+  definition: AgentDefinition,
+  context: AgentRunContext,
+  preparation: AgentRunPreparation,
+  artifactCapture: { artifact: StageArtifact | null },
+  input: unknown
+) {
+  if (artifactCapture.artifact) {
+    throw new Error("artifact.write was already called for this run.");
+  }
+  const record = normalizeRecord(input, "artifact.write");
+  assertArtifactScope(record, context, definition);
+  const summary =
+    typeof record.summary === "string" && record.summary.trim() ? record.summary : "Stage artifact captured.";
+  const bodyJson =
+    typeof record.bodyJson === "object" && record.bodyJson !== null && !Array.isArray(record.bodyJson)
+      ? record.bodyJson
+      : record;
+  const artifact = StageArtifactSchema.parse({
+    ...record,
+    workItemId: context.workItem.id,
+    projectId: context.workItem.projectId,
+    repo: context.workItem.repo,
+    stage: context.stage,
+    ownerAgent: definition.role,
+    title:
+      typeof record.title === "string" && record.title.trim()
+        ? record.title
+        : `${definition.shortName} artifact for ${context.stage}`,
+    summary,
+    nextStage:
+      typeof record.nextStage === "string" || record.nextStage === null
+        ? record.nextStage
+        : inferNextStage(context.stage, context.workItem),
+    promptHash: preparation.promptHash,
+    skillIds: preparation.skills.map((skill) => skill.id),
+    capabilityIds: preparation.capabilityIds,
+    bodyMd:
+      typeof record.bodyMd === "string" && record.bodyMd.trim()
+        ? record.bodyMd
+        : `## ${String(record.title || definition.shortName)}\n\n${summary}`,
+    bodyJson,
+    createdAt: typeof record.createdAt === "string" ? record.createdAt : new Date().toISOString()
+  });
+  artifactCapture.artifact = artifact;
+  return {
+    status: "captured",
+    artifactId: artifact.artifactId,
+    workItemId: artifact.workItemId,
+    stage: artifact.stage
+  };
+}
+
+async function emitScopedEvent(context: AgentRunContext, input: unknown) {
+  if (!context.emitEvent) {
+    throw new Error("event.emit is unavailable for this agent run.");
+  }
+  const event = EventEmitInputSchema.parse(input);
+  await context.emitEvent({
+    level: event.level,
+    type: event.type,
+    message: event.message
+  });
+  return { status: "emitted", type: event.type };
+}
+
+async function loadAllowedSkill(definition: AgentDefinition, context: AgentRunContext, input: unknown) {
+  const { id } = SkillLoadInputSchema.parse(input);
+  const skill = await loadSkillById(
+    {
+      workItem: context.workItem,
+      stage: context.stage,
+      agent: definition.role,
+      targetRepoConfig: context.targetRepoConfig
+    },
+    id
+  );
+  return {
+    id: skill.id,
+    name: skill.name,
+    audience: skill.audience,
+    priority: skill.priority,
+    body: skill.body
+  };
+}
+
+function normalizeRecord(input: unknown, label: string): Record<string, unknown> {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new Error(`${label} requires an object input.`);
+  }
+  return input as Record<string, unknown>;
+}
+
+function assertArtifactScope(
+  record: Record<string, unknown>,
+  context: AgentRunContext,
+  definition: AgentDefinition
+): void {
+  assertScopeField(record, "workItemId", context.workItem.id);
+  assertScopeField(record, "projectId", context.workItem.projectId);
+  assertScopeField(record, "repo", context.workItem.repo);
+  assertScopeField(record, "stage", context.stage);
+  assertScopeField(record, "ownerAgent", definition.role);
+}
+
+function assertScopeField(record: Record<string, unknown>, field: string, expected: string | undefined): void {
+  const actual = record[field];
+  if (typeof actual === "undefined") return;
+  if (!expected || String(actual) !== expected) {
+    throw new Error(`artifact.write rejected mismatched ${field}.`);
+  }
+}
+
+function repoContextRoot(context: AgentRunContext): string {
+  const repoLocalPath = context.targetRepoConfig?.repo.localPath?.trim();
+  if (!repoLocalPath) {
+    throw new Error("repo.context.read is unavailable because no connected repository context is configured.");
+  }
+  const repoRoot = path.resolve(repoLocalPath);
+  const contextDir = context.targetRepoConfig?.context.defaultContextDir || ".agent-team/context";
+  const root = path.resolve(repoRoot, contextDir);
+  assertInside(repoRoot, root, "Configured context directory escapes the connected repository.");
+  return root;
+}
+
+function displayRepoContextRoot(context: AgentRunContext): string {
+  return toPosixPath(context.targetRepoConfig?.context.defaultContextDir || ".agent-team/context");
+}
+
+function normalizeRequestedContextPath(context: AgentRunContext, requestedPath: string): string {
+  if (path.isAbsolute(requestedPath)) {
+    throw new Error("repo.context.read requires a relative context path.");
+  }
+  const contextDir = toPosixPath(context.targetRepoConfig?.context.defaultContextDir || ".agent-team/context");
+  let normalized = toPosixPath(requestedPath).replace(/^\/+/, "");
+  if (normalized === contextDir) return "";
+  if (normalized.startsWith(`${contextDir}/`)) {
+    normalized = normalized.slice(contextDir.length + 1);
+  }
+  return normalized;
+}
+
+async function listContextFiles(root: string): Promise<string[]> {
+  const files: string[] = [];
+  await collectContextFiles(root, root, files);
+  return files.slice(0, MAX_CONTEXT_FILES);
+}
+
+async function collectContextFiles(root: string, current: string, files: string[]): Promise<void> {
+  if (files.length >= MAX_CONTEXT_FILES) return;
+  let entries: Array<import("node:fs").Dirent>;
+  try {
+    entries = await fs.readdir(current, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (files.length >= MAX_CONTEXT_FILES) return;
+    const fullPath = path.join(current, entry.name);
+    if (entry.isSymbolicLink()) continue;
+    if (entry.isDirectory()) {
+      await collectContextFiles(root, fullPath, files);
+    } else if (entry.isFile()) {
+      assertInside(root, fullPath, "repo.context.read found a file outside the context directory.");
+      files.push(toPosixPath(path.relative(root, fullPath)));
+    }
+  }
+}
+
+function assertInside(root: string, candidate: string, message: string): void {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(message);
+  }
+}
+
+function readOnlyNoFollowFlags(): number {
+  const noFollow = (fsConstants as Record<string, number | undefined>).O_NOFOLLOW ?? 0;
+  return fsConstants.O_RDONLY | noFollow;
+}
+
+function toPosixPath(value: string): string {
+  return value.replace(/\\/g, "/");
+}
+
 function runtimeCapabilityIds(
   configuredMcpServers: ConfiguredMcpServer[],
   activeMcpServers: any[],
-  hostedTools: ConfiguredHostedTool[]
+  hostedTools: ConfiguredHostedTool[],
+  builtInToolIds: string[] = []
 ): string[] {
   const active = new Set(activeMcpServers);
   return [
     ...configuredMcpServers.filter(({ server }) => active.has(server)).map(({ id }) => id),
-    ...hostedTools.map(({ id }) => id)
+    ...hostedTools.map(({ id }) => id),
+    ...builtInToolIds
   ];
 }
 

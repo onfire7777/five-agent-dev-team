@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { assembleCanonicalPrompt, getAgentDefinition, loadTriggeredSkills, runRoleAgent } from "../packages/agents/src";
+import {
+  assembleCanonicalPrompt,
+  getAgentDefinition,
+  loadSkillById,
+  loadTriggeredSkills,
+  runRoleAgent
+} from "../packages/agents/src";
 import type { WorkItem } from "../packages/shared/src";
 
 const liveEnvKeys = ["AGENT_LIVE_MODE", "AGENT_EXECUTION_MODE", "AGENT_MODEL", "OPENAI_API_KEY"] as const;
@@ -45,6 +51,7 @@ describe("agent prompt and skills", () => {
     const blocks = [...result.prompt.matchAll(/<<< BLOCK: ([a-z_]+) >>>/g)].map((match) => match[1]);
     expect(blocks).toEqual(["identity", "nonnegotiables", "context", "skills", "tools", "task", "output_contract"]);
     expect(result.prompt).toContain("API contract is ready for frontend consumption.");
+    expect(result.prompt).toContain("repo_context.read");
     expect(result.prompt).not.toContain("accompanying Markdown");
     expect(result.prompt).not.toContain("Markdown body: required");
     expect(result.promptHash).toMatch(/^[a-f0-9]{64}$/);
@@ -64,6 +71,30 @@ describe("agent prompt and skills", () => {
     expect(ids).toContain("react-component-design");
     expect(ids).toContain("accessibility-wcag");
     expect(ids).not.toContain("api-contract-design");
+  });
+
+  it("loads one explicit skill only when the current role is in its audience", async () => {
+    await expect(
+      loadSkillById(
+        {
+          workItem,
+          stage: "BACKEND_BUILD",
+          agent: "backend-systems-engineering"
+        },
+        "api-contract-design"
+      )
+    ).resolves.toMatchObject({ id: "api-contract-design", audience: ["backend-systems-engineering"] });
+
+    await expect(
+      loadSkillById(
+        {
+          workItem,
+          stage: "FRONTEND_BUILD",
+          agent: "frontend-ux-engineering"
+        },
+        "api-contract-design"
+      )
+    ).rejects.toThrow(/not available/);
   });
 
   it("records prompt, skill, and capability provenance on artifacts", async () => {
