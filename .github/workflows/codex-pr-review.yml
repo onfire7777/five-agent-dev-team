@@ -49,6 +49,7 @@ jobs:
           sandbox: read-only
           safety-strategy: drop-sudo
           allow-users: onfire7777
+          allow-bots: true
           output-file: codex-output.md
           prompt: |
             This is PR #${{ github.event.pull_request.number }} for ${{ github.repository }}.

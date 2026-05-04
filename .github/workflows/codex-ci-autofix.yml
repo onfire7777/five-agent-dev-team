@@ -57,6 +57,7 @@ jobs:
           sandbox: workspace-write
           safety-strategy: drop-sudo
           allow-users: onfire7777
+          allow-bots: true
           output-file: codex-output.md
           prompt: |
             Target: ${{ inputs.target }}

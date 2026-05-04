@@ -140,6 +140,7 @@ jobs:
           sandbox: read-only
           safety-strategy: drop-sudo
           allow-users: onfire7777
+          allow-bots: true
           output-file: codex-output.md
           prompt: |
             You are Stage 0 R&D for onfire7777/five-agent-dev-team.
