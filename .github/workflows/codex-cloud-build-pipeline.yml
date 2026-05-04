@@ -8,7 +8,7 @@ on:
     - cron: "35 * * * *"
     - cron: "45 * * * *"
     - cron: "55 * * * *"
-    - cron: "59 * * * *"
+    - cron: "57 * * * *"
   workflow_run:
     workflows: ["CI"]
     types: [completed]
@@ -69,7 +69,7 @@ jobs:
               ["35 * * * *", "security"],
               ["45 * * * *", "docs"],
               ["55 * * * *", "captain"],
-              ["59 * * * *", "janitor"]
+              ["57 * * * *", "janitor"]
             ]);
             const stageInput = context.payload.inputs?.stage;
             let stage = stageInput || scheduleToStage.get(context.payload.schedule);

@@ -2,7 +2,7 @@ name: Codex Cloud Meta Health
 
 on:
   schedule:
-    - cron: "57 * * * *"
+    - cron: "59 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -257,6 +257,61 @@ jobs:
               .filter((item) => laneOrder.includes(item.lane))
               .sort((a, b) => new Date(a.issue.created_at) - new Date(b.issue.created_at));
 
+            let latestResearchRun = null;
+            try {
+              const researchRuns = await github.request(
+                "GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs",
+                {
+                  owner,
+                  repo,
+                  workflow_id: "codex-cloud-research.yml",
+                  branch: "main",
+                  per_page: 20
+                }
+              );
+              latestResearchRun =
+                researchRuns.data.workflow_runs?.find((run) => run.status === "completed") || null;
+              if (!latestResearchRun) {
+                warnings.push({
+                  class: "advisory",
+                  title: "Codex Cloud Research has no observed runs",
+                  detail: "No recent research workflow run was returned by the GitHub Actions API."
+                });
+              } else {
+                const ageMs = Date.now() - new Date(latestResearchRun.created_at).getTime();
+                const runUrl = latestResearchRun.html_url;
+                if (latestResearchRun.status === "completed" && latestResearchRun.conclusion !== "success") {
+                  const finding = {
+                    class: "globalStop",
+                    title: "Codex Cloud Research is failing",
+                    detail: `Latest research run ${latestResearchRun.id} concluded ${latestResearchRun.conclusion}; inspect ${runUrl}.`
+                  };
+                  if (!blockingOpenPrs.length && !queueIssues.length) {
+                    blockers.push(finding);
+                  } else {
+                    warnings.push({
+                      ...finding,
+                      class: "advisory",
+                      detail: `${finding.detail} Existing PR or queue work can continue, but new queue generation is impaired.`
+                    });
+                  }
+                }
+                if (ageMs > 3 * 60 * 60 * 1000) {
+                  warnings.push({
+                    class: "advisory",
+                    title: "Codex Cloud Research schedule may be stale",
+                    detail: `Latest research run ${latestResearchRun.id} started at ${latestResearchRun.created_at}, more than three hours ago.`
+                  });
+                }
+              }
+            } catch (error) {
+              warnings.push({
+                class: "advisory",
+                title: "Codex Cloud Research run lookup unavailable",
+                detail: `Research workflow run lookup failed: ${error.status || "unknown"}.`
+              });
+            }
+
             if (!blockingOpenPrs.length && !queueIssues.length && retryableBlockedIssues.length) {
               const { issue, lane } = retryableBlockedIssues[0];
               const labels = labelNamesFor(issue);
@@ -344,6 +399,11 @@ jobs:
               `Blocking PRs: ${blockingOpenPrs.length}`,
               `Open queued/running agent issues: ${queueIssues.length}`,
               `Retryable blocked lane-stop issues: ${retryableBlockedIssues.length}`,
+              `Latest research run: ${
+                latestResearchRun
+                  ? `${latestResearchRun.id} ${latestResearchRun.status}/${latestResearchRun.conclusion || "pending"} at ${latestResearchRun.created_at}`
+                  : "unavailable"
+              }`,
               `Open Dependabot alerts: ${dependabotOpen === null ? "unavailable" : dependabotOpen}`,
               "",
               blockers.length
