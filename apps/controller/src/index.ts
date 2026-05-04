@@ -322,6 +322,8 @@ app.post("/api/team-bus", async (req, res, next) => {
     const message = await store.addTeamBusMessage(scope, input);
     await store.addEvent({
       workItemId: message.workItemId,
+      projectId: scope.projectId,
+      repo: scope.repo,
       level: message.kind === "blocker" ? "warn" : "info",
       type: "system",
       message: `Team bus ${message.kind}: ${message.topic}`
@@ -495,6 +497,8 @@ app.post("/api/projects/:projectId/direction", async (req, res, next) => {
       acceptanceCriteria: []
     });
     await store.addEvent({
+      projectId: scope.projectId,
+      repo: scope.repo,
       level: "info",
       type: "system",
       message: `${title} saved for ${scope.repo}.`
@@ -853,6 +857,8 @@ app.post("/api/projects", async (req, res, next) => {
     if (candidate.active) await writeTargetRepoConfig(candidate);
     const project = await store.upsertProjectConnection({ ...input, ...diagnostics });
     await store.addEvent({
+      projectId: project.projectId,
+      repo: project.repo,
       level: project.status === "connected" ? "info" : "warn",
       type: "system",
       message: `Connected project ${project.name} to ${project.repo}; GitHub status=${project.status}.`
@@ -873,6 +879,8 @@ app.post("/api/projects/:id/activate", async (req, res, next) => {
     await writeTargetRepoConfig(candidate);
     const project = await store.upsertProjectConnection({ ...activeInput, ...diagnostics });
     await store.addEvent({
+      projectId: project.projectId,
+      repo: project.repo,
       level: project.status === "connected" ? "info" : "warn",
       type: "system",
       message: `Activated project ${project.name} for isolated autonomous work; GitHub status=${project.status}.`
@@ -888,6 +896,8 @@ app.delete("/api/projects/:id", async (req, res, next) => {
     const project = await store.deactivateProjectConnection(req.params.id);
     await removeTargetRepoConfig(project);
     await store.addEvent({
+      projectId: project.projectId,
+      repo: project.repo,
       level: "info",
       type: "system",
       message: `Deactivated project ${project.name} for ${project.repo}.`
@@ -1711,7 +1721,9 @@ async function startWorkflowIfSafe(
     return { workflowId: null, queued: true, reason: "Work item is already claimed by a workflow." };
   }
 
+  const eventScope = workItem.projectId && workItem.repo ? { projectId: workItem.projectId, repo: workItem.repo } : {};
   await store.addEvent({
+    ...eventScope,
     workItemId: workItem.id,
     stage: "NEW",
     ownerAgent: "product-delivery-orchestrator",

@@ -279,6 +279,8 @@ export type LoopClosureSummary = z.infer<typeof LoopClosureSummarySchema>;
 export const AgentEventSchema = z.object({
   sequence: z.number().int().nonnegative().default(0),
   workItemId: z.string().min(1).optional(),
+  projectId: z.string().min(1).optional(),
+  repo: z.string().min(1).optional(),
   stage: WorkItemStateSchema.optional(),
   ownerAgent: AgentRoleSchema.optional(),
   level: z.enum(["info", "warn", "error"]).default("info"),
