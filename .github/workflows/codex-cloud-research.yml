@@ -40,10 +40,14 @@ jobs:
           script: |
             const { owner, repo } = context.repo;
             const force = context.payload.inputs?.force === "true" || context.payload.inputs?.force === true;
-            const allowedActors = new Set(["onfire7777"]);
+            const allowedActors = new Set(["onfire7777", "github-actions[bot]"]);
+            const finish = (decision) => {
+              core.notice(`Codex Cloud Research gate: ${decision.reason}`);
+              return JSON.stringify(decision);
+            };
 
             if (context.eventName === "workflow_dispatch" && !allowedActors.has(context.actor)) {
-              return JSON.stringify({
+              return finish({
                 run: false,
                 reason: `skipped: actor=${context.actor} is not allowed to run openai/codex-action`
               });
@@ -82,13 +86,13 @@ jobs:
               );
 
             if (!force && (blockingOpenPrs.length || activeQueueIssues.length)) {
-              return JSON.stringify({
+              return finish({
                 run: false,
                 reason: `skipped: blockingOpenPrs=${blockingOpenPrs.length}, dependencyPrs=${dependencyPrs.length}, activeQueueIssues=${activeQueueIssues.length}`
               });
             }
 
-            return JSON.stringify({ run: true, reason: "cloud research eligible" });
+            return finish({ run: true, reason: "cloud research eligible" });
 
       - name: Checkout
         if: contains(steps.gate.outputs.result, '"run":true')
