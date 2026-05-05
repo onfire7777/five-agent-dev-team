@@ -4,7 +4,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    # Paused by operator request. Restore a positive limit when re-enabling.
+    open-pull-requests-limit: 0
     groups:
       dev-tooling:
         dependency-type: development
@@ -14,3 +15,5 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Paused by operator request. Restore a positive limit when re-enabling.
+    open-pull-requests-limit: 0
