@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { capture } from "./verify-lib.mjs";
 
 const controlPath = join(homedir(), ".codex", "state", "five-agent-dev-team-control.json");
-const control = JSON.parse(readFileSync(controlPath, "utf8"));
+const control = existsSync(controlPath) ? JSON.parse(readFileSync(controlPath, "utf8")) : {};
 const budget = control.diffBudget || {};
 const maxFiles = Number(argValue("--max-files") || budget.maxFiles || 12);
 const maxNetLines = Number(argValue("--max-net-lines") || budget.maxNetLines || 800);

@@ -8,9 +8,9 @@ on:
     - cron: "35 * * * *"
     - cron: "45 * * * *"
     - cron: "55 * * * *"
-    - cron: "59 * * * *"
+    - cron: "57 * * * *"
   workflow_run:
-    workflows: ["Codex Cloud Research", "CI"]
+    workflows: ["CI"]
     types: [completed]
   workflow_dispatch:
     inputs:
@@ -58,7 +58,7 @@ jobs:
     steps:
       - name: Select cloud stage and target
         id: gate
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
             const { owner, repo } = context.repo;
@@ -69,14 +69,11 @@ jobs:
               ["35 * * * *", "security"],
               ["45 * * * *", "docs"],
               ["55 * * * *", "captain"],
-              ["59 * * * *", "janitor"]
+              ["57 * * * *", "janitor"]
             ]);
             const stageInput = context.payload.inputs?.stage;
             let stage = stageInput || scheduleToStage.get(context.payload.schedule);
             const force = context.payload.inputs?.force === "true" || context.payload.inputs?.force === true;
-            const autoFromResearch =
-              context.eventName === "workflow_run" &&
-              context.payload.workflow_run?.name === "Codex Cloud Research";
             const autoFromCi =
               context.eventName === "workflow_run" &&
               context.payload.workflow_run?.name === "CI";
@@ -94,6 +91,18 @@ jobs:
               state: "open",
               per_page: 100
             });
+            const isDependencyPr = (pr) => {
+              const author = pr.user?.login || "";
+              const headRef = pr.head?.ref || "";
+              const labels = (pr.labels || []).map((label) => label.name || label);
+              return (
+                author.toLowerCase().includes("dependabot") ||
+                headRef.startsWith("dependabot/") ||
+                labels.includes("dependencies")
+              );
+            };
+            const dependencyPrs = openPrs.filter(isDependencyPr);
+            const blockingOpenPrs = openPrs.filter((pr) => !isDependencyPr(pr));
             const laneOrder = ["backend", "frontend", "quality", "security", "docs"];
             const issueField = (issue, name) =>
               (issue.body || "").match(new RegExp(`^${name}:\\s*(.+)$`, "im"))?.[1]?.toLowerCase() || "";
@@ -122,7 +131,8 @@ jobs:
                 expectedFiles.includes("apps/controller/") ||
                 expectedFiles.includes("apps/worker/") ||
                 expectedFiles.includes("packages/shared/") ||
-                expectedFiles.includes("packages/github/")
+                expectedFiles.includes("packages/github/") ||
+                expectedFiles.includes("packages/agents/src/")
               ) {
                 return "backend";
               }
@@ -164,39 +174,7 @@ jobs:
               }
             };
 
-            if (autoFromResearch) {
-              if (context.payload.workflow_run.conclusion !== "success") {
-                core.setOutput("stage", "auto");
-                core.setOutput("stage_display", "Research handoff");
-                core.setOutput("should_run", "false");
-                core.setOutput("reason", `Research run ended with ${context.payload.workflow_run.conclusion || "unknown"}`);
-                return;
-              }
-
-              const queuedTargets = openIssues
-                .filter((issue) => issue.labels.some((label) => label.name === "agent:queued"))
-                .filter((issue) => issue.labels.some((label) => label.name === "execution:codex-cloud"))
-                .map((issue) => {
-                  return { issue, lane: inferIssueLane(issue) };
-                })
-                .filter((item) => laneOrder.includes(item.lane))
-                .sort((a, b) => {
-                  const laneDelta = laneOrder.indexOf(a.lane) - laneOrder.indexOf(b.lane);
-                  if (laneDelta !== 0) return laneDelta;
-                  return new Date(a.issue.created_at) - new Date(b.issue.created_at);
-                });
-
-              if (!queuedTargets.length) {
-                core.setOutput("stage", "auto");
-                core.setOutput("stage_display", "Research handoff");
-                core.setOutput("should_run", "false");
-                core.setOutput("reason", "Research completed without a queued codex-cloud lane issue");
-                return;
-              }
-
-              stage = queuedTargets[0].lane;
-              await syncLaneLabels(queuedTargets[0].issue, stage);
-            } else if (autoFromCi) {
+            if (autoFromCi) {
               if (context.payload.workflow_run.conclusion !== "success") {
                 core.setOutput("stage", "captain");
                 core.setOutput("stage_display", "Captain Integrator");
@@ -212,7 +190,7 @@ jobs:
                 display: "Backend/Core",
                 lane: "backend",
                 label: "codex-stage:backend-core",
-                files: "apps/controller/**, apps/worker/**, packages/shared/**, packages/github/**, backend/schema/store/controller tests",
+                files: "apps/controller/**, apps/worker/**, packages/shared/**, packages/github/**, packages/agents/src/**, backend/schema/store/controller/agent/plugin/release tests",
                 verify: "npm run check && npm run logs:check && docker compose config --no-interpolate --quiet"
               },
               frontend: {
@@ -284,9 +262,12 @@ jobs:
             }
 
             if (["backend", "frontend", "quality", "security", "docs"].includes(stage)) {
-              if (openPrs.length && !force) {
+              if (blockingOpenPrs.length && !force) {
                 core.setOutput("should_run", "false");
-                core.setOutput("reason", `skipped: ${openPrs.length} open PR(s); Captain must integrate first`);
+                core.setOutput(
+                  "reason",
+                  `skipped: ${blockingOpenPrs.length} non-dependency open PR(s); dependencyPrs=${dependencyPrs.length}`
+                );
                 return;
               }
               const target = openIssues
@@ -468,8 +449,10 @@ jobs:
 
       - name: Run Codex cloud build stage
         id: run_codex
+        continue-on-error: true
+        timeout-minutes: 30
         if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'issue' && env.OPENAI_API_KEY != ''
-        uses: openai/codex-action@a26d2d4d8b78a694338b8e3715c3630254340b2c
+        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           model: ${{ env.CODEX_ACTION_MODEL }}
@@ -478,6 +461,7 @@ jobs:
           sandbox: workspace-write
           safety-strategy: drop-sudo
           allow-users: onfire7777
+          allow-bots: true
           output-file: codex-output.md
           prompt: |
             You are the Codex Cloud ${{ steps.gate.outputs.stage_display }} specialist for onfire7777/five-agent-dev-team.
@@ -496,6 +480,7 @@ jobs:
             - Stay inside owned files: ${{ steps.gate.outputs.owned_files }}.
             - This GitHub Actions run already claimed the issue with GitHub labels. Do not require local Windows state files under C:\Users\burni\.codex, and do not block only because those local control files are absent in the cloud runner.
             - Treat the checked-out GitHub Actions workspace as the authoritative branch context. Do not run git fetch if the cloud checkout refuses writes to .git/FETCH_HEAD.
+            - Do not enumerate $HOME/.codex, broad filesystem trees, or unrelated generated/cache directories. Inspect only repository files needed for the target issue.
             - Keep the diff bounded and avoid unrelated cleanup.
             - Do not print secrets, weaken security gates, change branch protection, or push main.
             - Do not invent unqueued feature scope.
@@ -505,6 +490,94 @@ jobs:
 
             Expected verification before PR publication:
             ${{ steps.gate.outputs.verify_hint }}
+
+      - name: Pause pipeline on Codex provider failure
+        id: provider_failure_pause
+        if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'issue' && steps.run_codex.outcome == 'failure'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: |
+            const issue_number = Number("${{ steps.gate.outputs.target_number }}");
+            const { owner, repo } = context.repo;
+            const healthTitle = "[Codex Health] Cloud control-plane finding";
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const labels = ["agent:blocked", "blocker:global-stop"];
+            let cleanupError = null;
+
+            try {
+              const body = [
+                "# Codex Cloud Meta Health",
+                "",
+                `Observed: ${new Date().toISOString()}`,
+                `Repository: ${owner}/${repo}`,
+                "",
+                "## Blockers",
+                `- globalStop: Codex provider call failed during ${{ steps.gate.outputs.stage_display }}.`,
+                "",
+                "## Evidence",
+                "- Workflow: Codex Cloud Build Pipeline",
+                `- Stage: ${{ steps.gate.outputs.stage }}`,
+                `- Queue issue: #${issue_number}`,
+                `- Run: ${runUrl}`,
+                "- The Codex action failed before a verified implementation PR could be published. Treat this as an OpenAI provider/auth/quota issue until a forced cloud research or lane run succeeds.",
+                "",
+                "## Required action",
+                "- Verify OPENAI_API_KEY, OpenAI project billing, project limits, and model access.",
+                "- After fixing credentials or quota, run Codex Cloud Research manually with force=true, then run Meta Health to clear this pause.",
+                "",
+                "## Routing",
+                "Cloud build lanes should remain paused by this global stop issue."
+              ].join("\n");
+              const openIssuesRaw = await github.paginate(github.rest.issues.listForRepo, {
+                owner,
+                repo,
+                state: "open",
+                per_page: 100
+              });
+              const healthIssue = openIssuesRaw.find((issue) => !issue.pull_request && issue.title === healthTitle);
+              if (healthIssue) {
+                await github.rest.issues.update({
+                  owner,
+                  repo,
+                  issue_number: healthIssue.number,
+                  body,
+                  labels
+                });
+              } else {
+                await github.rest.issues.create({
+                  owner,
+                  repo,
+                  title: healthTitle,
+                  body,
+                  labels
+                });
+              }
+            } catch (error) {
+              core.error(`Unexpected provider-failure pause error: ${error.status || "unknown"} ${error.message}`);
+              throw error;
+            } finally {
+              try {
+                await github.rest.issues.addLabels({ owner, repo, issue_number, labels });
+                for (const label of ["agent:running", "agent:claimed"]) {
+                  try {
+                    await github.rest.issues.removeLabel({ owner, repo, issue_number, name: label });
+                  } catch {}
+                }
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number,
+                  body: `Codex provider failure paused the cloud automation pipeline before this item could finish.\n\nRun: ${runUrl}`
+                });
+              } catch (error) {
+                cleanupError = error;
+                core.error(`Provider-failure queue cleanup failed: ${error.status || "unknown"} ${error.message}`);
+              }
+            }
+
+            if (cleanupError) throw cleanupError;
+            core.setOutput("handled", "true");
+            core.setFailed("Codex provider failure paused cloud automation.");
 
       - name: Detect generated changes
         id: changes
@@ -524,9 +597,13 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Validate cloud stage diff
+        if: steps.changes.outputs.changed == 'true'
+        run: node scripts/validate-cloud-stage-diff.mjs --stage "${{ steps.gate.outputs.stage }}" --target "$RUNNER_TEMP/codex-cloud-artifacts/codex-target.json"
+
       - name: Route no-change issue
         if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'issue' && steps.changes.outputs.changed != 'true'
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
             const fs = require("fs");
@@ -679,9 +756,33 @@ jobs:
         run: |
           gh pr view "$PR_NUMBER" --json number,title,isDraft,mergeStateStatus,reviewDecision,labels,headRefOid,url
           gh pr checks "$PR_NUMBER" --required --watch
+          merge_state="$(gh pr view "$PR_NUMBER" --json mergeStateStatus --jq '.mergeStateStatus')"
+          if [ "$merge_state" = "BEHIND" ]; then
+            echo "Captain updating PR #$PR_NUMBER because it is behind main."
+            if ! update_output="$(gh pr update-branch "$PR_NUMBER" 2>&1)"; then
+              if echo "$update_output" | grep -Eiq "already (up to date|in progress)|update.*in progress"; then
+                echo "Captain no-op: $update_output"
+                exit 0
+              fi
+              echo "$update_output" >&2
+              exit 1
+            fi
+            exit 0
+          fi
+          if [ "$merge_state" != "CLEAN" ] && [ "$merge_state" != "HAS_HOOKS" ]; then
+            echo "Captain no-op: PR #$PR_NUMBER is not merge-ready after required checks; mergeStateStatus=$merge_state"
+            exit 0
+          fi
           head_sha="$(gh pr view "$PR_NUMBER" --json headRefOid --jq '.headRefOid')"
           target_issues="$(gh pr view "$PR_NUMBER" --json closingIssuesReferences --jq '.closingIssuesReferences[].number' || true)"
-          gh pr merge "$PR_NUMBER" --squash --delete-branch --match-head-commit "$head_sha"
+          if ! merge_output="$(gh pr merge "$PR_NUMBER" --squash --delete-branch --match-head-commit "$head_sha" 2>&1)"; then
+            if echo "$merge_output" | grep -Eiq "merge already in progress|already merged"; then
+              echo "Captain no-op: PR #$PR_NUMBER merge is already handled by another Captain run."
+              exit 0
+            fi
+            echo "$merge_output" >&2
+            exit 1
+          fi
 
           for issue_number in $target_issues; do
             gh issue edit "$issue_number" --add-label agent:done || true
@@ -698,7 +799,7 @@ jobs:
 
       - name: Cloud janitor pass
         if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'janitor'
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
             const { owner, repo } = context.repo;
@@ -735,8 +836,8 @@ jobs:
               .write();
 
       - name: Route failed issue
-        if: failure() && steps.gate.outputs.target_kind == 'issue'
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        if: failure() && steps.gate.outputs.target_kind == 'issue' && steps.provider_failure_pause.outputs.handled != 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
             const fs = require("fs");
@@ -768,7 +869,7 @@ jobs:
 
       - name: Upload Codex build output
         if: always() && steps.gate.outputs.should_run == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: codex-cloud-${{ steps.gate.outputs.stage || 'stage' }}
           path: |

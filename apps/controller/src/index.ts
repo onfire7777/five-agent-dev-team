@@ -31,6 +31,7 @@ import {
   WorkItemStateSchema,
   loadTargetRepoConfig,
   targetRepoConfigFromProjectConnection,
+  type EmergencyControlRequest,
   type ProjectCapabilityStatus,
   type ProjectConnection,
   type ProjectConnectionInput,
@@ -159,8 +160,9 @@ const WorkItemProposalDecisionRequest = z.object({
   feedback: z.string().optional()
 });
 
-const app = express();
-const store = createStore();
+export const app = express();
+export const controllerStore = createStore();
+const store = controllerStore;
 const port = Number(process.env.PORT || 4310);
 const host = process.env.HOST || "127.0.0.1";
 const execFile = util.promisify(childProcess.execFile);
@@ -322,6 +324,8 @@ app.post("/api/team-bus", async (req, res, next) => {
     const message = await store.addTeamBusMessage(scope, input);
     await store.addEvent({
       workItemId: message.workItemId,
+      projectId: scope.projectId,
+      repo: scope.repo,
       level: message.kind === "blocker" ? "warn" : "info",
       type: "system",
       message: `Team bus ${message.kind}: ${message.topic}`
@@ -495,6 +499,8 @@ app.post("/api/projects/:projectId/direction", async (req, res, next) => {
       acceptanceCriteria: []
     });
     await store.addEvent({
+      projectId: scope.projectId,
+      repo: scope.repo,
       level: "info",
       type: "system",
       message: `${title} saved for ${scope.repo}.`
@@ -853,6 +859,8 @@ app.post("/api/projects", async (req, res, next) => {
     if (candidate.active) await writeTargetRepoConfig(candidate);
     const project = await store.upsertProjectConnection({ ...input, ...diagnostics });
     await store.addEvent({
+      projectId: project.projectId,
+      repo: project.repo,
       level: project.status === "connected" ? "info" : "warn",
       type: "system",
       message: `Connected project ${project.name} to ${project.repo}; GitHub status=${project.status}.`
@@ -873,6 +881,8 @@ app.post("/api/projects/:id/activate", async (req, res, next) => {
     await writeTargetRepoConfig(candidate);
     const project = await store.upsertProjectConnection({ ...activeInput, ...diagnostics });
     await store.addEvent({
+      projectId: project.projectId,
+      repo: project.repo,
       level: project.status === "connected" ? "info" : "warn",
       type: "system",
       message: `Activated project ${project.name} for isolated autonomous work; GitHub status=${project.status}.`
@@ -888,6 +898,8 @@ app.delete("/api/projects/:id", async (req, res, next) => {
     const project = await store.deactivateProjectConnection(req.params.id);
     await removeTargetRepoConfig(project);
     await store.addEvent({
+      projectId: project.projectId,
+      repo: project.repo,
       level: "info",
       type: "system",
       message: `Deactivated project ${project.name} for ${project.repo}.`
@@ -1680,15 +1692,16 @@ async function decideWorkItemProposal(workItemId: string, decision: "accept" | "
 async function startWorkflowIfSafe(
   workItem: WorkItem
 ): Promise<{ workflowId: string | null; queued: boolean; reason?: string }> {
-  const status = await store.getStatus();
-  if (status.system.emergencyStop) {
+  const emergencyStop = await store.getEmergencyStop(workItem.projectId);
+  if (emergencyStop.active) {
     return {
       workflowId: null,
       queued: true,
-      reason: status.system.emergencyReason || "Emergency stop is active"
+      reason: emergencyStop.reason || "Emergency stop is active"
     };
   }
 
+  const status = await store.getStatus();
   if (workItem.projectId && workItem.repo) {
     const activeSameProject = status.workItems.some(
       (item) =>
@@ -1706,12 +1719,21 @@ async function startWorkflowIfSafe(
     }
   }
 
-  const claimed = await store.claimWorkItemForWorkflow(workItem.id);
-  if (!claimed) {
+  const claim = await store.claimWorkItemForWorkflowIfNotStopped(workItem.id, workItem.projectId);
+  if (claim.emergencyStop?.active) {
+    return {
+      workflowId: null,
+      queued: true,
+      reason: claim.emergencyStop.reason || "Emergency stop is active"
+    };
+  }
+  if (!claim.claimed) {
     return { workflowId: null, queued: true, reason: "Work item is already claimed by a workflow." };
   }
 
+  const eventScope = workItem.projectId && workItem.repo ? { projectId: workItem.projectId, repo: workItem.repo } : {};
   await store.addEvent({
+    ...eventScope,
     workItemId: workItem.id,
     stage: "NEW",
     ownerAgent: "product-delivery-orchestrator",
@@ -1849,7 +1871,7 @@ async function requireConnectedProjectForWork(input: z.infer<typeof CreateWorkIt
   if (/^(1|true|yes)$/i.test(process.env.AGENT_TEAM_ALLOW_DEFAULT_CONFIG || "")) return;
   const projects = await store.listProjectConnections();
   if (!projects.length) {
-    throw new HttpError("Connect a target GitHub repository before starting autonomous work.", 400);
+    throw new HttpError("Connect a target GitHub repository before starting autonomous work.", 422);
   }
   const project =
     input.projectId || input.repo
@@ -1879,8 +1901,9 @@ async function requireConnectedProjectForWork(input: z.infer<typeof CreateWorkIt
 app.post("/api/emergency-stop", async (req, res, next) => {
   try {
     const input = EmergencyControlRequestSchema.parse(req.body);
-    await store.setEmergencyStop(true, `[${input.scope}] ${input.reason}`);
-    res.json({ emergencyStop: true, scope: input.scope, reason: input.reason });
+    const target = await emergencyControlTarget(input);
+    await store.setEmergencyStop(true, input.reason, target.projectId);
+    res.json({ emergencyStop: true, scope: target.responseScope, projectId: target.projectId, reason: input.reason });
   } catch (error) {
     next(error);
   }
@@ -1889,12 +1912,23 @@ app.post("/api/emergency-stop", async (req, res, next) => {
 app.post("/api/emergency-resume", async (req, res, next) => {
   try {
     const input = EmergencyControlRequestSchema.parse(req.body);
-    await store.setEmergencyStop(false);
-    res.json({ emergencyStop: false, scope: input.scope, reason: input.reason });
+    const target = await emergencyControlTarget(input);
+    await store.setEmergencyStop(false, input.reason, target.projectId);
+    res.json({ emergencyStop: false, scope: target.responseScope, projectId: target.projectId, reason: input.reason });
   } catch (error) {
     next(error);
   }
 });
+
+async function emergencyControlTarget(
+  input: EmergencyControlRequest
+): Promise<{ responseScope: string; projectId?: string }> {
+  if (input.scope === "global") {
+    return { responseScope: "global" };
+  }
+  const project = await requireScopeForProjectId(input.projectId);
+  return { responseScope: `project:${project.projectId}`, projectId: project.projectId };
+}
 
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   const message = error instanceof Error ? error.message : "Unknown error";
@@ -1919,9 +1953,17 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
     });
 });
 
-store.init().then(() => {
-  startSmartScheduler(store);
-  app.listen(port, host, () => {
-    console.log(`AI Dev Team controller listening on http://${host}:${port}`);
-  });
-});
+if (process.env.NODE_ENV !== "test") {
+  void store
+    .init()
+    .then(() => {
+      startSmartScheduler(store);
+      app.listen(port, host, () => {
+        console.log(`AI Dev Team controller listening on http://${host}:${port}`);
+      });
+    })
+    .catch((error: unknown) => {
+      console.error("Controller startup failed during initialization.", error);
+      process.exit(1);
+    });
+}

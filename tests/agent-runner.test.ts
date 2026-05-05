@@ -1,4 +1,7 @@
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { getAgentDefinition, resolveMcpEnv, runRoleAgent } from "../packages/agents/src";
 import { DEFAULT_RELEASE_COMMAND, TargetRepoConfigSchema, type WorkItem } from "../packages/shared/src";
@@ -6,16 +9,22 @@ import { DEFAULT_RELEASE_COMMAND, TargetRepoConfigSchema, type WorkItem } from "
 const liveAgentMock = vi.hoisted(() => ({
   models: [] as string[],
   prompts: [] as string[],
-  hostedSearchCalls: 0
+  tools: [] as any[][],
+  hostedSearchCalls: 0,
+  finalOutput: undefined as string | undefined,
+  artifactWriteInput: undefined as Record<string, unknown> | undefined
 }));
 
 vi.mock("@openai/agents", () => {
   class Agent {
     model: string;
+    tools: any[];
 
-    constructor(options: { model: string }) {
+    constructor(options: { model: string; tools?: any[] }) {
       this.model = options.model;
+      this.tools = options.tools || [];
       liveAgentMock.models.push(options.model);
+      liveAgentMock.tools.push(this.tools);
     }
   }
 
@@ -24,18 +33,27 @@ vi.mock("@openai/agents", () => {
     run: vi.fn(async (agent: Agent, prompt: string) => {
       liveAgentMock.prompts.push(prompt);
       if (agent.model === "gpt-primary") throw new Error("primary failed");
+      if (liveAgentMock.artifactWriteInput) {
+        const artifactTool = agent.tools.find(
+          (tool: any) => (tool.qualifiedName || `${tool.namespace}.${tool.name}`) === "artifact.write"
+        );
+        if (!artifactTool) throw new Error("artifact.write mock tool was not registered.");
+        await artifactTool.execute(liveAgentMock.artifactWriteInput);
+      }
       return {
-        finalOutput: JSON.stringify({
-          status: "passed",
-          title: "Fallback completed",
-          summary: "Fallback model completed the stage.",
-          decisions: ["Used fallback model."],
-          risks: [],
-          filesChanged: [],
-          testsRun: [],
-          releaseReadiness: "unknown",
-          nextStage: "CONTRACT"
-        })
+        finalOutput:
+          liveAgentMock.finalOutput ??
+          JSON.stringify({
+            status: "passed",
+            title: "Fallback completed",
+            summary: "Fallback model completed the stage.",
+            decisions: ["Used fallback model."],
+            risks: [],
+            filesChanged: [],
+            testsRun: [],
+            releaseReadiness: "unknown",
+            nextStage: "CONTRACT"
+          })
       };
     }),
     MCPServers: {
@@ -58,7 +76,23 @@ vi.mock("@openai/agents", () => {
     webSearchTool: vi.fn(() => {
       liveAgentMock.hostedSearchCalls += 1;
       return {};
-    })
+    }),
+    tool: vi.fn((options: any) => ({
+      type: "function",
+      name: options.name,
+      description: options.description,
+      parameters: options.parameters,
+      strict: options.strict ?? true,
+      execute: options.execute
+    })),
+    toolNamespace: vi.fn((options: any) =>
+      options.tools.map((tool: any) => ({
+        ...tool,
+        namespace: options.name,
+        namespaceDescription: options.description,
+        qualifiedName: `${options.name}.${tool.name}`
+      }))
+    )
   };
 });
 
@@ -84,6 +118,55 @@ function restoreEnv(name: string, value: string | undefined): void {
     return;
   }
   process.env[name] = value;
+}
+
+function liveStageArtifactJson(overrides: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    status: "passed",
+    title: "Live backend artifact",
+    summary: "Live backend completed.",
+    decisions: ["Returned raw artifact JSON."],
+    risks: [],
+    filesChanged: ["packages/agents/src/runner.ts"],
+    testsRun: ["npm test -- tests/agent-runner.test.ts"],
+    releaseReadiness: "unknown",
+    nextStage: "INTEGRATION",
+    bodyMd: "## Live backend artifact",
+    bodyJson: { ok: true },
+    ...overrides
+  });
+}
+
+async function runLiveBackendAgent(
+  finalOutput: string,
+  options: { artifactWriteInput?: Record<string, unknown> } = {}
+) {
+  const originalLiveMode = process.env.AGENT_LIVE_MODE;
+  const originalOpenAiKey = process.env.OPENAI_API_KEY;
+  const originalAgentModel = process.env.AGENT_MODEL;
+  liveAgentMock.models.length = 0;
+  liveAgentMock.prompts.length = 0;
+  liveAgentMock.tools.length = 0;
+  liveAgentMock.hostedSearchCalls = 0;
+  liveAgentMock.finalOutput = finalOutput;
+  liveAgentMock.artifactWriteInput = options.artifactWriteInput;
+  process.env.AGENT_LIVE_MODE = "true";
+  process.env.OPENAI_API_KEY = "test-key";
+  process.env.AGENT_MODEL = "gpt-fallback";
+  try {
+    return await runRoleAgent(getAgentDefinition("backend-systems-engineering"), {
+      workItem: { ...workItem, state: "BACKEND_BUILD" },
+      stage: "BACKEND_BUILD",
+      previousArtifacts: [],
+      targetRepoConfig: liveTargetConfig()
+    });
+  } finally {
+    liveAgentMock.finalOutput = undefined;
+    liveAgentMock.artifactWriteInput = undefined;
+    restoreEnv("AGENT_LIVE_MODE", originalLiveMode);
+    restoreEnv("OPENAI_API_KEY", originalOpenAiKey);
+    restoreEnv("AGENT_MODEL", originalAgentModel);
+  }
 }
 
 describe("agent runner", () => {
@@ -185,6 +268,68 @@ describe("agent runner", () => {
     }
   });
 
+  it("accepts raw live StageArtifact JSON and applies runner metadata", async () => {
+    const result = await runLiveBackendAgent(
+      liveStageArtifactJson({
+        workItemId: "wrong-work-item",
+        ownerAgent: "frontend-ux-engineering",
+        promptHash: "spoofed-prompt-hash",
+        skillIds: ["spoofed-skill"],
+        capabilityIds: ["spoofed-capability"]
+      })
+    );
+
+    expect(result.live).toBe(true);
+    expect(result.artifact.status).toBe("passed");
+    expect(result.artifact.workItemId).toBe(workItem.id);
+    expect(result.artifact.ownerAgent).toBe("backend-systems-engineering");
+    expect(result.artifact.promptHash).toBe(
+      crypto
+        .createHash("sha256")
+        .update(liveAgentMock.prompts.at(-1) || "")
+        .digest("hex")
+    );
+    expect(result.artifact.skillIds).toContain("secure-coding");
+    expect(result.artifact.skillIds).not.toContain("spoofed-skill");
+    expect(result.artifact.capabilityIds).toContain("builtin:artifact.write");
+    expect(result.artifact.capabilityIds).not.toContain("spoofed-capability");
+  });
+
+  it.each([
+    ["prose wrapped JSON", `Before\n${liveStageArtifactJson({ summary: "STRICT_MARKER wrapped" })}\nAfter`],
+    ["fenced JSON", `\`\`\`json\n${liveStageArtifactJson({ summary: "STRICT_MARKER fenced" })}\n\`\`\``]
+  ])("fails closed for non-raw live output: %s", async (_name, finalOutput) => {
+    const result = await runLiveBackendAgent(finalOutput);
+
+    expect(result.artifact.status).toBe("failed");
+    expect(result.artifact.nextStage).toBe("BLOCKED");
+    expect(result.artifact.bodyMd).not.toContain("STRICT_MARKER");
+    expect(JSON.stringify(result.artifact.bodyJson)).not.toContain("STRICT_MARKER");
+  });
+
+  it("keeps artifact.write capture authoritative over invalid live output", async () => {
+    const result = await runLiveBackendAgent("Prose output that should not be parsed.", {
+      artifactWriteInput: {
+        title: "Captured backend artifact",
+        summary: "artifact.write captured the authoritative artifact.",
+        status: "passed",
+        decisions: ["Use artifact.write."],
+        risks: [],
+        filesChanged: ["packages/agents/src/runner.ts"],
+        testsRun: ["npm test -- tests/agent-runner.test.ts"],
+        releaseReadiness: "unknown",
+        nextStage: "INTEGRATION",
+        bodyMd: "## Captured backend artifact",
+        bodyJson: { captured: true }
+      }
+    });
+
+    expect(result.artifact.status).toBe("passed");
+    expect(result.artifact.title).toBe("Captured backend artifact");
+    expect(result.artifact.bodyJson).toEqual({ captured: true });
+    expect(result.rawOutput).toBe("Prose output that should not be parsed.");
+  });
+
   it("does not mount hosted search just because a web search MCP server is active", async () => {
     const originalLiveMode = process.env.AGENT_LIVE_MODE;
     const originalOpenAiKey = process.env.OPENAI_API_KEY;
@@ -257,11 +402,194 @@ describe("agent runner", () => {
         })
       });
 
-      expect(result.artifact.capabilityIds).toEqual(["mcp:connected-mcp"]);
+      expect(result.artifact.capabilityIds).toEqual(
+        expect.arrayContaining(["mcp:connected-mcp", "builtin:artifact.write"])
+      );
+      expect(result.artifact.capabilityIds).not.toContain("mcp:dropped-mcp");
       expect(liveAgentMock.prompts.at(-1)).toContain("mcp:connected-mcp");
       expect(liveAgentMock.prompts.at(-1)).not.toContain("mcp:dropped-mcp");
     } finally {
       vi.mocked(agents.MCPServers.open).mockReset();
+      restoreEnv("AGENT_LIVE_MODE", originalLiveMode);
+      restoreEnv("OPENAI_API_KEY", originalOpenAiKey);
+      restoreEnv("AGENT_MODEL", originalAgentModel);
+    }
+  });
+
+  it("registers and scopes live runner built-in tools", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-builtins-"));
+    const originalLiveMode = process.env.AGENT_LIVE_MODE;
+    const originalOpenAiKey = process.env.OPENAI_API_KEY;
+    const originalAgentModel = process.env.AGENT_MODEL;
+    const now = new Date().toISOString();
+    liveAgentMock.models.length = 0;
+    liveAgentMock.prompts.length = 0;
+    liveAgentMock.tools.length = 0;
+    liveAgentMock.hostedSearchCalls = 0;
+    process.env.AGENT_LIVE_MODE = "true";
+    process.env.OPENAI_API_KEY = "test-key";
+    process.env.AGENT_MODEL = "gpt-fallback";
+    try {
+      await fs.mkdir(path.join(tempDir, ".agent-team", "context"), { recursive: true });
+      await fs.writeFile(
+        path.join(tempDir, ".agent-team", "context", "guide.md"),
+        "# Guide\n\nScoped context.",
+        "utf8"
+      );
+      const scopedWorkItem = {
+        ...workItem,
+        id: "WI-TOOLS",
+        projectId: "project-a",
+        repo: "owner/repo",
+        state: "BACKEND_BUILD" as const
+      };
+      const emitted: unknown[] = [];
+      const result = await runRoleAgent(getAgentDefinition("backend-systems-engineering"), {
+        workItem: scopedWorkItem,
+        stage: "BACKEND_BUILD",
+        previousArtifacts: [],
+        targetRepoConfig: liveTargetConfig({ repoPath: tempDir }),
+        memories: [
+          {
+            id: "mem-1",
+            scope: "work_item",
+            projectId: "project-a",
+            repo: "owner/repo",
+            workItemId: "WI-TOOLS",
+            kind: "decision",
+            title: "Use strict tools",
+            content: "Built-in tool results must stay scoped.",
+            tags: ["tools"],
+            confidence: "high",
+            importance: 5,
+            permanence: "durable",
+            source: "test",
+            createdAt: now,
+            updatedAt: now
+          },
+          {
+            id: "mem-2",
+            scope: "work_item",
+            projectId: "other-project",
+            repo: "owner/repo",
+            workItemId: "WI-OTHER",
+            kind: "decision",
+            title: "Do not leak",
+            content: "This memory belongs to another project.",
+            tags: [],
+            confidence: "high",
+            importance: 5,
+            permanence: "durable",
+            source: "test",
+            createdAt: now,
+            updatedAt: now
+          }
+        ],
+        emitEvent: async (event) => {
+          emitted.push(event);
+        }
+      });
+
+      expect(result.artifact.capabilityIds).toEqual(
+        expect.arrayContaining([
+          "builtin:memory.search",
+          "builtin:repo.context.read",
+          "builtin:artifact.write",
+          "builtin:event.emit",
+          "builtin:skill.load"
+        ])
+      );
+      const tools = liveAgentMock.tools.at(-1) || [];
+      const toolNames = tools.map((tool) => tool.qualifiedName || `${tool.namespace}.${tool.name}`);
+      expect(toolNames).toEqual(
+        expect.arrayContaining(["memory.search", "repo_context.read", "artifact.write", "event.emit", "skill.load"])
+      );
+      const livePrompt = liveAgentMock.prompts.at(-1);
+      if (!livePrompt) throw new Error("Live prompt was not captured.");
+      for (const callName of ["memory.search", "repo_context.read", "artifact.write", "event.emit", "skill.load"]) {
+        const metadata = promptToolMetadata(livePrompt, callName);
+        const tool = findTool(tools, callName);
+        expect(tool.description).toContain(`Preconditions: ${metadata.preconditions}`);
+        expect(tool.description).toContain(`Side effects: ${metadata.sideEffects}`);
+        expect(tool.description).toContain(`Idempotency: ${metadata.idempotency}`);
+        expect(tool.namespaceDescription).toContain(`Side effects: ${metadata.sideEffects}`);
+        expect(tool.namespaceDescription).toContain(`Idempotency: ${metadata.idempotency}`);
+      }
+
+      await expect(findTool(tools, "memory.search").execute({ query: "strict", limit: 5 })).resolves.toMatchObject({
+        count: 1,
+        records: [expect.objectContaining({ id: "mem-1" })]
+      });
+
+      const repoTool = findTool(tools, "repo_context.read");
+      await expect(repoTool.execute({ path: "guide.md" })).resolves.toMatchObject({
+        path: "guide.md",
+        content: expect.stringContaining("Scoped context.")
+      });
+      await expect(repoTool.execute({ path: "../package.json" })).rejects.toThrow(/escapes/);
+
+      const artifactTool = findTool(tools, "artifact.write");
+      await expect(artifactTool.execute({ workItemId: "wrong", title: "Bad", summary: "Bad" })).rejects.toThrow(
+        /mismatched workItemId/
+      );
+      await expect(
+        artifactTool.execute({
+          title: "Backend built-in tools ready",
+          summary: "Built-in tools were validated.",
+          status: "passed",
+          decisions: ["Use runner-owned tools."],
+          risks: [],
+          filesChanged: ["packages/agents/src/runner.ts"],
+          testsRun: ["agent-runner"],
+          releaseReadiness: "unknown",
+          nextStage: "INTEGRATION",
+          bodyMd: "## Backend built-in tools ready",
+          bodyJson: { ok: true }
+        })
+      ).resolves.toMatchObject({ status: "captured", workItemId: "WI-TOOLS" });
+
+      await expect(
+        findTool(tools, "event.emit").execute({ type: "agent.blocked", level: "warn", message: "Need routing." })
+      ).resolves.toEqual({ status: "emitted", type: "agent.blocked" });
+      expect(emitted).toContainEqual({ type: "agent.blocked", level: "warn", message: "Need routing." });
+
+      const skillTool = findTool(tools, "skill.load");
+      await expect(skillTool.execute({ id: "api-contract-design" })).resolves.toMatchObject({
+        id: "api-contract-design",
+        audience: ["backend-systems-engineering"]
+      });
+      await expect(skillTool.execute({ id: "react-component-design" })).rejects.toThrow(/not available/);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+      restoreEnv("AGENT_LIVE_MODE", originalLiveMode);
+      restoreEnv("OPENAI_API_KEY", originalOpenAiKey);
+      restoreEnv("AGENT_MODEL", originalAgentModel);
+    }
+  });
+
+  it("fails closed when repo context is requested without a connected repo", async () => {
+    const originalLiveMode = process.env.AGENT_LIVE_MODE;
+    const originalOpenAiKey = process.env.OPENAI_API_KEY;
+    const originalAgentModel = process.env.AGENT_MODEL;
+    liveAgentMock.models.length = 0;
+    liveAgentMock.prompts.length = 0;
+    liveAgentMock.tools.length = 0;
+    liveAgentMock.hostedSearchCalls = 0;
+    process.env.AGENT_LIVE_MODE = "true";
+    process.env.OPENAI_API_KEY = "test-key";
+    process.env.AGENT_MODEL = "gpt-fallback";
+    try {
+      await runRoleAgent(getAgentDefinition("backend-systems-engineering"), {
+        workItem: { ...workItem, state: "BACKEND_BUILD" },
+        stage: "BACKEND_BUILD",
+        previousArtifacts: []
+      });
+
+      const tools = liveAgentMock.tools.at(-1) || [];
+      await expect(findTool(tools, "repo_context.read").execute({ path: "guide.md" })).rejects.toThrow(
+        /no connected repository context/
+      );
+    } finally {
       restoreEnv("AGENT_LIVE_MODE", originalLiveMode);
       restoreEnv("OPENAI_API_KEY", originalOpenAiKey);
       restoreEnv("AGENT_MODEL", originalAgentModel);
@@ -323,15 +651,213 @@ describe("agent runner", () => {
     expect(result.artifact.testsRun).toEqual([]);
     expect(result.artifact.releaseReadiness).toBe("unknown");
   });
+
+  it("loads triggered plugin-contributed skills from merged runtime contributions", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-plugin-skill-"));
+    try {
+      const skillPath = path.join(tempDir, "skills", "browser-smoke", "SKILL.md");
+      await fs.mkdir(path.dirname(skillPath), { recursive: true });
+      await fs.writeFile(
+        skillPath,
+        `---
+id: browser-smoke
+name: Browser Smoke
+audience:
+  - backend-systems-engineering
+priority: 80
+trigger:
+  always: true
+---
+Use the plugin-provided browser smoke procedure when the work item requires UI release evidence.
+`,
+        "utf8"
+      );
+
+      const result = await runRoleAgent(getAgentDefinition("backend-systems-engineering"), {
+        workItem: { ...workItem, state: "BACKEND_BUILD" },
+        stage: "BACKEND_BUILD",
+        previousArtifacts: [],
+        targetRepoConfig: liveTargetConfig({
+          repoPath: tempDir,
+          pluginContributions: {
+            capabilities: [],
+            mcpServers: [],
+            skills: [{ id: "browser-smoke", relativePath: "skills/browser-smoke/SKILL.md" }],
+            tools: [{ name: "browser.screenshot", description: "Capture a browser screenshot." }],
+            releaseGates: [{ id: "browser-smoke-gate", command: "npm run browser:smoke", required: true }]
+          }
+        })
+      });
+
+      expect(result.artifact.skillIds).toContain("browser-smoke");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("emits one warning event when the skill injection budget drops skills", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-skill-budget-"));
+    const originalLiveMode = process.env.AGENT_LIVE_MODE;
+    const originalOpenAiKey = process.env.OPENAI_API_KEY;
+    const originalAgentModel = process.env.AGENT_MODEL;
+    const emitted: unknown[] = [];
+    const skillIds = ["budget-skill-01", "budget-skill-02", "budget-skill-03", "budget-skill-04", "budget-skill-05"];
+    try {
+      for (const [index, id] of skillIds.entries()) {
+        const skillPath = path.join(tempDir, "skills", id, "SKILL.md");
+        await fs.mkdir(path.dirname(skillPath), { recursive: true });
+        await fs.writeFile(skillPath, budgetSkillFixture(id, 200 - index), "utf8");
+      }
+
+      liveAgentMock.models.length = 0;
+      liveAgentMock.prompts.length = 0;
+      process.env.AGENT_LIVE_MODE = "true";
+      process.env.OPENAI_API_KEY = "test-key";
+      process.env.AGENT_MODEL = "gpt-fallback";
+
+      const budgetWorkItem = { ...workItem, id: "WI-SKILL-BUDGET", state: "BACKEND_BUILD" as const };
+      const config = liveTargetConfig({
+        repoPath: tempDir,
+        pluginContributions: {
+          capabilities: [],
+          mcpServers: [],
+          skills: skillIds.map((id) => ({ id, relativePath: `skills/${id}/SKILL.md` })),
+          tools: [],
+          releaseGates: []
+        }
+      });
+      const result = await runRoleAgent(getAgentDefinition("backend-systems-engineering"), {
+        workItem: budgetWorkItem,
+        stage: "BACKEND_BUILD",
+        previousArtifacts: [],
+        targetRepoConfig: config,
+        emitEvent: async (event) => {
+          emitted.push(event);
+        }
+      });
+
+      expect(emitted).toHaveLength(1);
+      expect(emitted[0]).toMatchObject({
+        level: "warn",
+        type: "system",
+        message: expect.stringContaining("WI-SKILL-BUDGET")
+      });
+      expect((emitted[0] as { message: string }).message).toContain("BACKEND_BUILD");
+      expect((emitted[0] as { message: string }).message).toContain("budget-skill-05");
+      expect((emitted[0] as { message: string }).message).not.toContain("BODY_MARKER_SHOULD_NOT_SURFACE");
+      expect(result.artifact.skillIds).toEqual(
+        expect.arrayContaining(["budget-skill-01", "budget-skill-02", "budget-skill-03", "budget-skill-04"])
+      );
+      expect(result.artifact.skillIds).not.toContain("budget-skill-05");
+      const livePrompt = liveAgentMock.prompts.at(-1);
+      if (!livePrompt) throw new Error("Live prompt was not captured.");
+      expect(livePrompt).toContain("Dropped skills: budget-skill-05");
+      expect(livePrompt).not.toContain("BODY_MARKER_SHOULD_NOT_SURFACE_budget-skill-05");
+
+      process.env.AGENT_LIVE_MODE = "false";
+      delete process.env.OPENAI_API_KEY;
+      delete process.env.AGENT_MODEL;
+      await expect(
+        runRoleAgent(getAgentDefinition("backend-systems-engineering"), {
+          workItem: budgetWorkItem,
+          stage: "BACKEND_BUILD",
+          previousArtifacts: [],
+          targetRepoConfig: config
+        })
+      ).resolves.toMatchObject({ live: false });
+
+      const warningSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+      try {
+        await expect(
+          runRoleAgent(getAgentDefinition("backend-systems-engineering"), {
+            workItem: budgetWorkItem,
+            stage: "BACKEND_BUILD",
+            previousArtifacts: [],
+            targetRepoConfig: config,
+            emitEvent: async () => {
+              throw new Error("event sink unavailable");
+            }
+          })
+        ).resolves.toMatchObject({ live: false });
+        expect(warningSpy).toHaveBeenCalledWith("Failed to emit dropped-skill budget event; continuing agent run.", {
+          code: "AGENT_EVENT_EMIT_FAILED"
+        });
+      } finally {
+        warningSpy.mockRestore();
+      }
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+      restoreEnv("AGENT_LIVE_MODE", originalLiveMode);
+      restoreEnv("OPENAI_API_KEY", originalOpenAiKey);
+      restoreEnv("AGENT_MODEL", originalAgentModel);
+    }
+  });
 });
 
-function liveTargetConfig(overrides: { mcpServers?: unknown[]; capabilityPacks?: unknown[] } = {}) {
+function budgetSkillFixture(id: string, priority: number): string {
+  return `---
+id: ${id}
+name: ${id}
+audience:
+  - backend-systems-engineering
+priority: ${priority}
+trigger:
+  always: true
+---
+Budget fixture body for ${id}.
+BODY_MARKER_SHOULD_NOT_SURFACE_${id}
+${"x".repeat(3_850)}
+`;
+}
+
+function findTool(tools: any[], qualifiedName: string): any {
+  const tool = tools.find(
+    (candidate) => (candidate.qualifiedName || `${candidate.namespace}.${candidate.name}`) === qualifiedName
+  );
+  if (!tool) {
+    throw new Error(`Tool ${qualifiedName} was not registered.`);
+  }
+  return tool;
+}
+
+function promptToolMetadata(
+  prompt: string,
+  callName: string
+): { preconditions: string; sideEffects: string; idempotency: string } {
+  const toolBlock = JSON.parse(extractPromptBlock(prompt, "tools")) as {
+    builtIns: Array<Record<string, unknown>>;
+  };
+  const metadata = toolBlock.builtIns.find((tool) => tool.callName === callName);
+  if (!metadata) throw new Error(`Prompt metadata for ${callName} was not found.`);
+  for (const field of ["preconditions", "sideEffects", "idempotency"]) {
+    if (typeof metadata[field] !== "string" || !metadata[field].trim()) {
+      throw new Error(`Prompt metadata for ${callName} is missing ${field}.`);
+    }
+  }
+  return metadata as { preconditions: string; sideEffects: string; idempotency: string };
+}
+
+function extractPromptBlock(prompt: string, name: string): string {
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = prompt.match(new RegExp(`<<< BLOCK: ${escapedName} >>>\\n([\\s\\S]*?)\\n<<< END BLOCK >>>`));
+  if (!match) throw new Error(`Prompt block ${name} was not found.`);
+  return match[1];
+}
+
+function liveTargetConfig(
+  overrides: {
+    mcpServers?: unknown[];
+    capabilityPacks?: unknown[];
+    pluginContributions?: unknown;
+    repoPath?: string;
+  } = {}
+) {
   return TargetRepoConfigSchema.parse({
     repo: {
       owner: "owner",
       name: "repo",
       defaultBranch: "main",
-      localPath: process.cwd()
+      localPath: overrides.repoPath || process.cwd()
     },
     commands: {
       install: "npm ci",
@@ -345,7 +871,8 @@ function liveTargetConfig(overrides: { mcpServers?: unknown[]; capabilityPacks?:
     integrations: {
       mcpServers: overrides.mcpServers || [],
       capabilityPacks: overrides.capabilityPacks || [],
-      plugins: []
+      plugins: [],
+      ...(overrides.pluginContributions ? { pluginContributions: overrides.pluginContributions } : {})
     },
     models: {
       primaryCodingModel: "gpt-primary",

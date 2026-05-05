@@ -40,7 +40,7 @@ jobs:
         if: env.OPENAI_API_KEY != ''
         timeout-minutes: 6
         continue-on-error: true
-        uses: openai/codex-action@a26d2d4d8b78a694338b8e3715c3630254340b2c
+        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           model: ${{ env.CODEX_ACTION_MODEL }}
@@ -49,6 +49,7 @@ jobs:
           sandbox: read-only
           safety-strategy: drop-sudo
           allow-users: onfire7777
+          allow-bots: true
           output-file: codex-output.md
           prompt: |
             This is PR #${{ github.event.pull_request.number }} for ${{ github.repository }}.
@@ -64,7 +65,7 @@ jobs:
             Return concise findings first, with file paths and line references when possible.
       - name: Post Codex review
         if: steps.run_codex.outputs.final-message != ''
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         env:
           CODEX_FINAL_MESSAGE: ${{ steps.run_codex.outputs.final-message }}
         with:
@@ -83,7 +84,7 @@ jobs:
             }
       - name: Upload Codex review output
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: codex-pr-review
           path: codex-output.md

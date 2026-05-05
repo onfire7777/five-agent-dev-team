@@ -12,7 +12,7 @@ on:
         type: boolean
 
 permissions:
-  actions: read
+  actions: write
   contents: read
   issues: write
   pull-requests: read
@@ -34,16 +34,20 @@ jobs:
     steps:
       - name: Gate cloud research
         id: gate
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           result-encoding: string
           script: |
             const { owner, repo } = context.repo;
             const force = context.payload.inputs?.force === "true" || context.payload.inputs?.force === true;
-            const allowedActors = new Set(["onfire7777"]);
+            const allowedActors = new Set(["onfire7777", "github-actions[bot]"]);
+            const finish = (decision) => {
+              core.notice(`Codex Cloud Research gate: ${decision.reason}`);
+              return JSON.stringify(decision);
+            };
 
             if (context.eventName === "workflow_dispatch" && !allowedActors.has(context.actor)) {
-              return JSON.stringify({
+              return finish({
                 run: false,
                 reason: `skipped: actor=${context.actor} is not allowed to run openai/codex-action`
               });
@@ -55,12 +59,39 @@ jobs:
               state: "open",
               per_page: 100
             });
+            const isDependencyPr = (pr) => {
+              const author = pr.user?.login || "";
+              const headRef = pr.head?.ref || "";
+              const labels = (pr.labels || []).map((label) => label.name || label);
+              return (
+                author.toLowerCase().includes("dependabot") ||
+                headRef.startsWith("dependabot/") ||
+                labels.includes("dependencies")
+              );
+            };
+            const dependencyPrs = openPrs.filter(isDependencyPr);
+            const blockingOpenPrs = openPrs.filter((pr) => !isDependencyPr(pr));
             const openIssuesRaw = await github.paginate(github.rest.issues.listForRepo, {
               owner,
               repo,
               state: "open",
               per_page: 100
             });
+            const openIssues = openIssuesRaw.filter((issue) => !issue.pull_request);
+            const globalStop = openIssues.find((issue) => {
+              const labels = issue.labels.map((label) => label.name);
+              return (
+                issue.title.startsWith("[Codex Health]") &&
+                labels.includes("agent:blocked") &&
+                labels.includes("blocker:global-stop")
+              );
+            });
+            if (globalStop && !force) {
+              return finish({
+                run: false,
+                reason: `skipped: global stop issue #${globalStop.number}: ${globalStop.title}`
+              });
+            }
             const activeQueueIssues = openIssuesRaw
               .filter((issue) => !issue.pull_request)
               .filter((issue) =>
@@ -69,14 +100,14 @@ jobs:
                 )
               );
 
-            if (!force && (openPrs.length || activeQueueIssues.length)) {
-              return JSON.stringify({
+            if (!force && (blockingOpenPrs.length || activeQueueIssues.length)) {
+              return finish({
                 run: false,
-                reason: `skipped: openPrs=${openPrs.length}, activeQueueIssues=${activeQueueIssues.length}`
+                reason: `skipped: blockingOpenPrs=${blockingOpenPrs.length}, dependencyPrs=${dependencyPrs.length}, activeQueueIssues=${activeQueueIssues.length}`
               });
             }
 
-            return JSON.stringify({ run: true, reason: "cloud research eligible" });
+            return finish({ run: true, reason: "cloud research eligible" });
 
       - name: Checkout
         if: contains(steps.gate.outputs.result, '"run":true')
@@ -115,7 +146,7 @@ jobs:
       - name: Run Codex cloud research
         id: run_codex
         if: contains(steps.gate.outputs.result, '"run":true') && env.OPENAI_API_KEY != ''
-        uses: openai/codex-action@a26d2d4d8b78a694338b8e3715c3630254340b2c
+        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           model: ${{ env.CODEX_ACTION_MODEL }}
@@ -124,6 +155,7 @@ jobs:
           sandbox: read-only
           safety-strategy: drop-sudo
           allow-users: onfire7777
+          allow-bots: true
           output-file: codex-output.md
           prompt: |
             You are Stage 0 R&D for onfire7777/five-agent-dev-team.
@@ -134,7 +166,7 @@ jobs:
             Only propose work that maps to the implementation spec and real product behavior, and can run in codex-cloud, codex-action, or agentic-workflow.
             When no PR or active queue issue exists, prefer producing the next bounded implementation slice from docs/implementation-spec.md.
             Choose the lane from the expected file ownership, not from the broad topic:
-            - backend: apps/controller/**, apps/worker/**, packages/shared/**, packages/github/**, backend/schema/store/controller tests.
+            - backend: apps/controller/**, apps/worker/**, packages/shared/**, packages/github/**, packages/agents/src/**, backend/schema/store/controller/agent/plugin/release tests.
             - frontend: apps/dashboard/** and dashboard e2e coverage.
             - quality: tests/**, Playwright config, test utilities, reproductions, and acceptance evidence only.
             - security: .github/**, CI workflows, Dockerfile, docker-compose.yml, .env.example, package*.json, audit/security/check scripts, release/**, auth/security/permission work.
@@ -160,9 +192,66 @@ jobs:
             Execution target: <codex-cloud|codex-action|agentic-workflow>
             Score: <22-30>/30
 
+      - name: Pause pipeline on Codex provider failure
+        if: failure() && steps.run_codex.outcome == 'failure'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const healthTitle = "[Codex Health] Cloud control-plane finding";
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const body = [
+              "# Codex Cloud Meta Health",
+              "",
+              `Observed: ${new Date().toISOString()}`,
+              `Repository: ${owner}/${repo}`,
+              "",
+              "## Blockers",
+              "- globalStop: Codex provider call failed during Stage 0 R&D.",
+              "",
+              "## Evidence",
+              `- Workflow: Codex Cloud Research`,
+              `- Run: ${runUrl}`,
+              "- The Codex action failed before producing a valid queue item. Treat this as an OpenAI provider/auth/quota issue until a forced research run succeeds.",
+              "",
+              "## Required action",
+              "- Verify OPENAI_API_KEY, OpenAI project billing, project limits, and model access.",
+              "- After fixing credentials or quota, run Codex Cloud Research manually with force=true, then run Meta Health to clear this pause.",
+              "",
+              "## Routing",
+              "Cloud build lanes should remain paused by this global stop issue."
+            ].join("\n");
+            const openIssuesRaw = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: "open",
+              per_page: 100
+            });
+            const healthIssue = openIssuesRaw.find((issue) => !issue.pull_request && issue.title === healthTitle);
+            const labels = ["agent:blocked", "blocker:global-stop"];
+            if (healthIssue) {
+              await github.rest.issues.update({
+                owner,
+                repo,
+                issue_number: healthIssue.number,
+                body,
+                labels
+              });
+            } else {
+              await github.rest.issues.create({
+                owner,
+                repo,
+                title: healthTitle,
+                body,
+                labels
+              });
+            }
+            core.setFailed("Codex provider failure paused cloud automation.");
+
       - name: Create or refresh queue issue
+        id: queue_issue
         if: steps.run_codex.outputs.final-message != ''
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         env:
           CODEX_FINAL_MESSAGE: ${{ steps.run_codex.outputs.final-message }}
         with:
@@ -172,6 +261,7 @@ jobs:
             await core.summary.addRaw(`## Codex Cloud Research Output\n\n${output}`).write();
 
             if (!/^QUEUE_ITEM_READY:\s*yes\s*$/im.test(output)) {
+              core.setOutput("queue_ready", "false");
               core.notice("Codex did not produce a queue item.");
               return;
             }
@@ -242,20 +332,79 @@ jobs:
                 body,
                 labels
               });
+              core.setOutput("queue_ready", "true");
+              core.setOutput("issue_number", String(existing.number));
+              core.setOutput("lane", lane);
               return;
             }
 
-            await github.rest.issues.create({
+            const created = await github.rest.issues.create({
               owner,
               repo,
               title: issueTitle,
               body,
               labels
             });
+            core.setOutput("queue_ready", "true");
+            core.setOutput("issue_number", String(created.data.number));
+            core.setOutput("lane", lane);
+
+      - name: Clear provider global stop after successful forced research
+        if: always() && steps.run_codex.outcome == 'success' && (github.event.inputs.force == 'true' || github.event.inputs.force == true)
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const healthTitle = "[Codex Health] Cloud control-plane finding";
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const openIssuesRaw = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: "open",
+              per_page: 100
+            });
+            const healthIssues = openIssuesRaw
+              .filter((issue) => !issue.pull_request && issue.title === healthTitle);
+
+            for (const issue of healthIssues) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issue.number,
+                body: `Codex Cloud Research completed successfully with force=true, so the provider/auth/quota global stop is verified clear.\n\nRun: ${runUrl}`
+              });
+              await github.rest.issues.update({
+                owner,
+                repo,
+                issue_number: issue.number,
+                state: "closed",
+                state_reason: "completed"
+              });
+            }
+
+      - name: Dispatch build for queued issue
+        if: steps.queue_issue.outputs.queue_ready == 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const lane = "${{ steps.queue_issue.outputs.lane }}";
+            const issueNumber = "${{ steps.queue_issue.outputs.issue_number }}";
+            await github.rest.actions.createWorkflowDispatch({
+              owner,
+              repo,
+              workflow_id: "codex-cloud-build-pipeline.yml",
+              ref: "main",
+              inputs: {
+                stage: lane,
+                force: "false"
+              }
+            });
+            core.notice(`Dispatched Codex Cloud Build Pipeline for issue #${issueNumber} lane=${lane}`);
 
       - name: Upload Codex research output
         if: always() && contains(steps.gate.outputs.result, '"run":true')
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: codex-cloud-research
           path: |
