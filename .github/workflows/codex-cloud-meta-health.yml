@@ -210,6 +210,14 @@ jobs:
               )
             );
             const healthIssues = openIssues.filter((issue) => issue.title === healthTitle);
+            for (const issue of healthIssues) {
+              blockers.push({
+                class: "globalStop",
+                title: `Existing cloud health stop #${issue.number} remains active`,
+                detail:
+                  "Meta Health will preserve this pause until a successful forced Codex Cloud Research run verifies the provider and closes the health issue."
+              });
+            }
             const laneOrder = ["backend", "frontend", "quality", "security", "docs"];
             const issueField = (issue, name) =>
               (issue.body || "").match(new RegExp(`^${name}:\\s*(.+)$`, "im"))?.[1]?.toLowerCase() || "";
