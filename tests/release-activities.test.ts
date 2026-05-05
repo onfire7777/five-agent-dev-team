@@ -92,7 +92,8 @@ describe("release activities", () => {
     const configPath = path.join(tempDir, "agent-team.config.yaml");
     await fs.writeFile(configPath, configYaml(tempDir), "utf8");
     const store = fakeStore([], {
-      emergencyStopSequence: [emergencyStopStatus(false, "owner-repo"), emergencyStopStatus(true, "owner-repo")]
+      emergencyStopSequence: [emergencyStopStatus(false, "owner-repo"), emergencyStopStatus(true, "owner-repo")],
+      emergencyStopSequenceProjectId: "owner-repo"
     });
     const { performAutonomousRelease } = await loadActivities(store);
 
@@ -372,6 +373,7 @@ type FakeStoreOptions = {
   activeGlobalStop?: boolean;
   activeProjectStops?: Set<string>;
   emergencyStopSequence?: EmergencyStopStatus[];
+  emergencyStopSequenceProjectId?: string;
 };
 
 function fakeStore(connections: ProjectConnection[] = [], options: FakeStoreOptions = {}): FakeStore {
@@ -391,6 +393,9 @@ function fakeStore(connections: ProjectConnection[] = [], options: FakeStoreOpti
     },
     async getEmergencyStop(projectId?: string) {
       if (options.emergencyStopSequence?.length) {
+        if (options.emergencyStopSequenceProjectId && projectId !== options.emergencyStopSequenceProjectId) {
+          return emergencyStopStatus(false, projectId);
+        }
         const stop =
           options.emergencyStopSequence[Math.min(emergencyStopIndex, options.emergencyStopSequence.length - 1)];
         emergencyStopIndex += 1;

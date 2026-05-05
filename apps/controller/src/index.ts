@@ -1914,17 +1914,10 @@ app.post("/api/emergency-resume", async (req, res, next) => {
 });
 
 function emergencyControlTarget(input: EmergencyControlRequest): { responseScope: string; projectId?: string } {
-  const requestedScope = input.scope.trim();
-  if (requestedScope === "global") {
-    if (input.projectId) throw new HttpError("projectId is only allowed for project emergency controls.", 400);
+  if (input.scope === "global") {
     return { responseScope: "global" };
   }
-  const embeddedProjectId = requestedScope.startsWith("project:")
-    ? requestedScope.slice("project:".length).trim()
-    : undefined;
-  const projectId = input.projectId || embeddedProjectId || (requestedScope === "project" ? undefined : requestedScope);
-  if (!projectId) throw new HttpError("projectId is required for project emergency controls.", 400);
-  return { responseScope: `project:${projectId}`, projectId };
+  return { responseScope: `project:${input.projectId}`, projectId: input.projectId };
 }
 
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
