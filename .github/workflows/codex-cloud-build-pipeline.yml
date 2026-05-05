@@ -491,6 +491,94 @@ jobs:
             Expected verification before PR publication:
             ${{ steps.gate.outputs.verify_hint }}
 
+      - name: Pause pipeline on Codex provider failure
+        id: provider_failure_pause
+        if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'issue' && steps.run_codex.outcome == 'failure'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        with:
+          script: |
+            const issue_number = Number("${{ steps.gate.outputs.target_number }}");
+            const { owner, repo } = context.repo;
+            const healthTitle = "[Codex Health] Cloud control-plane finding";
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const labels = ["agent:blocked", "blocker:global-stop"];
+            let cleanupError = null;
+
+            try {
+              const body = [
+                "# Codex Cloud Meta Health",
+                "",
+                `Observed: ${new Date().toISOString()}`,
+                `Repository: ${owner}/${repo}`,
+                "",
+                "## Blockers",
+                `- globalStop: Codex provider call failed during ${{ steps.gate.outputs.stage_display }}.`,
+                "",
+                "## Evidence",
+                "- Workflow: Codex Cloud Build Pipeline",
+                `- Stage: ${{ steps.gate.outputs.stage }}`,
+                `- Queue issue: #${issue_number}`,
+                `- Run: ${runUrl}`,
+                "- The Codex action failed before a verified implementation PR could be published. Treat this as an OpenAI provider/auth/quota issue until a forced cloud research or lane run succeeds.",
+                "",
+                "## Required action",
+                "- Verify OPENAI_API_KEY, OpenAI project billing, project limits, and model access.",
+                "- After fixing credentials or quota, run Codex Cloud Research manually with force=true, then run Meta Health to clear this pause.",
+                "",
+                "## Routing",
+                "Cloud build lanes should remain paused by this global stop issue."
+              ].join("\n");
+              const openIssuesRaw = await github.paginate(github.rest.issues.listForRepo, {
+                owner,
+                repo,
+                state: "open",
+                per_page: 100
+              });
+              const healthIssue = openIssuesRaw.find((issue) => !issue.pull_request && issue.title === healthTitle);
+              if (healthIssue) {
+                await github.rest.issues.update({
+                  owner,
+                  repo,
+                  issue_number: healthIssue.number,
+                  body,
+                  labels
+                });
+              } else {
+                await github.rest.issues.create({
+                  owner,
+                  repo,
+                  title: healthTitle,
+                  body,
+                  labels
+                });
+              }
+            } catch (error) {
+              core.error(`Unexpected provider-failure pause error: ${error.status || "unknown"} ${error.message}`);
+              throw error;
+            } finally {
+              try {
+                await github.rest.issues.addLabels({ owner, repo, issue_number, labels });
+                for (const label of ["agent:running", "agent:claimed"]) {
+                  try {
+                    await github.rest.issues.removeLabel({ owner, repo, issue_number, name: label });
+                  } catch {}
+                }
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number,
+                  body: `Codex provider failure paused the cloud automation pipeline before this item could finish.\n\nRun: ${runUrl}`
+                });
+              } catch (error) {
+                cleanupError = error;
+                core.error(`Provider-failure queue cleanup failed: ${error.status || "unknown"} ${error.message}`);
+              }
+            }
+
+            if (cleanupError) throw cleanupError;
+            core.setOutput("handled", "true");
+            core.setFailed("Codex provider failure paused cloud automation.");
+
       - name: Detect generated changes
         id: changes
         if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'issue'
@@ -748,7 +836,7 @@ jobs:
               .write();
 
       - name: Route failed issue
-        if: failure() && steps.gate.outputs.target_kind == 'issue'
+        if: failure() && steps.gate.outputs.target_kind == 'issue' && steps.provider_failure_pause.outputs.handled != 'true'
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
         with:
           script: |
