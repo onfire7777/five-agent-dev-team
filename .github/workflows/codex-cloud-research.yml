@@ -77,6 +77,21 @@ jobs:
               state: "open",
               per_page: 100
             });
+            const openIssues = openIssuesRaw.filter((issue) => !issue.pull_request);
+            const globalStop = openIssues.find((issue) => {
+              const labels = issue.labels.map((label) => label.name);
+              return (
+                issue.title.startsWith("[Codex Health]") &&
+                labels.includes("agent:blocked") &&
+                labels.includes("blocker:global-stop")
+              );
+            });
+            if (globalStop && !force) {
+              return finish({
+                run: false,
+                reason: `skipped: global stop issue #${globalStop.number}: ${globalStop.title}`
+              });
+            }
             const activeQueueIssues = openIssuesRaw
               .filter((issue) => !issue.pull_request)
               .filter((issue) =>
@@ -176,6 +191,62 @@ jobs:
             Lane assignment: <backend|frontend|quality|security|docs>
             Execution target: <codex-cloud|codex-action|agentic-workflow>
             Score: <22-30>/30
+
+      - name: Pause pipeline on Codex provider failure
+        if: failure() && steps.run_codex.outcome == 'failure'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const healthTitle = "[Codex Health] Cloud control-plane finding";
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const body = [
+              "# Codex Cloud Meta Health",
+              "",
+              `Observed: ${new Date().toISOString()}`,
+              `Repository: ${owner}/${repo}`,
+              "",
+              "## Blockers",
+              "- globalStop: Codex provider call failed during Stage 0 R&D.",
+              "",
+              "## Evidence",
+              `- Workflow: Codex Cloud Research`,
+              `- Run: ${runUrl}`,
+              "- The Codex action failed before producing a valid queue item. Treat this as an OpenAI provider/auth/quota issue until a forced research run succeeds.",
+              "",
+              "## Required action",
+              "- Verify OPENAI_API_KEY, OpenAI project billing, project limits, and model access.",
+              "- After fixing credentials or quota, run Codex Cloud Research manually with force=true, then run Meta Health to clear this pause.",
+              "",
+              "## Routing",
+              "Cloud build lanes should remain paused by this global stop issue."
+            ].join("\n");
+            const openIssuesRaw = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: "open",
+              per_page: 100
+            });
+            const healthIssue = openIssuesRaw.find((issue) => !issue.pull_request && issue.title === healthTitle);
+            const labels = ["agent:blocked", "blocker:global-stop"];
+            if (healthIssue) {
+              await github.rest.issues.update({
+                owner,
+                repo,
+                issue_number: healthIssue.number,
+                body,
+                labels
+              });
+            } else {
+              await github.rest.issues.create({
+                owner,
+                repo,
+                title: healthTitle,
+                body,
+                labels
+              });
+            }
+            core.setFailed("Codex provider failure paused cloud automation.");
 
       - name: Create or refresh queue issue
         id: queue_issue

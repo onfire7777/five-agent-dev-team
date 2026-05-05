@@ -37,6 +37,7 @@ jobs:
             const now = new Date().toISOString();
             const blockers = [];
             const warnings = [];
+            const healthTitle = "[Codex Health] Cloud control-plane finding";
 
             const branch = await github.rest.repos.getBranch({ owner, repo, branch: "main" });
             const mainSha = branch.data.commit.sha;
@@ -208,6 +209,7 @@ jobs:
                 ["agent:queued", "agent:claimed", "agent:running", "agent:merge-gate"].includes(label.name)
               )
             );
+            const healthIssues = openIssues.filter((issue) => issue.title === healthTitle);
             const laneOrder = ["backend", "frontend", "quality", "security", "docs"];
             const issueField = (issue, name) =>
               (issue.body || "").match(new RegExp(`^${name}:\\s*(.+)$`, "im"))?.[1]?.toLowerCase() || "";
@@ -312,7 +314,13 @@ jobs:
               });
             }
 
-            if (!blockingOpenPrs.length && !queueIssues.length && retryableBlockedIssues.length) {
+            if (
+              !blockers.length &&
+              !healthIssues.length &&
+              !blockingOpenPrs.length &&
+              !queueIssues.length &&
+              retryableBlockedIssues.length
+            ) {
               const { issue, lane } = retryableBlockedIssues[0];
               const labels = labelNamesFor(issue);
               await github.rest.issues.addLabels({
@@ -375,8 +383,6 @@ jobs:
               });
             }
 
-            const healthTitle = "[Codex Health] Cloud control-plane finding";
-            const healthIssues = openIssues.filter((issue) => issue.title === healthTitle);
             const requiredLine = requiredContexts.length ? requiredContexts.join(", ") : "none reported";
             const summary = [
               "# Codex Cloud Meta Health",
