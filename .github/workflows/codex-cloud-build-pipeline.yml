@@ -664,6 +664,11 @@ jobs:
           gh pr view "$PR_NUMBER" --json number,title,isDraft,mergeStateStatus,reviewDecision,labels,headRefOid,url
           gh pr checks "$PR_NUMBER" --required --watch
           merge_state="$(gh pr view "$PR_NUMBER" --json mergeStateStatus --jq '.mergeStateStatus')"
+          if [ "$merge_state" = "BEHIND" ]; then
+            echo "Captain updating PR #$PR_NUMBER because it is behind main."
+            gh pr update-branch "$PR_NUMBER"
+            exit 0
+          fi
           if [ "$merge_state" != "CLEAN" ] && [ "$merge_state" != "HAS_HOOKS" ]; then
             echo "Captain no-op: PR #$PR_NUMBER is not merge-ready after required checks; mergeStateStatus=$merge_state"
             exit 0
