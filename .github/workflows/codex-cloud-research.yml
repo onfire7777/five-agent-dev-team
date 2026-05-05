@@ -34,7 +34,7 @@ jobs:
     steps:
       - name: Gate cloud research
         id: gate
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           result-encoding: string
           script: |
@@ -194,7 +194,7 @@ jobs:
 
       - name: Pause pipeline on Codex provider failure
         if: failure() && steps.run_codex.outcome == 'failure'
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
             const { owner, repo } = context.repo;
@@ -251,7 +251,7 @@ jobs:
       - name: Create or refresh queue issue
         id: queue_issue
         if: steps.run_codex.outputs.final-message != ''
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         env:
           CODEX_FINAL_MESSAGE: ${{ steps.run_codex.outputs.final-message }}
         with:
@@ -351,7 +351,7 @@ jobs:
 
       - name: Clear provider global stop after successful forced research
         if: always() && steps.run_codex.outcome == 'success' && (github.event.inputs.force == 'true' || github.event.inputs.force == true)
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
             const { owner, repo } = context.repo;
@@ -384,7 +384,7 @@ jobs:
 
       - name: Dispatch build for queued issue
         if: steps.queue_issue.outputs.queue_ready == 'true'
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
             const { owner, repo } = context.repo;
