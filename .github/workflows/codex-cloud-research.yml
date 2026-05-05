@@ -349,6 +349,39 @@ jobs:
             core.setOutput("issue_number", String(created.data.number));
             core.setOutput("lane", lane);
 
+      - name: Clear provider global stop after successful forced research
+        if: always() && steps.run_codex.outcome == 'success' && (github.event.inputs.force == 'true' || github.event.inputs.force == true)
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const healthTitle = "[Codex Health] Cloud control-plane finding";
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const openIssuesRaw = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: "open",
+              per_page: 100
+            });
+            const healthIssues = openIssuesRaw
+              .filter((issue) => !issue.pull_request && issue.title === healthTitle);
+
+            for (const issue of healthIssues) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issue.number,
+                body: `Codex Cloud Research completed successfully with force=true, so the provider/auth/quota global stop is verified clear.\n\nRun: ${runUrl}`
+              });
+              await github.rest.issues.update({
+                owner,
+                repo,
+                issue_number: issue.number,
+                state: "closed",
+                state_reason: "completed"
+              });
+            }
+
       - name: Dispatch build for queued issue
         if: steps.queue_issue.outputs.queue_ready == 'true'
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
