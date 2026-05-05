@@ -58,7 +58,7 @@ jobs:
     steps:
       - name: Select cloud stage and target
         id: gate
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
             const { owner, repo } = context.repo;
@@ -494,7 +494,7 @@ jobs:
       - name: Pause pipeline on Codex provider failure
         id: provider_failure_pause
         if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'issue' && steps.run_codex.outcome == 'failure'
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
             const issue_number = Number("${{ steps.gate.outputs.target_number }}");
@@ -603,7 +603,7 @@ jobs:
 
       - name: Route no-change issue
         if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'issue' && steps.changes.outputs.changed != 'true'
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
             const fs = require("fs");
@@ -799,7 +799,7 @@ jobs:
 
       - name: Cloud janitor pass
         if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'janitor'
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
             const { owner, repo } = context.repo;
@@ -837,7 +837,7 @@ jobs:
 
       - name: Route failed issue
         if: failure() && steps.gate.outputs.target_kind == 'issue' && steps.provider_failure_pause.outputs.handled != 'true'
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
             const fs = require("fs");
