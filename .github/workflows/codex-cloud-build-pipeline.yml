@@ -670,7 +670,14 @@ jobs:
           fi
           head_sha="$(gh pr view "$PR_NUMBER" --json headRefOid --jq '.headRefOid')"
           target_issues="$(gh pr view "$PR_NUMBER" --json closingIssuesReferences --jq '.closingIssuesReferences[].number' || true)"
-          gh pr merge "$PR_NUMBER" --squash --delete-branch --match-head-commit "$head_sha"
+          if ! merge_output="$(gh pr merge "$PR_NUMBER" --squash --delete-branch --match-head-commit "$head_sha" 2>&1)"; then
+            if echo "$merge_output" | grep -Eiq "merge already in progress|already merged"; then
+              echo "Captain no-op: PR #$PR_NUMBER merge is already handled by another Captain run."
+              exit 0
+            fi
+            echo "$merge_output" >&2
+            exit 1
+          fi
 
           for issue_number in $target_issues; do
             gh issue edit "$issue_number" --add-label agent:done || true
