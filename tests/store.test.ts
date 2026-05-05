@@ -151,6 +151,23 @@ describe("controller store workflow claims", () => {
     await expect(store.listWorkflowClaims()).resolves.toEqual(["WI-1"]);
   });
 
+  it("keeps workflow claiming behind scoped emergency stops", async () => {
+    const store = new MemoryStore();
+
+    await store.setEmergencyStop(true, "Project pause", "project-a");
+    await expect(store.claimWorkItemForWorkflowIfNotStopped("WI-1", "project-a")).resolves.toMatchObject({
+      claimed: false,
+      emergencyStop: {
+        active: true,
+        reason: "Project pause",
+        scope: "project",
+        projectId: "project-a"
+      }
+    });
+    await expect(store.listWorkflowClaims()).resolves.toEqual([]);
+    await expect(store.claimWorkItemForWorkflowIfNotStopped("WI-2", "project-b")).resolves.toEqual({ claimed: true });
+  });
+
   it("stores stage events with increasing sequence numbers", async () => {
     const store = new MemoryStore();
 

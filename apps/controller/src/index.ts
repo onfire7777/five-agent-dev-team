@@ -1719,8 +1719,15 @@ async function startWorkflowIfSafe(
     }
   }
 
-  const claimed = await store.claimWorkItemForWorkflow(workItem.id);
-  if (!claimed) {
+  const claim = await store.claimWorkItemForWorkflowIfNotStopped(workItem.id, workItem.projectId);
+  if (claim.emergencyStop?.active) {
+    return {
+      workflowId: null,
+      queued: true,
+      reason: claim.emergencyStop.reason || "Emergency stop is active"
+    };
+  }
+  if (!claim.claimed) {
     return { workflowId: null, queued: true, reason: "Work item is already claimed by a workflow." };
   }
 
@@ -1894,7 +1901,7 @@ async function requireConnectedProjectForWork(input: z.infer<typeof CreateWorkIt
 app.post("/api/emergency-stop", async (req, res, next) => {
   try {
     const input = EmergencyControlRequestSchema.parse(req.body);
-    const target = emergencyControlTarget(input);
+    const target = await emergencyControlTarget(input);
     await store.setEmergencyStop(true, input.reason, target.projectId);
     res.json({ emergencyStop: true, scope: target.responseScope, projectId: target.projectId, reason: input.reason });
   } catch (error) {
@@ -1905,7 +1912,7 @@ app.post("/api/emergency-stop", async (req, res, next) => {
 app.post("/api/emergency-resume", async (req, res, next) => {
   try {
     const input = EmergencyControlRequestSchema.parse(req.body);
-    const target = emergencyControlTarget(input);
+    const target = await emergencyControlTarget(input);
     await store.setEmergencyStop(false, input.reason, target.projectId);
     res.json({ emergencyStop: false, scope: target.responseScope, projectId: target.projectId, reason: input.reason });
   } catch (error) {
@@ -1913,11 +1920,14 @@ app.post("/api/emergency-resume", async (req, res, next) => {
   }
 });
 
-function emergencyControlTarget(input: EmergencyControlRequest): { responseScope: string; projectId?: string } {
+async function emergencyControlTarget(
+  input: EmergencyControlRequest
+): Promise<{ responseScope: string; projectId?: string }> {
   if (input.scope === "global") {
     return { responseScope: "global" };
   }
-  return { responseScope: `project:${input.projectId}`, projectId: input.projectId };
+  const project = await requireScopeForProjectId(input.projectId);
+  return { responseScope: `project:${project.projectId}`, projectId: project.projectId };
 }
 
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

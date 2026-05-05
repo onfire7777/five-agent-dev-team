@@ -136,6 +136,20 @@ describe("controller work item API contract", () => {
     await expect(
       postJson("/api/emergency-stop", {
         scope: "project",
+        projectId: "api-project-typo",
+        reason: "Typo should not create a scoped stop"
+      })
+    ).resolves.toMatchObject({
+      status: 404,
+      body: {
+        status: 404,
+        detail: "Connected project api-project-typo was not found."
+      }
+    });
+
+    await expect(
+      postJson("/api/emergency-stop", {
+        scope: "project",
         projectId: "api-project-a",
         reason: "Pause only project A"
       })

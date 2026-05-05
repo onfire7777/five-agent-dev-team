@@ -585,6 +585,9 @@ function fakeStore(connections: ProjectConnection[] = [], options: FakeStoreOpti
     async claimWorkItemForWorkflow() {
       return true;
     },
+    async claimWorkItemForWorkflowIfNotStopped() {
+      return { claimed: true };
+    },
     async listWorkflowClaims() {
       return [];
     },

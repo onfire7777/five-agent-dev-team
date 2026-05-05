@@ -109,6 +109,10 @@ export type EmergencyStopStatus = {
   projectId?: string;
   updatedAt?: string;
 };
+export type WorkflowClaimResult = {
+  claimed: boolean;
+  emergencyStop?: EmergencyStopStatus;
+};
 
 export type TeamBusMessage = StrictProjectScope & {
   id: string;
@@ -267,6 +271,7 @@ export interface ControllerStore {
   upsertProposal(scope: StrictProjectScope, input: ProposalInput): Promise<Proposal>;
   decideProposal(scope: StrictProjectScope, proposalId: string, input: ProposalDecisionInput): Promise<Proposal>;
   claimWorkItemForWorkflow(id: string): Promise<boolean>;
+  claimWorkItemForWorkflowIfNotStopped(id: string, projectId?: string): Promise<WorkflowClaimResult>;
   listWorkflowClaims(): Promise<string[]>;
   releaseWorkItemWorkflowClaim(id: string): Promise<void>;
   getEmergencyStop(projectId?: string): Promise<EmergencyStopStatus>;
@@ -707,6 +712,12 @@ export class MemoryStore implements ControllerStore {
     return true;
   }
 
+  async claimWorkItemForWorkflowIfNotStopped(id: string, projectId?: string): Promise<WorkflowClaimResult> {
+    const emergencyStop = await this.getEmergencyStop(projectId);
+    if (emergencyStop.active) return { claimed: false, emergencyStop };
+    return { claimed: await this.claimWorkItemForWorkflow(id) };
+  }
+
   async listWorkflowClaims(): Promise<string[]> {
     return [...this.workflowClaims];
   }
@@ -985,6 +996,46 @@ export class PostgresStore extends MemoryStore {
       [id]
     );
     return result.rowCount === 1;
+  }
+
+  override async claimWorkItemForWorkflowIfNotStopped(id: string, projectId?: string): Promise<WorkflowClaimResult> {
+    const keys = [emergencyStopKey(), ...(projectId ? [emergencyStopKey(projectId)] : [])].sort();
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      for (const key of keys) {
+        await client.query("select pg_advisory_xact_lock(hashtext($1)::bigint)", [key]);
+      }
+      const flags = await client.query<{ key: string; value: unknown }>(
+        "select key, value from controller_flags where key = any($1::text[])",
+        [keys]
+      );
+      const valuesByKey = new Map(flags.rows.map((row) => [row.key, row.value]));
+      const globalStop = emergencyStopStatusFromValue(valuesByKey.get(emergencyStopKey()));
+      const projectStop = projectId
+        ? emergencyStopStatusFromValue(valuesByKey.get(emergencyStopKey(projectId)), projectId)
+        : inactiveEmergencyStop();
+      const emergencyStop = globalStop.active ? globalStop : projectStop;
+      if (emergencyStop.active) {
+        await client.query("commit");
+        return { claimed: false, emergencyStop };
+      }
+      const result = await client.query(
+        "insert into workflow_claims (work_item_id) values ($1) on conflict do nothing returning work_item_id",
+        [id]
+      );
+      await client.query("commit");
+      return { claimed: result.rowCount === 1 };
+    } catch (error) {
+      try {
+        await client.query("rollback");
+      } catch (rollbackError) {
+        console.warn("Workflow claim rollback failed.", rollbackError);
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   override async listWorkflowClaims(): Promise<string[]> {
@@ -1369,19 +1420,35 @@ export class PostgresStore extends MemoryStore {
   }
 
   override async setEmergencyStop(active: boolean, reason = "", projectId?: string): Promise<void> {
-    await this.pool.query(
-      "insert into controller_flags (key, value) values ($1, $2) on conflict (key) do update set value = excluded.value",
-      [
-        emergencyStopKey(projectId),
-        {
-          active,
-          reason: active ? reason : "",
-          scope: projectId ? "project" : "global",
-          projectId,
-          updatedAt: new Date().toISOString()
-        }
-      ]
-    );
+    const key = emergencyStopKey(projectId);
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      await client.query("select pg_advisory_xact_lock(hashtext($1)::bigint)", [key]);
+      await client.query(
+        "insert into controller_flags (key, value) values ($1, $2) on conflict (key) do update set value = excluded.value",
+        [
+          key,
+          {
+            active,
+            reason: active ? reason : "",
+            scope: projectId ? "project" : "global",
+            projectId,
+            updatedAt: new Date().toISOString()
+          }
+        ]
+      );
+      await client.query("commit");
+    } catch (error) {
+      try {
+        await client.query("rollback");
+      } catch (rollbackError) {
+        console.warn("Emergency stop rollback failed.", rollbackError);
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
     await super.setEmergencyStop(active, reason, projectId);
   }
 
