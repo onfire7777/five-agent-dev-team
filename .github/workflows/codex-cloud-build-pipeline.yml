@@ -450,6 +450,7 @@ jobs:
       - name: Run Codex cloud build stage
         id: run_codex
         continue-on-error: true
+        timeout-minutes: 30
         if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'issue' && env.OPENAI_API_KEY != ''
         uses: openai/codex-action@a26d2d4d8b78a694338b8e3715c3630254340b2c
         with:
@@ -507,6 +508,10 @@ jobs:
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Validate cloud stage diff
+        if: steps.changes.outputs.changed == 'true'
+        run: node scripts/validate-cloud-stage-diff.mjs --stage "${{ steps.gate.outputs.stage }}" --target "$RUNNER_TEMP/codex-cloud-artifacts/codex-target.json"
 
       - name: Route no-change issue
         if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'issue' && steps.changes.outputs.changed != 'true'
