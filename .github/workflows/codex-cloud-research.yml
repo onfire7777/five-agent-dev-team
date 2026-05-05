@@ -350,7 +350,7 @@ jobs:
             core.setOutput("lane", lane);
 
       - name: Clear provider global stop after successful forced research
-        if: steps.run_codex.outcome == 'success' && (github.event.inputs.force == 'true' || github.event.inputs.force == true)
+        if: always() && steps.run_codex.outcome == 'success' && (github.event.inputs.force == 'true' || github.event.inputs.force == true)
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
         with:
           script: |
@@ -364,11 +364,7 @@ jobs:
               per_page: 100
             });
             const healthIssues = openIssuesRaw
-              .filter((issue) => !issue.pull_request && issue.title === healthTitle)
-              .filter((issue) => {
-                const labels = issue.labels.map((label) => label.name);
-                return labels.includes("agent:blocked") && labels.includes("blocker:global-stop");
-              });
+              .filter((issue) => !issue.pull_request && issue.title === healthTitle);
 
             for (const issue of healthIssues) {
               await github.rest.issues.createComment({

@@ -17,6 +17,8 @@ describe("cloud automation health policy", () => {
     expect(research).toContain('labels.includes("blocker:global-stop")');
     expect(research).toContain("Pause pipeline on Codex provider failure");
     expect(research).toContain("Clear provider global stop after successful forced research");
+    expect(research).toContain("always() && steps.run_codex.outcome == 'success'");
+    expect(research).toContain(".filter((issue) => !issue.pull_request && issue.title === healthTitle)");
   });
 
   it("turns Codex provider failures into global stops before lane retry routing", () => {
