@@ -452,7 +452,7 @@ jobs:
         continue-on-error: true
         timeout-minutes: 30
         if: steps.gate.outputs.should_run == 'true' && steps.gate.outputs.target_kind == 'issue' && env.OPENAI_API_KEY != ''
-        uses: openai/codex-action@a26d2d4d8b78a694338b8e3715c3630254340b2c
+        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           model: ${{ env.CODEX_ACTION_MODEL }}

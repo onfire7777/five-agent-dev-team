@@ -146,7 +146,7 @@ jobs:
       - name: Run Codex cloud research
         id: run_codex
         if: contains(steps.gate.outputs.result, '"run":true') && env.OPENAI_API_KEY != ''
-        uses: openai/codex-action@a26d2d4d8b78a694338b8e3715c3630254340b2c
+        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           model: ${{ env.CODEX_ACTION_MODEL }}
