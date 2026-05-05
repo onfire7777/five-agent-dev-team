@@ -3,6 +3,7 @@ import {
   MemoryStore,
   PostgresStore,
   type ControllerStore,
+  type EmergencyStopStatus,
   type StrictProjectScope
 } from "../apps/controller/src/store";
 import {
@@ -96,6 +97,49 @@ async function expectLatestEventBackfill(store: ControllerStore, workItemPrefix 
   await expect(store.listEvents(0, 0)).resolves.toEqual([]);
 }
 
+async function expectScopedEmergencyStopLifecycle(store: ControllerStore, projectId = "project-a") {
+  await store.setEmergencyStop(false, "Reset global stop");
+  await store.setEmergencyStop(false, "Reset project stop", projectId);
+  await store.setEmergencyStop(false, "Reset other project stop", "project-b");
+
+  await store.setEmergencyStop(true, "Global stop");
+  await store.setEmergencyStop(true, "Project A stop", projectId);
+
+  await expect(store.getEmergencyStop(projectId)).resolves.toMatchObject({
+    active: true,
+    reason: "Global stop",
+    scope: "global"
+  } satisfies Partial<EmergencyStopStatus>);
+
+  await store.setEmergencyStop(false, "Resume global");
+
+  await expect(store.getEmergencyStop(projectId)).resolves.toMatchObject({
+    active: true,
+    reason: "Project A stop",
+    scope: "project",
+    projectId
+  } satisfies Partial<EmergencyStopStatus>);
+  await expect(store.getEmergencyStop("project-b")).resolves.toMatchObject({
+    active: false,
+    scope: "project",
+    projectId: "project-b"
+  } satisfies Partial<EmergencyStopStatus>);
+  await expect(store.getStatus()).resolves.toMatchObject({
+    system: {
+      emergencyStop: false,
+      emergencyReason: ""
+    }
+  });
+
+  await store.setEmergencyStop(false, "Resume project", projectId);
+
+  await expect(store.getEmergencyStop(projectId)).resolves.toMatchObject({
+    active: false,
+    scope: "project",
+    projectId
+  } satisfies Partial<EmergencyStopStatus>);
+}
+
 describe("controller store workflow claims", () => {
   it("prevents duplicate workflow claims for the same item", async () => {
     const store = new MemoryStore();
@@ -105,6 +149,23 @@ describe("controller store workflow claims", () => {
     await store.releaseWorkItemWorkflowClaim("WI-1");
     await expect(store.claimWorkItemForWorkflow("WI-1")).resolves.toBe(true);
     await expect(store.listWorkflowClaims()).resolves.toEqual(["WI-1"]);
+  });
+
+  it("keeps workflow claiming behind scoped emergency stops", async () => {
+    const store = new MemoryStore();
+
+    await store.setEmergencyStop(true, "Project pause", "project-a");
+    await expect(store.claimWorkItemForWorkflowIfNotStopped("WI-1", "project-a")).resolves.toMatchObject({
+      claimed: false,
+      emergencyStop: {
+        active: true,
+        reason: "Project pause",
+        scope: "project",
+        projectId: "project-a"
+      }
+    });
+    await expect(store.listWorkflowClaims()).resolves.toEqual([]);
+    await expect(store.claimWorkItemForWorkflowIfNotStopped("WI-2", "project-b")).resolves.toEqual({ claimed: true });
   });
 
   it("stores stage events with increasing sequence numbers", async () => {
@@ -134,6 +195,11 @@ describe("controller store workflow claims", () => {
   it("returns the latest event backfill in ascending sequence order", async () => {
     const store = new MemoryStore();
     await expectLatestEventBackfill(store);
+  });
+
+  it("stores global and project emergency stops independently in memory", async () => {
+    const store = new MemoryStore();
+    await expectScopedEmergencyStopLifecycle(store);
   });
 
   it("filters events by projectId and excludes unscoped events", async () => {
@@ -359,6 +425,24 @@ describe("controller store workflow claims", () => {
         await store.init();
         await expectLatestEventBackfill(store, `WI-EVENT-PG-${process.pid}-${Date.now()}`);
       } finally {
+        await store.close();
+      }
+    }
+  );
+
+  it.skipIf(!process.env.POSTGRES_TEST_DATABASE_URL)(
+    "stores global and project emergency stops independently in Postgres",
+    async () => {
+      const connectionString = process.env.POSTGRES_TEST_DATABASE_URL;
+      if (!connectionString) throw new Error("POSTGRES_TEST_DATABASE_URL is required for this test.");
+      const store = new PostgresStore(connectionString);
+      const projectId = `project-stop-${process.pid}-${Date.now()}`;
+      try {
+        await store.init();
+        await expectScopedEmergencyStopLifecycle(store, projectId);
+      } finally {
+        await store.setEmergencyStop(false, "Cleanup global").catch(() => undefined);
+        await store.setEmergencyStop(false, "Cleanup project", projectId).catch(() => undefined);
         await store.close();
       }
     }

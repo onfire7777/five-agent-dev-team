@@ -300,10 +300,26 @@ export const AgentEventSchema = z.object({
 
 export type AgentEvent = z.infer<typeof AgentEventSchema>;
 
-export const EmergencyControlRequestSchema = z.object({
-  scope: z.string().trim().min(1).default("global"),
-  reason: z.string().trim().min(1)
-});
+const EmergencyControlRequestUnionSchema = z.discriminatedUnion("scope", [
+  z
+    .object({
+      scope: z.literal("global"),
+      reason: z.string().trim().min(1)
+    })
+    .strict(),
+  z.object({
+    scope: z.literal("project"),
+    projectId: z.string().trim().min(1),
+    reason: z.string().trim().min(1)
+  })
+]);
+
+export const EmergencyControlRequestSchema = z.preprocess((value) => {
+  if (value && typeof value === "object" && !Array.isArray(value) && !("scope" in value)) {
+    return { ...value, scope: "global" };
+  }
+  return value;
+}, EmergencyControlRequestUnionSchema);
 
 export type EmergencyControlRequest = z.infer<typeof EmergencyControlRequestSchema>;
 

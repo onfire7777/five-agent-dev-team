@@ -123,7 +123,19 @@ describe("target repo config schema", () => {
       scope: "global",
       reason: "Operator stop"
     });
+    expect(
+      EmergencyControlRequestSchema.parse({ scope: "project", projectId: "acme-app", reason: "Pause one repo" })
+    ).toEqual({
+      scope: "project",
+      projectId: "acme-app",
+      reason: "Pause one repo"
+    });
     expect(() => EmergencyControlRequestSchema.parse({ scope: "global", reason: " " })).toThrow();
+    expect(() => EmergencyControlRequestSchema.parse({ scope: "glboal", reason: "Typo" })).toThrow();
+    expect(() => EmergencyControlRequestSchema.parse({ scope: "project", reason: "Missing project" })).toThrow();
+    expect(() =>
+      EmergencyControlRequestSchema.parse({ scope: "global", projectId: "acme-app", reason: "Wrong scope" })
+    ).toThrow();
   });
 
   it("keeps project connection defaults explicit and repo scoped", () => {

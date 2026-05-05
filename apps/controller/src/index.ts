@@ -31,6 +31,7 @@ import {
   WorkItemStateSchema,
   loadTargetRepoConfig,
   targetRepoConfigFromProjectConnection,
+  type EmergencyControlRequest,
   type ProjectCapabilityStatus,
   type ProjectConnection,
   type ProjectConnectionInput,
@@ -160,7 +161,8 @@ const WorkItemProposalDecisionRequest = z.object({
 });
 
 export const app = express();
-const store = createStore();
+export const controllerStore = createStore();
+const store = controllerStore;
 const port = Number(process.env.PORT || 4310);
 const host = process.env.HOST || "127.0.0.1";
 const execFile = util.promisify(childProcess.execFile);
@@ -1690,15 +1692,16 @@ async function decideWorkItemProposal(workItemId: string, decision: "accept" | "
 async function startWorkflowIfSafe(
   workItem: WorkItem
 ): Promise<{ workflowId: string | null; queued: boolean; reason?: string }> {
-  const status = await store.getStatus();
-  if (status.system.emergencyStop) {
+  const emergencyStop = await store.getEmergencyStop(workItem.projectId);
+  if (emergencyStop.active) {
     return {
       workflowId: null,
       queued: true,
-      reason: status.system.emergencyReason || "Emergency stop is active"
+      reason: emergencyStop.reason || "Emergency stop is active"
     };
   }
 
+  const status = await store.getStatus();
   if (workItem.projectId && workItem.repo) {
     const activeSameProject = status.workItems.some(
       (item) =>
@@ -1716,8 +1719,15 @@ async function startWorkflowIfSafe(
     }
   }
 
-  const claimed = await store.claimWorkItemForWorkflow(workItem.id);
-  if (!claimed) {
+  const claim = await store.claimWorkItemForWorkflowIfNotStopped(workItem.id, workItem.projectId);
+  if (claim.emergencyStop?.active) {
+    return {
+      workflowId: null,
+      queued: true,
+      reason: claim.emergencyStop.reason || "Emergency stop is active"
+    };
+  }
+  if (!claim.claimed) {
     return { workflowId: null, queued: true, reason: "Work item is already claimed by a workflow." };
   }
 
@@ -1891,8 +1901,9 @@ async function requireConnectedProjectForWork(input: z.infer<typeof CreateWorkIt
 app.post("/api/emergency-stop", async (req, res, next) => {
   try {
     const input = EmergencyControlRequestSchema.parse(req.body);
-    await store.setEmergencyStop(true, `[${input.scope}] ${input.reason}`);
-    res.json({ emergencyStop: true, scope: input.scope, reason: input.reason });
+    const target = await emergencyControlTarget(input);
+    await store.setEmergencyStop(true, input.reason, target.projectId);
+    res.json({ emergencyStop: true, scope: target.responseScope, projectId: target.projectId, reason: input.reason });
   } catch (error) {
     next(error);
   }
@@ -1901,12 +1912,23 @@ app.post("/api/emergency-stop", async (req, res, next) => {
 app.post("/api/emergency-resume", async (req, res, next) => {
   try {
     const input = EmergencyControlRequestSchema.parse(req.body);
-    await store.setEmergencyStop(false);
-    res.json({ emergencyStop: false, scope: input.scope, reason: input.reason });
+    const target = await emergencyControlTarget(input);
+    await store.setEmergencyStop(false, input.reason, target.projectId);
+    res.json({ emergencyStop: false, scope: target.responseScope, projectId: target.projectId, reason: input.reason });
   } catch (error) {
     next(error);
   }
 });
+
+async function emergencyControlTarget(
+  input: EmergencyControlRequest
+): Promise<{ responseScope: string; projectId?: string }> {
+  if (input.scope === "global") {
+    return { responseScope: "global" };
+  }
+  const project = await requireScopeForProjectId(input.projectId);
+  return { responseScope: `project:${project.projectId}`, projectId: project.projectId };
+}
 
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   const message = error instanceof Error ? error.message : "Unknown error";
