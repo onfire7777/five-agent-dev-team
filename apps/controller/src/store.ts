@@ -102,6 +102,13 @@ type ProjectConnectionPersistInput = ProjectConnectionInput &
   >;
 
 export type StrictProjectScope = { projectId: string; repo: string };
+export type EmergencyStopStatus = {
+  active: boolean;
+  reason: string;
+  scope: "global" | "project";
+  projectId?: string;
+  updatedAt?: string;
+};
 
 export type TeamBusMessage = StrictProjectScope & {
   id: string;
@@ -262,7 +269,8 @@ export interface ControllerStore {
   claimWorkItemForWorkflow(id: string): Promise<boolean>;
   listWorkflowClaims(): Promise<string[]>;
   releaseWorkItemWorkflowClaim(id: string): Promise<void>;
-  setEmergencyStop(active: boolean, reason?: string): Promise<void>;
+  getEmergencyStop(projectId?: string): Promise<EmergencyStopStatus>;
+  setEmergencyStop(active: boolean, reason?: string, projectId?: string): Promise<void>;
 }
 
 export class MemoryStore implements ControllerStore {
@@ -279,8 +287,7 @@ export class MemoryStore implements ControllerStore {
   private events: AgentEvent[] = [];
   private nextEventSequence = 1;
   private workflowClaims = new Set<string>();
-  private emergencyStop = false;
-  private emergencyReason = "";
+  private emergencyStops = new Map<string, EmergencyStopStatus>();
 
   async init(): Promise<void> {
     await this.seedConfiguredProjectConnection();
@@ -288,13 +295,14 @@ export class MemoryStore implements ControllerStore {
   }
 
   async getStatus() {
+    const emergencyStop = await this.getEmergencyStop();
     return buildControllerStatus({
       workItems: this.workItems,
       artifacts: this.artifacts,
       events: this.events,
       projectConnections: await this.listProjectConnections(),
-      emergencyStop: this.emergencyStop,
-      emergencyReason: this.emergencyReason
+      emergencyStop: emergencyStop.active,
+      emergencyReason: emergencyStop.reason
     });
   }
 
@@ -707,9 +715,21 @@ export class MemoryStore implements ControllerStore {
     this.workflowClaims.delete(id);
   }
 
-  async setEmergencyStop(active: boolean, reason = ""): Promise<void> {
-    this.emergencyStop = active;
-    this.emergencyReason = active ? reason : "";
+  async getEmergencyStop(projectId?: string): Promise<EmergencyStopStatus> {
+    const globalStop = this.emergencyStops.get(emergencyStopKey());
+    if (globalStop?.active) return globalStop;
+    if (!projectId) return globalStop || inactiveEmergencyStop();
+    return this.emergencyStops.get(emergencyStopKey(projectId)) || inactiveEmergencyStop(projectId);
+  }
+
+  async setEmergencyStop(active: boolean, reason = "", projectId?: string): Promise<void> {
+    this.emergencyStops.set(emergencyStopKey(projectId), {
+      active,
+      reason: active ? reason : "",
+      scope: projectId ? "project" : "global",
+      projectId,
+      updatedAt: new Date().toISOString()
+    });
   }
 
   private async seedConfiguredProjectConnection(): Promise<void> {
@@ -788,7 +808,7 @@ export class PostgresStore extends MemoryStore {
     const workItems = await this.listWorkItems();
     const artifacts = await this.listArtifacts();
     const events = await this.listEvents(0, 50);
-    const emergencyStop = await this.readEmergencyStopFlag();
+    const emergencyStop = await this.getEmergencyStop();
     return buildControllerStatus({
       workItems,
       artifacts,
@@ -1335,26 +1355,39 @@ export class PostgresStore extends MemoryStore {
     return resolveProjectScopeFromConnections(input, connections) || resolveConfiguredProject();
   }
 
-  override async setEmergencyStop(active: boolean, reason = ""): Promise<void> {
-    await this.pool.query(
-      "insert into controller_flags (key, value) values ('emergency_stop', $1) on conflict (key) do update set value = excluded.value",
-      [{ active, reason, updatedAt: new Date().toISOString() }]
+  override async getEmergencyStop(projectId?: string): Promise<EmergencyStopStatus> {
+    const keys = projectId ? [emergencyStopKey(), emergencyStopKey(projectId)] : [emergencyStopKey()];
+    const result = await this.pool.query<{ key: string; value: unknown }>(
+      "select key, value from controller_flags where key = any($1::text[])",
+      [keys]
     );
-    await super.setEmergencyStop(active, reason);
+    const valuesByKey = new Map(result.rows.map((row) => [row.key, row.value]));
+    const globalStop = emergencyStopStatusFromValue(valuesByKey.get(emergencyStopKey()));
+    if (globalStop.active) return globalStop;
+    if (!projectId) return globalStop;
+    return emergencyStopStatusFromValue(valuesByKey.get(emergencyStopKey(projectId)), projectId);
+  }
+
+  override async setEmergencyStop(active: boolean, reason = "", projectId?: string): Promise<void> {
+    await this.pool.query(
+      "insert into controller_flags (key, value) values ($1, $2) on conflict (key) do update set value = excluded.value",
+      [
+        emergencyStopKey(projectId),
+        {
+          active,
+          reason: active ? reason : "",
+          scope: projectId ? "project" : "global",
+          projectId,
+          updatedAt: new Date().toISOString()
+        }
+      ]
+    );
+    await super.setEmergencyStop(active, reason, projectId);
   }
 
   private async listArtifacts(): Promise<StageArtifact[]> {
     const result = await this.pool.query("select payload from stage_artifacts order by created_at desc");
     return result.rows.map((row) => StageArtifactSchema.parse(row.payload));
-  }
-
-  private async readEmergencyStopFlag(): Promise<{ active: boolean; reason: string }> {
-    const result = await this.pool.query("select value from controller_flags where key = 'emergency_stop'");
-    if (!result.rows[0]) return { active: false, reason: "" };
-    return {
-      active: Boolean(result.rows[0].value?.active),
-      reason: String(result.rows[0].value?.reason || "")
-    };
   }
 
   private async seedProjectConnectionsFromConfig(): Promise<void> {
@@ -1376,6 +1409,31 @@ export function createStore(): ControllerStore {
     return new PostgresStore(process.env.DATABASE_URL);
   }
   return new MemoryStore();
+}
+
+function emergencyStopKey(projectId?: string): string {
+  return projectId ? `emergency_stop:project:${projectId}` : "emergency_stop";
+}
+
+function inactiveEmergencyStop(projectId?: string): EmergencyStopStatus {
+  return {
+    active: false,
+    reason: "",
+    scope: projectId ? "project" : "global",
+    projectId
+  };
+}
+
+function emergencyStopStatusFromValue(value: unknown, projectId?: string): EmergencyStopStatus {
+  if (!value || typeof value !== "object") return inactiveEmergencyStop(projectId);
+  const payload = value as Record<string, unknown>;
+  return {
+    active: Boolean(payload.active),
+    reason: typeof payload.reason === "string" ? payload.reason : "",
+    scope: projectId ? "project" : "global",
+    projectId,
+    updatedAt: typeof payload.updatedAt === "string" ? payload.updatedAt : undefined
+  };
 }
 
 function buildControllerStatus(input: {

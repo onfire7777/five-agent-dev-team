@@ -6,6 +6,7 @@ import type { AgentEvent, ProjectConnection, StageArtifact, TargetRepoConfig, Wo
 import type {
   ControllerStore,
   Direction,
+  EmergencyStopStatus,
   LoopRun,
   Opportunity,
   OpportunityScanRunInput,
@@ -67,6 +68,49 @@ describe("release activities", () => {
     ).rejects.toThrow(/Emergency stop is active/);
 
     expect(Date.now() - startedAt).toBeLessThan(5_000);
+  });
+
+  it("blocks project-scoped activities while unrelated projects remain unblocked", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-project-stop-"));
+    const { ensureNotStopped } = await loadActivities(
+      fakeStore([], { activeProjectStops: new Set(["target-project"]) })
+    );
+
+    const startedAt = Date.now();
+
+    await expect(ensureNotStopped("WI-TARGET", targetRepoConfig(tempDir), "target-project")).rejects.toThrow(
+      /Emergency stop is active/
+    );
+    await expect(ensureNotStopped("WI-OTHER", targetRepoConfig(tempDir), "other-project")).resolves.toBeUndefined();
+
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("marks the relevant project stop active in release policy signals", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-release-project-stop-"));
+    const configPath = path.join(tempDir, "agent-team.config.yaml");
+    await fs.writeFile(configPath, configYaml(tempDir), "utf8");
+    const store = fakeStore([], {
+      emergencyStopSequence: [emergencyStopStatus(false, "owner-repo"), emergencyStopStatus(true, "owner-repo")]
+    });
+    const { performAutonomousRelease } = await loadActivities(store);
+
+    process.env.AGENT_TEAM_CONFIG = configPath;
+    process.env.AGENT_LOCAL_CHECKS_PASSED = "true";
+    process.env.AGENT_GITHUB_ACTIONS_PASSED = "true";
+    process.env.AGENT_SECRET_SCAN_PASSED = "true";
+    process.env.AGENT_ROLLBACK_PLAN_PRESENT = "true";
+
+    try {
+      const artifact = await performAutonomousRelease(workItem(), [verificationArtifact()]);
+
+      expect(artifact.status).toBe("blocked");
+      expect(artifact.decisions).toContain("Emergency stop is active.");
+      await expect(fs.access(path.join(tempDir, "release.marker"))).rejects.toThrow();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("runs rollback and blocks release when post-release health fails", async () => {
@@ -324,18 +368,37 @@ type FakeStore = ControllerStore & {
   updatedStates: Array<{ id: string; state: string }>;
 };
 
-function fakeStore(connections: ProjectConnection[] = []): FakeStore {
+type FakeStoreOptions = {
+  activeGlobalStop?: boolean;
+  activeProjectStops?: Set<string>;
+  emergencyStopSequence?: EmergencyStopStatus[];
+};
+
+function fakeStore(connections: ProjectConnection[] = [], options: FakeStoreOptions = {}): FakeStore {
   const updatedStates: Array<{ id: string; state: string }> = [];
+  let emergencyStopIndex = 0;
   return {
     updatedStates,
     async init() {},
     async getStatus() {
+      const globalStop = emergencyStopStatus(options.activeGlobalStop ?? false);
       return {
         system: {
-          emergencyStop: false,
-          emergencyReason: ""
+          emergencyStop: globalStop.active,
+          emergencyReason: globalStop.reason
         }
       } as Awaited<ReturnType<ControllerStore["getStatus"]>>;
+    },
+    async getEmergencyStop(projectId?: string) {
+      if (options.emergencyStopSequence?.length) {
+        const stop =
+          options.emergencyStopSequence[Math.min(emergencyStopIndex, options.emergencyStopSequence.length - 1)];
+        emergencyStopIndex += 1;
+        return stop;
+      }
+      if (options.activeGlobalStop) return emergencyStopStatus(true);
+      if (projectId && options.activeProjectStops?.has(projectId)) return emergencyStopStatus(true, projectId);
+      return emergencyStopStatus(false, projectId);
     },
     async listWorkItems() {
       return [];
@@ -525,6 +588,15 @@ function fakeStore(connections: ProjectConnection[] = []): FakeStore {
     async updateWorkItemState(id: string, state: string) {
       updatedStates.push({ id, state });
     }
+  };
+}
+
+function emergencyStopStatus(active: boolean, projectId?: string): EmergencyStopStatus {
+  return {
+    active,
+    reason: active ? "Scoped emergency stop" : "",
+    scope: projectId ? "project" : "global",
+    projectId
   };
 }
 

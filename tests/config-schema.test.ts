@@ -123,6 +123,13 @@ describe("target repo config schema", () => {
       scope: "global",
       reason: "Operator stop"
     });
+    expect(
+      EmergencyControlRequestSchema.parse({ scope: "project", projectId: "acme-app", reason: "Pause one repo" })
+    ).toEqual({
+      scope: "project",
+      projectId: "acme-app",
+      reason: "Pause one repo"
+    });
     expect(() => EmergencyControlRequestSchema.parse({ scope: "global", reason: " " })).toThrow();
   });
 

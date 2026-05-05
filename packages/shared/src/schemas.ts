@@ -302,6 +302,7 @@ export type AgentEvent = z.infer<typeof AgentEventSchema>;
 
 export const EmergencyControlRequestSchema = z.object({
   scope: z.string().trim().min(1).default("global"),
+  projectId: z.string().trim().min(1).optional(),
   reason: z.string().trim().min(1)
 });
 
