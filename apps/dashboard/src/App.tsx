@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { Bot, CircleStop, Github, PlayCircle, RefreshCw, ShieldCheck, type LucideIcon } from "lucide-react";
+import { Bot, CircleStop, GitBranch, PlayCircle, RefreshCw, ShieldCheck, type LucideIcon } from "lucide-react";
 import { EmergencyControlRequestSchema, type EmergencyControlRequest } from "../../../packages/shared/src/schemas";
 import type {
   AgentRole,
@@ -1202,7 +1202,7 @@ export function App() {
 
             <details className="project-connect" data-testid="project-connect">
               <summary>
-                <Github size={15} />+ Connect
+                <GitBranch size={15} />+ Connect
               </summary>
               <form
                 className="project-connect-grid"
@@ -1261,7 +1261,7 @@ export function App() {
                           <img className="github-account-avatar" src={githubAccount.avatarUrl} alt="" />
                         ) : (
                           <span className="github-account-avatar fallback">
-                            <Github size={16} />
+                            <GitBranch size={16} />
                           </span>
                         )}
                         <span>
@@ -1296,7 +1296,7 @@ export function App() {
                               target="_blank"
                               rel="noreferrer"
                             >
-                              <Github size={14} />
+                              <GitBranch size={14} />
                               Open GitHub
                             </a>
                           </>
@@ -1326,7 +1326,7 @@ export function App() {
                               !githubAccount.clientIdConfigured
                             }
                           >
-                            <Github size={15} />
+                            <GitBranch size={15} />
                             {githubAccount.clientIdConfigured ? "Connect GitHub" : "OAuth setup needed"}
                           </button>
                         )}
@@ -1396,7 +1396,7 @@ export function App() {
                 </details>
 
                 <button className="secondary-button" type="submit" disabled={loading || !apiState.connected}>
-                  <Github size={15} />
+                  <GitBranch size={15} />
                   Connect
                 </button>
               </form>
