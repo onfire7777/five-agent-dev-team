@@ -28,6 +28,14 @@ describe("work item state machine", () => {
     expect(canTransition("CLOSED", "RELEASE")).toBe(false);
   });
 
+  it("keeps intake routing aligned with the spec-backed states", () => {
+    expect(nextStates("INTAKE")).toEqual(["RND", "CONTRACT", "BLOCKED"]);
+    expect(canTransition("INTAKE", "RND")).toBe(true);
+    expect(canTransition("INTAKE", "CONTRACT")).toBe(true);
+    expect(canTransition("INTAKE", "BLOCKED")).toBe(true);
+    expect(canTransition("INTAKE", "VERIFY")).toBe(false);
+  });
+
   it("keeps blocked state explicit outside the happy path", () => {
     expect(WORKFLOW_SEQUENCE).not.toContain("BLOCKED");
     expect(ALL_WORK_ITEM_STATES).toContain("BLOCKED");

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import YAML from "yaml";
-import type { AgentRole, TargetRepoConfig, WorkItem, WorkItemState } from "../../shared/src";
+import type { AgentRole, PluginSkillContribution, TargetRepoConfig, WorkItem, WorkItemState } from "../../shared/src";
 
 export interface SkillActivationInput {
   workItem: WorkItem;
@@ -38,13 +38,10 @@ type SkillFrontmatter = {
 
 const SKILL_TEXT_BUDGET = 16_384;
 const MAX_SKILL_BODY_BYTES = 4_096;
+const ABSOLUTE_PATH_REGEX = /^(?:\/|[A-Za-z]:[\\/])/;
 
 export async function loadTriggeredSkills(input: SkillActivationInput): Promise<SkillLoadResult> {
-  const root = path.resolve(process.cwd(), "packages/agents/skills");
-  const files = await findSkillFiles(root);
-  const candidates = (await Promise.all(files.map(readSkillFile))).filter(
-    (skill): skill is LoadedSkill & { trigger?: SkillFrontmatter["trigger"] } => Boolean(skill)
-  );
+  const candidates = await loadSkillCandidates(input.targetRepoConfig);
 
   const active = candidates
     .filter((skill) => skill.audience.includes(input.agent))
@@ -64,6 +61,66 @@ export async function loadTriggeredSkills(input: SkillActivationInput): Promise<
     skills.push(stripTrigger(skill));
   }
   return { skills, droppedSkillIds };
+}
+
+export async function loadSkillById(input: SkillActivationInput, id: string): Promise<LoadedSkill> {
+  const candidates = await loadSkillCandidates(input.targetRepoConfig);
+  const skill = candidates.find((candidate) => candidate.id === id);
+  if (!skill) {
+    throw new Error(`Skill ${id} was not found.`);
+  }
+  if (!skill.audience.includes(input.agent)) {
+    throw new Error(`Skill ${id} is not available to ${input.agent}.`);
+  }
+  return stripTrigger(skill);
+}
+
+async function loadSkillCandidates(
+  config?: TargetRepoConfig
+): Promise<Array<LoadedSkill & { trigger?: SkillFrontmatter["trigger"] }>> {
+  const root = path.resolve(process.cwd(), "packages/agents/skills");
+  const files = await findSkillFiles(root);
+  const declaredPluginSkills = pluginSkillFiles(config);
+  return (
+    await Promise.all([
+      ...files.map(readSkillFile),
+      ...declaredPluginSkills.map(({ declaration, filePath }) => readDeclaredPluginSkillFile(declaration, filePath))
+    ])
+  ).filter((skill): skill is LoadedSkill & { trigger?: SkillFrontmatter["trigger"] } => Boolean(skill));
+}
+
+function pluginSkillFiles(
+  config?: TargetRepoConfig
+): Array<{ declaration: PluginSkillContribution; filePath: string }> {
+  if (!config?.integrations.pluginContributions?.skills.length) return [];
+  const repoRoot = path.resolve(config.repo.localPath || process.cwd());
+  return config.integrations.pluginContributions.skills.map((declaration) => ({
+    declaration,
+    filePath: resolvePluginSkillPath(repoRoot, declaration.relativePath)
+  }));
+}
+
+function resolvePluginSkillPath(repoRoot: string, relativePath: string): string {
+  if (ABSOLUTE_PATH_REGEX.test(relativePath) || path.isAbsolute(relativePath)) {
+    throw new Error(`Plugin skill path must be relative: ${relativePath}`);
+  }
+  const resolved = path.resolve(repoRoot, relativePath);
+  const relative = path.relative(repoRoot, resolved);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`Plugin skill path escapes the connected repository: ${relativePath}`);
+  }
+  return resolved;
+}
+
+async function readDeclaredPluginSkillFile(
+  declaration: PluginSkillContribution,
+  filePath: string
+): Promise<(LoadedSkill & { trigger?: SkillFrontmatter["trigger"] }) | null> {
+  const skill = await readSkillFile(filePath);
+  if (skill && skill.id !== declaration.id) {
+    throw new Error(`Plugin skill declaration ${declaration.id} does not match loaded skill ${skill.id}: ${filePath}`);
+  }
+  return skill;
 }
 
 async function findSkillFiles(root: string): Promise<string[]> {

@@ -48,7 +48,7 @@ jobs:
           fi
       - name: Run Codex CI autofix
         id: run_codex
-        uses: openai/codex-action@a26d2d4d8b78a694338b8e3715c3630254340b2c
+        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           model: ${{ env.CODEX_ACTION_MODEL }}
@@ -57,6 +57,7 @@ jobs:
           sandbox: workspace-write
           safety-strategy: drop-sudo
           allow-users: onfire7777
+          allow-bots: true
           output-file: codex-output.md
           prompt: |
             Target: ${{ inputs.target }}
@@ -97,7 +98,7 @@ jobs:
           gh pr create --draft --base main --head "$branch" --title "Codex CI autofix" --body "Target: $TARGET"
       - name: Upload Codex autofix output
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: codex-ci-autofix
           path: codex-output.md

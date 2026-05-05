@@ -143,9 +143,9 @@ const contributionPlugin: AgentTeamPlugin = {
         notes: []
       }
     ],
-    skills: [],
-    tools: [],
-    releaseGates: []
+    skills: [{ id: "browser-smoke", relativePath: "skills/browser-smoke/SKILL.md" }],
+    tools: [{ name: "browser.screenshot", description: "Capture a browser screenshot." }],
+    releaseGates: [{ id: "browser-smoke-gate", command: "npm run browser:smoke", required: true }]
   }
 };
 
@@ -173,31 +173,46 @@ describe("plugin host", () => {
     await expect(initializePlugins(config)).rejects.toThrow(/not allowlisted/);
   });
 
-  it("merges allowlisted plugin contributions into runtime integrations", async () => {
-    const config = configWithPlugins([contributionPlugin]);
-    const loaded = await initializePlugins(config);
-    const merged = mergePluginContributions(config, loaded);
-
-    expect(loaded).toHaveLength(1);
-    expect(merged.integrations.capabilityPacks[0].name).toBe("Browser smoke testing");
-    expect(merged.integrations.mcpServers[0].name).toBe("browser-use");
-    expect(merged.integrations.plugins).toHaveLength(1);
+  it("requires enabled plugins to match project and repo scope", async () => {
+    await expect(
+      initializePlugins(configWithPlugins([{ ...contributionPlugin, projectId: "project-b" }]))
+    ).rejects.toThrow(/another project/);
+    await expect(initializePlugins(configWithPlugins([{ ...contributionPlugin, repo: "acme/other" }]))).rejects.toThrow(
+      /another repo/
+    );
   });
 
-  it("rejects unsupported plugin contributions instead of silently dropping them", async () => {
-    const config = configWithPlugins([
-      {
+  it("merges allowlisted P6-A3/A22 plugin contributions into runtime integrations", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "plugin-contributions-"));
+    try {
+      const plugin = {
         ...contributionPlugin,
         contributions: {
           ...contributionPlugin.contributions,
-          skills: [{ id: "browser-smoke", relativePath: "skills/browser-smoke/SKILL.md" }],
-          tools: [{ name: "browser.screenshot", description: "Capture a browser screenshot." }],
-          releaseGates: [{ id: "browser-smoke-gate", command: "npm run browser:smoke", required: true }]
+          releaseGates: [
+            {
+              id: "browser-smoke-gate",
+              command: "node -e \"require('fs').writeFileSync('gate-ran.txt','1')\"",
+              required: true
+            }
+          ]
         }
-      }
-    ]);
+      };
+      const config = configWithPlugins([plugin], tempDir);
+      const loaded = await initializePlugins(config);
+      const merged = mergePluginContributions(config, loaded);
 
-    await expect(initializePlugins(config)).rejects.toThrow(/unsupported contributions: skills, tools, releaseGates/);
+      expect(loaded).toHaveLength(1);
+      expect(merged.integrations.capabilityPacks[0].name).toBe("Browser smoke testing");
+      expect(merged.integrations.mcpServers[0].name).toBe("browser-use");
+      expect(merged.integrations.pluginContributions?.skills).toEqual(plugin.contributions.skills);
+      expect(merged.integrations.pluginContributions?.tools).toEqual(plugin.contributions.tools);
+      expect(merged.integrations.pluginContributions?.releaseGates).toEqual(plugin.contributions.releaseGates);
+      expect(merged.integrations.plugins).toHaveLength(1);
+      expect(existsSync(join(tempDir, "gate-ran.txt"))).toBe(false);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("preserves quoted lifecycle command arguments", () => {

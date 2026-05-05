@@ -22,7 +22,12 @@ export function buildGitHubMcpStdioConfig(input: GitHubMcpConfigInput = {}): Git
     category: "github",
     transport: "stdio",
     command: input.command || "github-mcp-server",
-    args: ["stdio", ...(input.readOnly === false ? [] : ["--read-only"]), ...(input.extraArgs || [])],
+    args: [
+      "stdio",
+      "--dynamic-toolsets",
+      ...(input.readOnly === false ? [] : ["--read-only"]),
+      ...(input.extraArgs || [])
+    ],
     env: {
       GITHUB_PERSONAL_ACCESS_TOKEN: `\${${tokenEnv}}`,
       GITHUB_TOKEN: `\${${tokenEnv}}`

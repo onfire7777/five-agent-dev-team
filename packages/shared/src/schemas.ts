@@ -279,6 +279,8 @@ export type LoopClosureSummary = z.infer<typeof LoopClosureSummarySchema>;
 export const AgentEventSchema = z.object({
   sequence: z.number().int().nonnegative().default(0),
   workItemId: z.string().min(1).optional(),
+  projectId: z.string().min(1).optional(),
+  repo: z.string().min(1).optional(),
   stage: WorkItemStateSchema.optional(),
   ownerAgent: AgentRoleSchema.optional(),
   level: z.enum(["info", "warn", "error"]).default("info"),
@@ -298,10 +300,26 @@ export const AgentEventSchema = z.object({
 
 export type AgentEvent = z.infer<typeof AgentEventSchema>;
 
-export const EmergencyControlRequestSchema = z.object({
-  scope: z.string().trim().min(1).default("global"),
-  reason: z.string().trim().min(1)
-});
+const EmergencyControlRequestUnionSchema = z.discriminatedUnion("scope", [
+  z
+    .object({
+      scope: z.literal("global"),
+      reason: z.string().trim().min(1)
+    })
+    .strict(),
+  z.object({
+    scope: z.literal("project"),
+    projectId: z.string().trim().min(1),
+    reason: z.string().trim().min(1)
+  })
+]);
+
+export const EmergencyControlRequestSchema = z.preprocess((value) => {
+  if (value && typeof value === "object" && !Array.isArray(value) && !("scope" in value)) {
+    return { ...value, scope: "global" };
+  }
+  return value;
+}, EmergencyControlRequestUnionSchema);
 
 export type EmergencyControlRequest = z.infer<typeof EmergencyControlRequestSchema>;
 
@@ -892,34 +910,42 @@ export const CapabilityPackSchema = z.object({
 
 export type CapabilityPack = z.infer<typeof CapabilityPackSchema>;
 
+const PluginRelativePathSchema = z
+  .string()
+  .min(1)
+  .refine(
+    (value) => !ABSOLUTE_LOCAL_PATH_REGEX.test(value) && !/(^|[\\/])\.\.([\\/]|$)/.test(value),
+    "Plugin paths must be relative and stay inside the connected repository."
+  );
+
+export const PluginSkillContributionSchema = z.object({
+  id: z.string().min(1),
+  relativePath: PluginRelativePathSchema
+});
+
+export type PluginSkillContribution = z.infer<typeof PluginSkillContributionSchema>;
+
+export const PluginToolContributionSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().min(1)
+});
+
+export type PluginToolContribution = z.infer<typeof PluginToolContributionSchema>;
+
+export const PluginReleaseGateSchema = z.object({
+  id: z.string().min(1),
+  command: z.string().min(1),
+  required: z.boolean().default(true)
+});
+
+export type PluginReleaseGate = z.infer<typeof PluginReleaseGateSchema>;
+
 export const PluginContributionSchema = z.object({
   capabilities: z.array(CapabilityPackSchema).default([]),
   mcpServers: z.array(McpServerConfigSchema).default([]),
-  skills: z
-    .array(
-      z.object({
-        id: z.string().min(1),
-        relativePath: z.string().min(1)
-      })
-    )
-    .default([]),
-  tools: z
-    .array(
-      z.object({
-        name: z.string().min(1),
-        description: z.string().min(1)
-      })
-    )
-    .default([]),
-  releaseGates: z
-    .array(
-      z.object({
-        id: z.string().min(1),
-        command: z.string().min(1),
-        required: z.boolean().default(true)
-      })
-    )
-    .default([])
+  skills: z.array(PluginSkillContributionSchema).default([]),
+  tools: z.array(PluginToolContributionSchema).default([]),
+  releaseGates: z.array(PluginReleaseGateSchema).default([])
 });
 
 export type PluginContribution = z.infer<typeof PluginContributionSchema>;
@@ -1015,6 +1041,7 @@ export const TargetRepoConfigSchema = z.object({
       }),
       mcpServers: z.array(McpServerConfigSchema).default([]),
       capabilityPacks: z.array(CapabilityPackSchema).default([]),
+      pluginContributions: PluginContributionSchema.optional(),
       plugins: z.array(AgentTeamPluginSchema).default([])
     })
     .default({

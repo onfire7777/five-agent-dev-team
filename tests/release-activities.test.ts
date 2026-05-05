@@ -6,6 +6,7 @@ import type { AgentEvent, ProjectConnection, StageArtifact, TargetRepoConfig, Wo
 import type {
   ControllerStore,
   Direction,
+  EmergencyStopStatus,
   LoopRun,
   Opportunity,
   OpportunityScanRunInput,
@@ -67,6 +68,50 @@ describe("release activities", () => {
     ).rejects.toThrow(/Emergency stop is active/);
 
     expect(Date.now() - startedAt).toBeLessThan(5_000);
+  });
+
+  it("blocks project-scoped activities while unrelated projects remain unblocked", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-project-stop-"));
+    const { ensureNotStopped } = await loadActivities(
+      fakeStore([], { activeProjectStops: new Set(["target-project"]) })
+    );
+
+    const startedAt = Date.now();
+
+    await expect(ensureNotStopped("WI-TARGET", targetRepoConfig(tempDir), "target-project")).rejects.toThrow(
+      /Emergency stop is active/
+    );
+    await expect(ensureNotStopped("WI-OTHER", targetRepoConfig(tempDir), "other-project")).resolves.toBeUndefined();
+
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("marks the relevant project stop active in release policy signals", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-release-project-stop-"));
+    const configPath = path.join(tempDir, "agent-team.config.yaml");
+    await fs.writeFile(configPath, configYaml(tempDir), "utf8");
+    const store = fakeStore([], {
+      emergencyStopSequence: [emergencyStopStatus(false, "owner-repo"), emergencyStopStatus(true, "owner-repo")],
+      emergencyStopSequenceProjectId: "owner-repo"
+    });
+    const { performAutonomousRelease } = await loadActivities(store);
+
+    process.env.AGENT_TEAM_CONFIG = configPath;
+    process.env.AGENT_LOCAL_CHECKS_PASSED = "true";
+    process.env.AGENT_GITHUB_ACTIONS_PASSED = "true";
+    process.env.AGENT_SECRET_SCAN_PASSED = "true";
+    process.env.AGENT_ROLLBACK_PLAN_PRESENT = "true";
+
+    try {
+      const artifact = await performAutonomousRelease(workItem(), [verificationArtifact()]);
+
+      expect(artifact.status).toBe("blocked");
+      expect(artifact.decisions).toContain("Emergency stop is active.");
+      await expect(fs.access(path.join(tempDir, "release.marker"))).rejects.toThrow();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("runs rollback and blocks release when post-release health fails", async () => {
@@ -138,6 +183,50 @@ describe("release activities", () => {
     expect(artifact.testsRun).toContain("rollback:passed");
     expect(artifact.testsRun).toContain("release-proof:missing");
     expect(store.updatedStates).toEqual([{ id: "WI-RELEASE", state: "BLOCKED" }]);
+  });
+
+  it("fails closed before release when a required plugin release gate lacks safe evaluation", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-plugin-release-gate-"));
+    const configPath = path.join(tempDir, "agent-team.config.yaml");
+    await fs.writeFile(
+      configPath,
+      configYaml(tempDir).replace(
+        "  plugins: []",
+        `  plugins:
+    - name: Browser Gate
+      packageName: "@agent-team/browser-gate"
+      enabled: true
+      allowlisted: true
+      repo: owner/repo
+      contributions:
+        releaseGates:
+          - id: browser-smoke-gate
+            command: "npm run browser:smoke"
+            required: true`
+      ),
+      "utf8"
+    );
+    const store = fakeStore();
+    const { performAutonomousRelease } = await loadActivities(store);
+
+    process.env.AGENT_TEAM_CONFIG = configPath;
+    process.env.AGENT_LOCAL_CHECKS_PASSED = "true";
+    process.env.AGENT_GITHUB_ACTIONS_PASSED = "true";
+    process.env.AGENT_SECRET_SCAN_PASSED = "true";
+    process.env.AGENT_ROLLBACK_PLAN_PRESENT = "true";
+    process.env.AGENT_REQUIRE_RUNTIME_HEALTH = "false";
+    process.env.AGENT_COMMAND_TIMEOUT_MS = "10000";
+
+    try {
+      const artifact = await performAutonomousRelease(workItem(), [verificationArtifact()]);
+
+      expect(artifact.status).toBe("blocked");
+      expect(artifact.summary).toContain("Required plugin release gate browser-smoke-gate");
+      expect(artifact.testsRun).toContain("plugin-release-gate:browser-smoke-gate:missing");
+      await expect(fs.access(path.join(tempDir, "release.marker"))).rejects.toThrow();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("detects write-capable GitHub integrations by category", async () => {
@@ -280,18 +369,41 @@ type FakeStore = ControllerStore & {
   updatedStates: Array<{ id: string; state: string }>;
 };
 
-function fakeStore(connections: ProjectConnection[] = []): FakeStore {
+type FakeStoreOptions = {
+  activeGlobalStop?: boolean;
+  activeProjectStops?: Set<string>;
+  emergencyStopSequence?: EmergencyStopStatus[];
+  emergencyStopSequenceProjectId?: string;
+};
+
+function fakeStore(connections: ProjectConnection[] = [], options: FakeStoreOptions = {}): FakeStore {
   const updatedStates: Array<{ id: string; state: string }> = [];
+  let emergencyStopIndex = 0;
   return {
     updatedStates,
     async init() {},
     async getStatus() {
+      const globalStop = emergencyStopStatus(options.activeGlobalStop ?? false);
       return {
         system: {
-          emergencyStop: false,
-          emergencyReason: ""
+          emergencyStop: globalStop.active,
+          emergencyReason: globalStop.reason
         }
       } as Awaited<ReturnType<ControllerStore["getStatus"]>>;
+    },
+    async getEmergencyStop(projectId?: string) {
+      if (options.emergencyStopSequence?.length) {
+        if (options.emergencyStopSequenceProjectId && projectId !== options.emergencyStopSequenceProjectId) {
+          return emergencyStopStatus(false, projectId);
+        }
+        const stop =
+          options.emergencyStopSequence[Math.min(emergencyStopIndex, options.emergencyStopSequence.length - 1)];
+        emergencyStopIndex += 1;
+        return stop;
+      }
+      if (options.activeGlobalStop) return emergencyStopStatus(true);
+      if (projectId && options.activeProjectStops?.has(projectId)) return emergencyStopStatus(true, projectId);
+      return emergencyStopStatus(false, projectId);
     },
     async listWorkItems() {
       return [];
@@ -473,6 +585,9 @@ function fakeStore(connections: ProjectConnection[] = []): FakeStore {
     async claimWorkItemForWorkflow() {
       return true;
     },
+    async claimWorkItemForWorkflowIfNotStopped() {
+      return { claimed: true };
+    },
     async listWorkflowClaims() {
       return [];
     },
@@ -481,6 +596,15 @@ function fakeStore(connections: ProjectConnection[] = []): FakeStore {
     async updateWorkItemState(id: string, state: string) {
       updatedStates.push({ id, state });
     }
+  };
+}
+
+function emergencyStopStatus(active: boolean, projectId?: string): EmergencyStopStatus {
+  return {
+    active,
+    reason: active ? "Scoped emergency stop" : "",
+    scope: projectId ? "project" : "global",
+    projectId
   };
 }
 
