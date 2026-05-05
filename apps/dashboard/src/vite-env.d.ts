@@ -14,7 +14,7 @@ declare module "lucide-react" {
 
   export const Bot: LucideIcon;
   export const CircleStop: LucideIcon;
-  export const Github: LucideIcon;
+  export const GitBranch: LucideIcon;
   export const PlayCircle: LucideIcon;
   export const RefreshCw: LucideIcon;
   export const ShieldCheck: LucideIcon;
