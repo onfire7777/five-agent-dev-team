@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -12,7 +12,7 @@ describe("target repo pre-push hook", () => {
     "scans the pushed commit range instead of staged files",
     () => {
       const syntheticSecret = ["AKIA", "IOSFODNN7", "EXAMPLE"].join("");
-      const root = join(tmpdir(), `pre-push-hook-${process.pid}-${Date.now()}`);
+      const root = mkdtempSync(join(tmpdir(), "pre-push-hook-"));
       const repo = join(root, "repo");
       const bin = join(root, "bin");
       const argsFile = join(root, "gitleaks-args.txt");

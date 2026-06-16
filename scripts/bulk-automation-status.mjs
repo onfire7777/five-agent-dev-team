@@ -156,8 +156,9 @@ function automationTomlPath(id) {
 
   const normalizedRealRoot = normalizePath(realRoot);
   const normalizedRealTargetDir = normalizePath(realTargetDir);
+  const expectedRealTargetDir = normalizePath(join(realRoot, id));
   const realRootPrefix = normalizedRealRoot.endsWith(sep) ? normalizedRealRoot : `${normalizedRealRoot}${sep}`;
-  if (normalizedRealTargetDir !== normalizedTargetDir) {
+  if (normalizedRealTargetDir !== expectedRealTargetDir) {
     errors.push(`${id} resolves through an unsupported symlink`);
     return null;
   }

@@ -68,7 +68,7 @@ function quoteCmdArg(arg) {
     return value;
   }
 
-  return `"${value.replace(/"/g, '\\"')}"`;
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
 export async function capture(command, args = []) {
