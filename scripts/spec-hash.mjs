@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -12,14 +12,13 @@ const files = {
   queue: join(stateDir, "five-agent-dev-team-queue.json")
 };
 
-const hashes = Object.fromEntries(
-  Object.entries(files).map(([key, file]) => [key, existsSync(file) ? sha256(file) : null])
-);
+const hashes = Object.fromEntries(Object.entries(files).map(([key, file]) => [key, hashIfPresent(file)]));
 
 if (process.argv.includes("--write")) {
   const controlPath = join(stateDir, "five-agent-dev-team-control.json");
-  const control = existsSync(controlPath) ? JSON.parse(readFileSync(controlPath, "utf8")) : {};
+  const control = readJsonIfPresent(controlPath);
   control.specHashes = hashes;
+  mkdirSync(stateDir, { recursive: true });
   writeFileSync(controlPath, `${JSON.stringify(control, null, 2)}\n`);
 }
 
@@ -27,4 +26,20 @@ console.log(JSON.stringify(hashes, null, 2));
 
 function sha256(file) {
   return `sha256:${createHash("sha256").update(readFileSync(file)).digest("hex")}`;
+}
+
+function hashIfPresent(file) {
+  try {
+    return sha256(file);
+  } catch {
+    return null;
+  }
+}
+
+function readJsonIfPresent(file) {
+  try {
+    return JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    return {};
+  }
 }

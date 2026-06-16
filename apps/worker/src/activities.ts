@@ -35,7 +35,7 @@ import {
 import { listWorkflowRuns } from "../../../packages/github/src";
 import { createStore, type ControllerStore, type StrictProjectScope } from "../../controller/src/store";
 
-const exec = util.promisify(childProcess.exec);
+const execFile = util.promisify(childProcess.execFile);
 let storePromise: Promise<ControllerStore> | null = null;
 
 export interface StageInput {
@@ -881,10 +881,10 @@ async function readGitEvidence(workItem: WorkItem, config: TargetRepoConfig): Pr
   const repoPath = config.repo.localPath || process.cwd();
   const syncInput = await readGitSyncInput(workItem, config);
   const sync = evaluateGitSync(syncInput);
-  const branch = await execGit("git rev-parse --abbrev-ref HEAD", repoPath)
+  const branch = await execGit(["rev-parse", "--abbrev-ref", "HEAD"], repoPath)
     .then((result) => result.stdout.trim())
     .catch(() => "unknown");
-  const sha = await execGit("git rev-parse --short HEAD", repoPath)
+  const sha = await execGit(["rev-parse", "--short", "HEAD"], repoPath)
     .then((result) => result.stdout.trim())
     .catch(() => "unknown");
   return {
@@ -1154,9 +1154,9 @@ async function readGitSyncInput(workItem: WorkItem, config: TargetRepoConfig) {
   const defaultBranch = assertSafeGitRef(config.repo.defaultBranch, "default branch");
   const branchPrefix = automationBranchPrefix(workItem);
   try {
-    await execGit(`git fetch --prune origin ${defaultBranch}`, repoPath);
-    const status = await execGit("git status --porcelain", repoPath);
-    const counts = await execGit(`git rev-list --left-right --count origin/${defaultBranch}...HEAD`, repoPath);
+    await execGit(["fetch", "--prune", "origin", defaultBranch], repoPath);
+    const status = await execGit(["status", "--porcelain"], repoPath);
+    const counts = await execGit(["rev-list", "--left-right", "--count", `origin/${defaultBranch}...HEAD`], repoPath);
     const [behindRaw, aheadRaw] = counts.stdout.trim().split(/\s+/);
     const automationBranchesForItem = await countAutomationBranches(repoPath, branchPrefix);
     return {
@@ -1212,22 +1212,23 @@ async function runConfiguredCommand(
   const releaseTag = workItem ? releaseTagOverride || releaseTagForWorkItem(workItem) : "";
   const rollback = workItem ? rollbackPlanForRelease(workItem, config, releaseTag) : null;
   try {
-    await exec(command, {
+    const commandEnv = commandExecutionEnv(
+      workItem
+        ? {
+            AGENT_WORK_ITEM_ID: workItem.id,
+            AGENT_PROJECT_ID: workItem.projectId || "",
+            AGENT_REPO: workItem.repo || `${config.repo.owner}/${config.repo.name}`,
+            AGENT_DEFAULT_BRANCH: config.repo.defaultBranch,
+            AGENT_RELEASE_TAG: releaseTag,
+            AGENT_ROLLBACK_COMMAND: rollback?.command || "",
+            AGENT_ROLLBACK_VERIFICATION: rollback?.verification || ""
+          }
+        : {}
+    );
+    const parsedCommand = parseConfiguredCommand(command, commandEnv);
+    await execFile(parsedCommand.command, parsedCommand.args, {
       cwd: config.repo.localPath || process.cwd(),
-      env: {
-        ...githubAuthEnv(),
-        ...(workItem
-          ? {
-              AGENT_WORK_ITEM_ID: workItem.id,
-              AGENT_PROJECT_ID: workItem.projectId || "",
-              AGENT_REPO: workItem.repo || `${config.repo.owner}/${config.repo.name}`,
-              AGENT_DEFAULT_BRANCH: config.repo.defaultBranch,
-              AGENT_RELEASE_TAG: releaseTag,
-              AGENT_ROLLBACK_COMMAND: rollback?.command || "",
-              AGENT_ROLLBACK_VERIFICATION: rollback?.verification || ""
-            }
-          : {})
-      },
+      env: commandEnv,
       timeout: Number(process.env.AGENT_COMMAND_TIMEOUT_MS || 300_000),
       maxBuffer: 1024 * 1024 * 8
     });
@@ -1272,7 +1273,7 @@ function resolveReleaseProofFile(workItem: WorkItem, config: TargetRepoConfig, r
   const configuredProof = process.env.RELEASE_PROOF_FILE;
   if (!configuredProof) {
     const proofId = safeFileSegment(releaseTag || workItem.id);
-    return path.join(process.env.AGENT_RUNTIME_DIR || "/tmp/agent-team", `release-proof-${proofId}.json`);
+    return path.join(process.env.AGENT_RUNTIME_DIR || defaultRuntimeDir(), `release-proof-${proofId}.json`);
   }
   return path.isAbsolute(configuredProof)
     ? configuredProof
@@ -1701,9 +1702,9 @@ function rollbackPlanForRelease(
 async function countAutomationBranches(repoPath: string, branchPrefix: string): Promise<number> {
   const patterns = [branchPrefix, `${branchPrefix}-*`];
   const outputs = await Promise.all([
-    ...patterns.map((pattern) => execGit(`git branch --list "${pattern}" --format="%(refname:short)"`, repoPath)),
+    ...patterns.map((pattern) => execGit(["branch", "--list", pattern, "--format=%(refname:short)"], repoPath)),
     ...patterns.map((pattern) =>
-      execGit(`git branch --remotes --list "origin/${pattern}" --format="%(refname:short)"`, repoPath)
+      execGit(["branch", "--remotes", "--list", `origin/${pattern}`, "--format=%(refname:short)"], repoPath)
     )
   ]);
   const branches = new Set(
@@ -1715,8 +1716,116 @@ async function countAutomationBranches(repoPath: string, branchPrefix: string): 
   return branches.size;
 }
 
-function execGit(command: string, cwd: string) {
-  return exec(command, { cwd, env: githubAuthEnv() });
+function execGit(args: string[], cwd: string) {
+  return execFile("git", args, { cwd, env: commandExecutionEnv() });
+}
+
+type ParsedCommand = {
+  command: string;
+  args: string[];
+};
+
+function parseConfiguredCommand(command: string, env: NodeJS.ProcessEnv): ParsedCommand {
+  const parts: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index];
+    if (quote) {
+      if (char === quote) {
+        quote = null;
+      } else if (quote === '"' && char === "\\" && index + 1 < command.length) {
+        index += 1;
+        current += command[index];
+      } else {
+        current += char;
+      }
+      continue;
+    }
+
+    if (/\s/.test(char)) {
+      if (current) {
+        parts.push(current);
+        current = "";
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (/[|&;<>`]/.test(char)) {
+      throw new Error(`configured command uses unsupported shell syntax: ${command}`);
+    }
+    if (char === "\\" && index + 1 < command.length) {
+      index += 1;
+      current += command[index];
+      continue;
+    }
+    current += char;
+  }
+
+  if (quote) throw new Error(`configured command has an unterminated quote: ${command}`);
+  if (current) parts.push(current);
+  const [executable, ...args] = expandCommandVariables(parts, env);
+  if (!executable) throw new Error("configured command is empty");
+  return { command: executable, args };
+}
+
+function expandCommandVariables(parts: string[], env: NodeJS.ProcessEnv): string[] {
+  const allowedVariables = new Set([
+    "AGENT_WORK_ITEM_ID",
+    "AGENT_PROJECT_ID",
+    "AGENT_REPO",
+    "AGENT_DEFAULT_BRANCH",
+    "AGENT_RELEASE_TAG",
+    "AGENT_ROLLBACK_COMMAND",
+    "AGENT_ROLLBACK_VERIFICATION"
+  ]);
+  return parts.map((part) =>
+    part.replace(/\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/g, (_match, braced, bare) => {
+      const name = String(braced || bare);
+      if (!allowedVariables.has(name)) {
+        throw new Error(`configured command references unsupported environment variable: ${name}`);
+      }
+      return env[name] || "";
+    })
+  );
+}
+
+function commandExecutionEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const base: NodeJS.ProcessEnv = {
+    PATH: trustedCommandPath()
+  };
+  for (const key of ["HOME", "USER", "TMPDIR", "TEMP", "TMP", "SystemRoot", "WINDIR", "ComSpec"] as const) {
+    const value = process.env[key];
+    if (value && isSafeEnvironmentValue(value)) base[key] = value;
+  }
+  return githubAuthEnv({ ...base, ...sanitizeEnvironment(extra) });
+}
+
+function trustedCommandPath(): string {
+  const nodeBin = path.dirname(process.execPath);
+  return process.platform === "win32"
+    ? [nodeBin, "C:\\Windows\\System32", "C:\\Windows", "C:\\Windows\\System32\\WindowsPowerShell\\v1.0"].join(";")
+    : [nodeBin, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(":");
+}
+
+function sanitizeEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(env).filter((entry): entry is [string, string] =>
+      Boolean(entry[1] && isSafeEnvironmentValue(entry[1]))
+    )
+  );
+}
+
+function isSafeEnvironmentValue(value: string): boolean {
+  return !value.includes("\0") && !value.includes("\r") && !value.includes("\n");
+}
+
+function defaultRuntimeDir(): string {
+  return path.resolve(".agent-team", "runtime");
 }
 
 function assertSafeGitRef(value: string, label: string): string {

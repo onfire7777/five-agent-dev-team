@@ -6,6 +6,7 @@ import express from "express";
 import fs from "node:fs/promises";
 import path from "node:path";
 import util from "node:util";
+import { rateLimit } from "express-rate-limit";
 import YAML from "yaml";
 import { z } from "zod";
 import { Octokit } from "@octokit/rest";
@@ -176,6 +177,13 @@ const githubDeviceSessions = new Map<
     expiresAt: number;
   }
 >();
+const githubAuthRateLimit = rateLimit({
+  windowMs: 60_000,
+  limit: 12,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many GitHub authentication attempts. Please wait and try again." }
+});
 const allowedOrigins = (process.env.CORS_ORIGINS || "http://127.0.0.1:5173")
   .split(",")
   .map((origin) => origin.trim())
@@ -664,7 +672,7 @@ app.get("/api/github/account", async (_req, res, next) => {
   }
 });
 
-app.post("/api/github/device/start", async (_req, res, next) => {
+app.post("/api/github/device/start", githubAuthRateLimit, async (_req, res, next) => {
   try {
     const clientId = process.env.GITHUB_OAUTH_CLIENT_ID?.trim();
     if (!clientId) {
@@ -720,7 +728,7 @@ app.post("/api/github/device/start", async (_req, res, next) => {
   }
 });
 
-app.post("/api/github/device/poll", async (req, res, next) => {
+app.post("/api/github/device/poll", githubAuthRateLimit, async (req, res, next) => {
   try {
     const { sessionId } = z.object({ sessionId: z.string().min(1) }).parse(req.body);
     const session = githubDeviceSessions.get(sessionId);
@@ -795,7 +803,7 @@ app.post("/api/github/device/poll", async (req, res, next) => {
   }
 });
 
-app.post("/api/github/disconnect", async (_req, res, next) => {
+app.post("/api/github/disconnect", githubAuthRateLimit, async (_req, res, next) => {
   try {
     const source = githubTokenSource();
     if (source?.source === "local") {

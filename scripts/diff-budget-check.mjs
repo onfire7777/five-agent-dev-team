@@ -1,10 +1,10 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { capture } from "./verify-lib.mjs";
 
 const controlPath = join(homedir(), ".codex", "state", "five-agent-dev-team-control.json");
-const control = existsSync(controlPath) ? JSON.parse(readFileSync(controlPath, "utf8")) : {};
+const control = readJsonIfPresent(controlPath);
 const budget = control.diffBudget || {};
 const maxFiles = Number(argValue("--max-files") || budget.maxFiles || 12);
 const maxNetLines = Number(argValue("--max-net-lines") || budget.maxNetLines || 800);
@@ -41,11 +41,18 @@ function numberOrZero(value) {
 }
 
 function countFileLines(file) {
-  if (!existsSync(file) || statSync(file).isDirectory()) return 0;
   try {
     return readFileSync(file, "utf8").split(/\r?\n/).length;
   } catch {
     return 0;
+  }
+}
+
+function readJsonIfPresent(file) {
+  try {
+    return JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    return {};
   }
 }
 

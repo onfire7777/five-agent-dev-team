@@ -273,6 +273,35 @@ describe("release activities", () => {
     ).toBe(false);
   });
 
+  it("expands allowed release variables without invoking a shell", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-release-var-"));
+    const configPath = path.join(tempDir, "agent-team.config.yaml");
+    const releaseCommand =
+      "node -e \"require('fs').writeFileSync('release.marker',process.argv[1])\" \"$AGENT_RELEASE_TAG\"";
+    await fs.writeFile(configPath, configYaml(tempDir, releaseCommand), "utf8");
+    const store = fakeStore();
+    const { performAutonomousRelease } = await loadActivities(store);
+
+    process.env.AGENT_TEAM_CONFIG = configPath;
+    process.env.AGENT_LOCAL_CHECKS_PASSED = "true";
+    process.env.AGENT_GITHUB_ACTIONS_PASSED = "true";
+    process.env.AGENT_SECRET_SCAN_PASSED = "true";
+    process.env.AGENT_ROLLBACK_PLAN_PRESENT = "true";
+    process.env.AGENT_REQUIRE_RUNTIME_HEALTH = "false";
+    process.env.AGENT_COMMAND_TIMEOUT_MS = "10000";
+
+    try {
+      const artifact = await performAutonomousRelease(workItem({ id: "WI-VAR" }), [verificationArtifact()]);
+      const marker = await fs.readFile(path.join(tempDir, "release.marker"), "utf8");
+
+      expect(artifact.status).toBe("passed");
+      expect(marker).toMatch(/^agent-wi-var-/);
+      expect(marker).not.toBe("$AGENT_RELEASE_TAG");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("prefers the target repo config file for scoped release work", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-target-config-"));
     const rootConfigPath = path.join(tempDir, "agent-team.config.yaml");
